@@ -1,39 +1,16 @@
-# my stuff 
-.idea
-.DS_Store
-errors_fix.txt
-comments.txt
-data_static/
-log/
-.continue
-~/
-.vscode/
-.config/
-.pytest_cache
-/notify_run
-/gdrive_api_oauth
-client_secrets.json
-
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 
-.cache
-
 # C extensions
 *.so
 
-# Distribution / packaging
-.Python
-env/
-venv/
-.venv/
+# Distribution, packaging, virtual env
+bin/
 build/
 develop-eggs/
 dist/
-downloads/
 eggs/
-.eggs/
 lib/
 lib64/
 parts/
@@ -42,4 +19,28 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+/
+# virt env
+.venv
 
+# Installer logs and all logs
+pip-log.txt
+pip-delete-this-directory.txt
+*.log
+
+# Unit test / coverage reports
+.tox/
+.coverage
+.cache
+nosetests.xml
+coverage.xml
+
+# Translations
+*.mo
+*.pot
+
+# Sphinx documentation
+docs/_build/
+
+# Local environment config (contains secrets / machine-specific paths)
+.env

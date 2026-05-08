@@ -1,0 +1,31 @@
+[project]
+name = "memai-server"
+version = "0.1.0"
+description = "Mémai voice assistant — server (Ubuntu/GPU)"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "faster-whisper>=1.2.1",
+    "langdetect>=1.0.9",
+    "numpy>=2.4.4",
+    "ollama>=0.6.1",
+    "python-dotenv>=1.0",
+    "soundfile>=0.13.1",
+    "webrtcvad-wheels>=2.0.14",
+    "websockets>=16.0",
+]
+
+[project.scripts]
+memai-server = "memai_server.server:main"
+
+[build-system]
+requires = ["uv_build>=0.11.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = "src"
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true

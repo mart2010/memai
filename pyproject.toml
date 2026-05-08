@@ -1,17 +1,16 @@
+# Monorepo, so here goes all general options!
 [project]
 name = "memai"
 version = "0.1.0"
-description = "Memory manager built for/by AI"
-readme = "README.md"
+description = "Mémai, my personal assistant"
 authors = [
     { name = "mart2010", email = "mart2010.l@gmail.com" }
 ]
-requires-python = ">=3.14"
-dependencies = []
 
-# [project.scripts]
-# memai = "memai:main"
+[tool.ruff]
+# Set the maximum line length to 79. (PEP8 recommands 80)
+line-length = 120
 
-[build-system]
-requires = ["uv_build>=0.9.22,<0.10.0"]
-build-backend = "uv_build"
+# In addition to the standard set of exclusions, omit all tests
+extend-exclude = ["tests", "test"]
+
