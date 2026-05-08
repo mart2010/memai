@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI voice assistant that runs entirely on local, open-source infrastructure — no cloud services. It is a monorepo with two independent Python packages:
 
-- **`va_client/`** — runs on a Windows laptop; captures microphone audio and plays back synthesized speech
-- **`va_server/`** — runs on an Ubuntu workstation with GPU; handles STT, LLM, and TTS
+- **`client/`** — runs on a Windows laptop; captures microphone audio and plays back synthesized speech
+- **`server/`** — runs on an Ubuntu workstation with GPU; handles STT, LLM, and TTS
 
 ## Environment Setup
 
@@ -15,11 +15,11 @@ Each package has its own virtual environment. Python 3.13+ required.
 
 ```bash
 # Server (Ubuntu with GPU)
-cd va_server
+cd server
 uv venv && uv pip install -e .
 
 # Client (Windows)
-cd va_client
+cd client
 uv venv && uv pip install -e .
 ```
 
@@ -27,11 +27,11 @@ uv venv && uv pip install -e .
 
 ```bash
 # Start server (Ubuntu)
-cd va_server
+cd server
 .venv/bin/memai-server
 
 # Start client (Windows) — SSH tunnel to server is started automatically
-cd va_client
+cd client
 .venv/Scripts/memai-client
 ```
 
@@ -63,7 +63,7 @@ Both sides exchange newline-delimited JSON frames on `ws://localhost:8765`:
 | `{"type": "end_utterance"}` | client→server | Signals end of speech segment |
 | `{"type": "audio", "data": [...]}` | server→client | Synthesized float32 audio bytes as JSON list |
 
-### Client (`va_client/src/memai_client/client.py`)
+### Client (`client/src/memai_client/client.py`)
 
 - Uses `sounddevice` to capture 16kHz mono audio in 30ms frames
 - `webrtcvad` (aggressiveness=2) determines if a frame contains speech
@@ -71,7 +71,7 @@ Both sides exchange newline-delimited JSON frames on `ws://localhost:8765`:
 - Auto-establishes an SSH tunnel (`localhost:8765 → tx940094.open.etat-de-vaud.ch:8765`) before connecting
 - Proxy environment variables are cleared to avoid interference with the SSH tunnel
 
-### Server (`va_server/src/memai_server/server.py`)
+### Server (`server/src/memai_server/server.py`)
 
 - **STT**: `faster-whisper` (small model, CPU, int8) from `~/models/faster-whisper-small`, French language forced
 - **LLM**: `ollama` with `llama3.3`, streamed token by token, system prompt enforces French concise replies
