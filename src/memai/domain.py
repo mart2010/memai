@@ -18,45 +18,49 @@ class User():
 
 
 class Turn():
-    def __init__(self, speaker: User | Assistant, dialog: str, start: datetime)  -> None:
+    def __init__(self, start_id: datetime, speaker: User | Assistant, content: str)  -> None:
+        # micro-second timestamp acting like unique id 
+        self.start_id = start_id
         self.speaker = speaker
-        self.dialog = dialog
-        self.start = start
+        self.content = content
 
 
-class Conversation():
+class ConversationalMemory():
     """
-    Conversation as Aggregation of turns within a certain time frame.
-    Aggregation is a cluster of finer domain objects processed as a whole (ref. DDD).
+    Holds memory during a conversation between user and assistant. 
+    It is designed to be a short-term memory (STM) and to help:
+        - feeding the LLM's context window. 
+        - consolidating what will be stored in long-term memory (LTM).
+    
+    More recent elements are preserved as turns (prioritized), whereas 
+    older elements decay over time (kept as summary or eventually just subjects).
     """
-    max_elapse = timedelta(minutes=5)
+    max_elapse = timedelta(hours=12)
+    max_size = 10
 
-    def __init__(self, conversation_id, turn: Turn) -> None:
-        self.conversation_id = conversation_id
-        self.turns: list[Turn] = [turn]
+    def __init__(self, first_turn: Turn) -> None:
+        self.start_id = first_turn.start_id
+        self.turns: list[Turn] = [first_turn]
         self.subjects: set[str] = set()
 
     def add_turn(self, turn: Turn) -> bool:
-        if turn.start - self.turns[-1].start < self.max_elapse:
+        if turn.start_id - self.turns[-1].start_id < self.max_elapse:
             self.turns.append(turn)
             return True
         else:
             return False
     
     def list_subjects(self, subjects_extractor: Callable) -> set[str]:
-        all_content = " ".join([turn.dialog for turn in self.turns])
+        all_content = " ".join([turn.content for turn in self.turns])
         self.subjects = subjects_extractor(all_content)
         return self.subjects
 
     @property
-    def start(self) -> datetime:
-        return self.turns[0].start
-    @property
     def end(self) -> datetime:
-        return self.turns[-1].start
+        return self.turns[-1].start_id
 
     def duration(self) -> timedelta:
-        return self.end - self.start
+        return self.end - self.start_id
 
 
 
@@ -78,28 +82,55 @@ class Chunk():
         # this is a placeholder implementation
         return chunk_compare(self.embedding, other_chunk.embedding)
 
+
 # Domain Events
+class Event():
+    pass
+
+class MemoryConsolidation(Event):
+    # Event triggered during an ongoing dialog when ConversationalMemory
+    #  is near max_size, allowing the service layer to react:
+    #   - persist older convertation turns in DB (to be preserved)
+    #   - replace older convertation turns by summary (decayed)
+    #   
+    pass
+
+class MemoryFlushing(Event):
+    # Event triggered when a new conversation (session) is activated (by the user or the assistant) 
+    # and the current ConversationalMemory having previous content must be flushed
+    pass
+
 
 
 
 # Domain Services
-
-def ltm_consolidation(conversation: Conversation, consolidation_func: Callable) -> str:
-    """
-    Consolidate a conversation into a single string that can be stored in LTM.
-    This is a domain service as it operates on multiple domain entities (Conversation and Chunk).
-    """
-    all_content = " ".join([turn.dialog for turn in conversation.turns])
-    consolidated_content = consolidation_func(all_content)
-    return consolidated_content
+# stuff that doesn't fit in entities or value objects but is still part of the domain logic.
 
 
-def stm_chunking(conversation: Conversation, chunking_func: Callable) -> list[Chunk]:
-    """
-    Chunk a conversation into smaller pieces that can be stored in STM.
-    This is a domain service as it operates on multiple domain entities (Conversation and Chunk).
-    """
-    all_content = " ".join([turn.dialog for turn in conversation.turns])
-    chunks = chunking_func(all_content)
-    return chunks
 
+# Service Layer (Application Services)
+# stuff that orchestrates the use of domain entities and services to achieve a specific use case.
+# used by the outside world (e.g. API layer) to interact with the domain.
+
+
+## outside world --> domain
+
+def feed_conversational_memory():
+    # to be called by pipecat when a new turn is added to the conversation:
+    # it will feed the ConversationalMemory
+    pass
+
+
+## domain --> outside world
+
+def consolidate_memory():
+    # upon the MemoryConsolidation event 
+    # it will and allow the service layer to store to LTM (MemoriesDB).
+    pass
+
+
+## Pipecat will log all conversation in file, and a batch process can persist these logs as archive
+
+
+# lots of consilidation stuff should happen during downtime so not to impact the user experience, 
+# and also to allow the system to learn from the past conversations and improve over time.
