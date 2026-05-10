@@ -55,13 +55,13 @@ Microphone → [VAD] → WebSocket → [STT] → [LLM stream] → [TTS] → WebS
 
 ### WebSocket Protocol
 
-Both sides exchange newline-delimited JSON frames on `ws://localhost:8765`:
+Audio is sent as raw binary WebSocket frames; control messages use JSON text frames on `ws://localhost:8765`:
 
 | Message type | Direction | Payload |
 |---|---|---|
-| `{"type": "audio", "data": [...]}` | client→server | Raw PCM int16 bytes as JSON list |
+| binary frame | client→server | Raw PCM int16 bytes |
 | `{"type": "end_utterance"}` | client→server | Signals end of speech segment |
-| `{"type": "audio", "data": [...]}` | server→client | Synthesized float32 audio bytes as JSON list |
+| binary frame | server→client | Synthesized float32 audio bytes |
 
 ### Client (`client/src/memai_client/client.py`)
 
