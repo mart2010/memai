@@ -18,6 +18,15 @@ dependencies = [
 [project.scripts]
 memai-server = "memai_server.server:main"
 
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
 [build-system]
 requires = ["uv_build>=0.11.11,<0.12"]
 build-backend = "uv_build"
