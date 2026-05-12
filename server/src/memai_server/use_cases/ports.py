@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from typing import AsyncIterator, Protocol
 from uuid import UUID
 
@@ -32,7 +33,7 @@ class ExtractionResult:
 
 
 class STTService(Protocol):
-    def transcribe(self, audio: bytes, language: Language) -> str: ...
+    def transcribe(self, audio: bytes, language_hint: Language) -> tuple[str, Language]: ...
 
 
 class LLMService(Protocol):
@@ -84,6 +85,7 @@ class MemoryBriefRepository(Protocol):
 
 class TurnLogger(Protocol):
     def append(self, session_id: UUID, turn: Turn) -> None: ...
+    def close(self, session_id: UUID, ended_at: datetime) -> None: ...
 
 
 class ConsolidationExtractor(Protocol):

@@ -16,12 +16,6 @@ class RecallIntentDetector(Protocol):
     def detect(self, text: str) -> RecallTriggered | None: ...
 
 
-class LanguageDetector(Protocol):
-    """Detects the language of a piece of text."""
-
-    def detect(self, text: str) -> Language: ...
-
-
 class PersonaIntentDetector(Protocol):
     """Detects explicit persona switch intent via LLM self-reporting ([PERSONA:name] prefix)."""
 

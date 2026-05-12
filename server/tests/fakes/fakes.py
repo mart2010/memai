@@ -29,13 +29,14 @@ from memai_server.use_cases.ports import (
 # ---------------------------------------------------------------------------
 
 class FakeSTTService:
-    def __init__(self, transcript: str = "hello") -> None:
+    def __init__(self, transcript: str = "hello", language: Language = Language("en")) -> None:
         self.transcript = transcript
+        self.language = language
         self.calls: list[tuple[bytes, Language]] = []
 
-    def transcribe(self, audio: bytes, language: Language) -> str:
-        self.calls.append((audio, language))
-        return self.transcript
+    def transcribe(self, audio: bytes, language_hint: Language) -> tuple[str, Language]:
+        self.calls.append((audio, language_hint))
+        return self.transcript, self.language
 
 
 class FakeLLMService:
@@ -158,22 +159,18 @@ class FakeMemoryBriefRepository:
 class FakeTurnLogger:
     def __init__(self) -> None:
         self.written: list[tuple[UUID, Turn]] = []
+        self.closed: dict[UUID, datetime] = {}
 
     def append(self, session_id: UUID, turn: Turn) -> None:
         self.written.append((session_id, turn))
+
+    def close(self, session_id: UUID, ended_at: datetime) -> None:
+        self.closed[session_id] = ended_at
 
 
 # ---------------------------------------------------------------------------
 # Domain protocol fakes
 # ---------------------------------------------------------------------------
-
-class FakeLanguageDetector:
-    def __init__(self, language: Language = Language("en")) -> None:
-        self.language = language
-
-    def detect(self, text: str) -> Language:
-        return self.language
-
 
 class FakeRecallIntentDetector:
     def __init__(self, result: RecallTriggered | None = None) -> None:

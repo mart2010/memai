@@ -66,66 +66,65 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 Application logic. All infrastructure behind Protocols. Fake* for tests.
 
 ### Infrastructure Ports (defined here, implemented in Phase 3)
-- [ ] `STTService` Protocol (transcribe(audio: bytes, language: Language) → str)
-- [ ] `LLMService` Protocol (complete(messages, system_prompt) → AsyncIterator[str])
-- [ ] `TTSService` Protocol (synthesise(text: str) → bytes)
-- [ ] `EmbeddingService` Protocol (embed(text: str) → list[float])
-- [ ] `UserRepository` Protocol
-- [ ] `ConversationRepository` Protocol
-- [ ] `MemoryRepository` Protocol (upsert + similarity_search per MemoryType)
-- [ ] `PersonaRepository` Protocol
-- [ ] `MemoryBriefRepository` Protocol
-- [ ] `TurnLogger` Protocol (append_turn(session_id, turn, db_written: bool) → None)
+- [x] `STTService` Protocol (transcribe(audio: bytes, language: Language) → str)
+- [x] `LLMService` Protocol (complete(messages, system_prompt) → AsyncIterator[str])
+- [x] `TTSService` Protocol (synthesise(text: str) → bytes)
+- [x] `EmbeddingService` Protocol (embed(text: str) → list[float])
+- [x] `UserRepository` Protocol
+- [x] `ConversationRepository` Protocol
+- [x] `MemoryRepository` Protocol (upsert + similarity_search per MemoryType)
+- [x] `PersonaRepository` Protocol
+- [x] `MemoryBriefRepository` Protocol
+- [x] `TurnLogger` Protocol (append(session_id, turn) + close(session_id, ended_at))
 
 ### Fake Implementations (in tests/fakes/)
-- [ ] `FakeSTTService`
-- [ ] `FakeLLMService`
-- [ ] `FakeTTSService`
-- [ ] `FakeEmbeddingService`
-- [ ] `FakeUserRepository`
-- [ ] `FakeConversationRepository`
-- [ ] `FakeMemoryRepository`
-- [ ] `FakePersonaRepository`
-- [ ] `FakeMemoryBriefRepository`
-- [ ] `FakeTurnLogger`
+- [x] `FakeSTTService`
+- [x] `FakeLLMService`
+- [x] `FakeTTSService`
+- [x] `FakeEmbeddingService`
+- [x] `FakeUserRepository`
+- [x] `FakeConversationRepository`
+- [x] `FakeMemoryRepository`
+- [x] `FakePersonaRepository`
+- [x] `FakeMemoryBriefRepository`
+- [x] `FakeTurnLogger`
 
 ### Use Cases — Interaction Context
-- [ ] `StartSession` — load User + MemoryBrief, initialise LiveConversation with active
+- [x] `StartSession` — load User + MemoryBrief, initialise LiveConversation with active
       persona; inject MemoryBrief as static system block
-- [ ] `ProcessTurn` — detect language (LanguageDetector), detect recall intent
-      (RecallIntentDetector), detect persona intent (PersonaIntentDetector), run
+- [x] `ProcessTurn` — detect language, detect recall intent, detect persona intent, run
       STT→LLM→TTS pipeline, apply implicit persona suggestion rule, trigger rolling
       window summarisation when turn-count watermark reached (async, between turns),
-      write WAL, persist Turn
-- [ ] `EndSession` — close ConversationRecord, flush WAL
+      log turns via TurnLogger; ConversationRecord is an offline concern
+- [x] `EndSession` — close TurnLogger (write ended_at to flat file)
 
 ### Use Cases — Persona Context
-- [ ] `CreatePersona` (guard: only when GeneralAssistant active)
-- [ ] `ListPersonas`
-- [ ] `EditPersona` (guard: not is_system)
-- [ ] `RemovePersona` (guard: not is_system)
-- [ ] `SwitchPersona` — fire PersonaSwitched; result announced aloud
+- [x] `CreatePersona` (guard: only when GeneralAssistant active)
+- [x] `ListPersonas`
+- [x] `EditPersona` (guard: not is_system)
+- [x] `RemovePersona` (guard: not is_system)
+- [x] `SwitchPersona` — fire PersonaSwitched; result announced aloud
 
 ### Use Cases — Memory Context
-- [ ] `TriggerRecall` — embed query → similarity search filtered by memory_types →
+- [x] `TriggerRecall` — embed query → similarity search filtered by memory_types →
       inject top-N results into current turn's LLM context
-- [ ] `RunConsolidation` — process all unconsolidated ConversationRecords oldest-first;
+- [x] `RunConsolidation` — process all unconsolidated ConversationRecords oldest-first;
       per record: extract Episodes/Concepts/Procedures via upsert pattern; commit all
       writes + consolidated flag in one DB transaction
-- [ ] `GenerateMemoryBrief` — LLM condenses current memory state → overwrite MemoryBrief
+- [x] `GenerateMemoryBrief` — LLM condenses current memory state → overwrite MemoryBrief
 
 ### Use Cases — User Management
-- [ ] `UpdatePrimaryLanguage` — update User.primary_language, fire PrimaryLanguageChanged,
+- [x] `UpdatePrimaryLanguage` — update User.primary_language, fire PrimaryLanguageChanged,
       announce change aloud at session start
 
 ### Unit Tests — Phase 2
-- [ ] `StartSession` — correct MemoryBrief injection, correct persona loaded
-- [ ] `ProcessTurn` — recall path (RecallTriggered fired + context injected), implicit
+- [x] `StartSession` — correct MemoryBrief injection, correct persona loaded
+- [x] `ProcessTurn` — recall path (RecallTriggered fired + context injected), implicit
       persona suggestion rule, rolling window trigger
-- [ ] `EndSession` — ConversationRecord closed, WAL flushed
-- [ ] `RunConsolidation` — worthy vs. unworthy record, upsert merge vs. insert new,
-      atomicity (consolidated flag only set on full commit)
-- [ ] `UpdatePrimaryLanguage` — event fired, announcement triggered
+- [x] `EndSession` — TurnLogger closed with correct session_id and ended_at
+- [x] `RunConsolidation` — worthy vs. unworthy record, concepts always extracted,
+      consolidated flag set, already-consolidated records skipped on rerun
+- [x] `UpdatePrimaryLanguage` — event fired, no-op on same language
 
 ---
 
@@ -165,17 +164,26 @@ One adapter at a time. Inner layers unchanged.
 ### Language Detection
 - [ ] `LangdetectLanguageDetector`
 
-### WAL
+### TurnLogger (flat file)
 - [ ] `JSONLTurnLogger` — appends to `logs/conversations/YYYY-MM-DD_<session_id>.jsonl`;
       line format: `{"ts": "…", "speaker": "…", "content": "…", "db_written": false}`
-- [ ] `WALReplayer` — on server start: scan flat files for db_written: false entries,
+- [ ] `TurnLogReplayer` — on server start: scan flat files for db_written: false entries,
       replay into DB before accepting connections
+
+### Similarity threshold & merge logic
+- [ ] Replace hardcoded `similarity_threshold=0.85` in `RunConsolidation` with a global
+      config value — this is a critical tuning parameter
+- [ ] Revisit `_cosine_similarity` / `_should_merge` in use case layer: once
+      `PostgresMemoryRepository.search()` returns pgvector similarity scores alongside
+      results, the manual cosine check becomes redundant — simplify accordingly
 
 ### Integration Tests — Phase 3
 - [ ] PostgreSQL repositories (real DB, test schema)
 - [ ] FasterWhisperSTTService (real model, short audio fixture)
 - [ ] PiperTTSService (real model, short text fixture)
-- [ ] SentenceTransformerEmbeddingService (real model, similarity sanity check)
+- [ ] `SentenceTransformerEmbeddingService` — real model, calibration test: embed pairs
+      of semantically similar vs. dissimilar texts and print similarity scores to help
+      determine a good threshold value for the merge decision
 
 ---
 

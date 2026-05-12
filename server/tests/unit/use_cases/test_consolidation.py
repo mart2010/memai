@@ -5,24 +5,20 @@ from uuid import uuid4
 from memai_server.domain.model import (
     AssistantPersona,
     Concept,
+    ConversationRecord,
     Episode,
     Language,
     Speaker,
     Turn,
-    User,
 )
 from memai_server.use_cases.memory import RunConsolidation
 from memai_server.use_cases.ports import ExtractionResult
-from memai_server.use_cases.session import EndSession, StartSession
 
 from tests.fakes.fakes import (
     FakeConsolidationExtractor,
     FakeConversationRepository,
     FakeEmbeddingService,
-    FakeMemoryBriefRepository,
     FakeMemoryRepository,
-    FakePersonaRepository,
-    FakeUserRepository,
     FakeWorthinessEvaluator,
 )
 
@@ -53,19 +49,14 @@ def _make_consolidation(
 
 def _seed_ended_record(conversation_repo: FakeConversationRepository) -> None:
     """Seed one ended, unconsolidated ConversationRecord with a single turn."""
-    persona_repo = FakePersonaRepository()
-    persona_repo.save(_general_assistant())
-    user = User(id=uuid4(), primary_language=Language("en"))
-
-    ctx = StartSession(
-        user_repo=FakeUserRepository(user=user),
-        persona_repo=persona_repo,
-        conversation_repo=conversation_repo,
-        memory_brief_repo=FakeMemoryBriefRepository(),
-    ).execute(session_id=uuid4(), started_at=_now())
-
-    ctx.conversation_record.add_turn(Turn(timestamp=_now(), speaker=Speaker.USER, content="hello"))
-    EndSession(conversation_repo=conversation_repo).execute(ctx, ended_at=_now())
+    record = ConversationRecord(
+        id=uuid4(),
+        started_at=_now(),
+        persona_snapshot=_general_assistant(),
+    )
+    record.add_turn(Turn(timestamp=_now(), speaker=Speaker.USER, content="hello"))
+    record.end(ended_at=_now())
+    conversation_repo.save(record)
 
 
 class TestRunConsolidation:
