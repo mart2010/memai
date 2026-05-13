@@ -17,22 +17,6 @@ class Language:
             raise ValueError("Language code cannot be empty")
 
 
-class CEFRLevel(Enum):
-    A1 = "A1"
-    A2 = "A2"
-    B1 = "B1"
-    B2 = "B2"
-    C1 = "C1"
-    C2 = "C2"
-
-
-@dataclass(frozen=True)
-class LanguageProficiency:
-    language: Language
-    level: CEFRLevel
-    is_native: bool
-
-
 class EngagementLevel(Enum):
     MENTIONED = "mentioned"
     EXPLORED = "explored"
@@ -64,6 +48,7 @@ class AssistantPersona:
     id: UUID
     name: str
     system_prompt: str
+    languages: list[Language]  # languages this persona operates in; empty = primary language only
     is_system: bool
     created_at: datetime
     updated_at: datetime
@@ -84,6 +69,7 @@ class AssistantPersona:
             id=GENERAL_ASSISTANT_ID,
             name="General Assistant",
             system_prompt=system_prompt,
+            languages=[],
             is_system=True,
             created_at=now,
             updated_at=now,
@@ -93,15 +79,11 @@ class AssistantPersona:
 @dataclass
 class User:
     id: UUID
-    primary_language: Language
-    proficiencies: list[LanguageProficiency] = field(default_factory=list)
+    primary_language: Language | None = None  # None until onboarding is complete
+    secondary_languages: list[Language] = field(default_factory=list)
 
     def update_primary_language(self, new_language: Language) -> None:
         self.primary_language = new_language
-
-    @property
-    def learning_languages(self) -> list[Language]:
-        return [p.language for p in self.proficiencies if not p.is_native]
 
 
 @dataclass
@@ -109,7 +91,7 @@ class Turn:
     timestamp: datetime
     speaker: Speaker
     content: str
-    language: Language | None = None  # set after LanguageDetector runs
+    language: Language | None = None  # set from STT output
 
 
 @dataclass
@@ -206,15 +188,3 @@ class MemoryBrief:
     generated_at: datetime
 
 
-# ---------------------------------------------------------------------------
-# Domain functions
-# ---------------------------------------------------------------------------
-
-def should_suggest_persona(turn: Turn, user: User, current_persona_id: UUID) -> bool:
-    """Implicit persona suggestion rule: fire PersonaSuggested when the user speaks
-    in one of their learning languages while the GeneralAssistant is active."""
-    return (
-        turn.language is not None
-        and turn.language in user.learning_languages
-        and current_persona_id == GENERAL_ASSISTANT_ID
-    )

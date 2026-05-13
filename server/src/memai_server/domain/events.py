@@ -27,7 +27,3 @@ class PersonaSwitched:
     to_persona_id: UUID
 
 
-@dataclass(frozen=True)
-class PersonaSuggested:
-    detected_language: Language
-    suggested_persona_id: UUID

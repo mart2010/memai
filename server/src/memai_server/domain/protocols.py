@@ -1,7 +1,7 @@
 from typing import Protocol
 
 from .events import RecallTriggered
-from .model import ConversationRecord, Language
+from .model import ConversationRecord
 
 
 class WorthinessEvaluator(Protocol):

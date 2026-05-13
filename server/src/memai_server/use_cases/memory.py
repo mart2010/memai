@@ -1,7 +1,7 @@
 import math
 from datetime import datetime
 
-from ..domain.model import MemoryBrief, MemoryType, Episode, Concept, Procedure
+from ..domain.model import MemoryBrief, MemoryType
 from ..domain.protocols import WorthinessEvaluator
 from .ports import (
     ConsolidationExtractor,

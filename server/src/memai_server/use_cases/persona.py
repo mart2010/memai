@@ -2,7 +2,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from ..domain.events import PersonaSwitched
-from ..domain.model import AssistantPersona, GENERAL_ASSISTANT_ID
+from ..domain.model import AssistantPersona, GENERAL_ASSISTANT_ID, Language
 from .ports import PersonaRepository
 from .session import SessionContext
 
@@ -11,13 +11,21 @@ class CreatePersona:
     def __init__(self, persona_repo: PersonaRepository) -> None:
         self._repo = persona_repo
 
-    def execute(self, session: SessionContext, name: str, system_prompt: str, now: datetime) -> AssistantPersona:
+    def execute(
+        self,
+        session: SessionContext,
+        name: str,
+        system_prompt: str,
+        now: datetime,
+        languages: list[Language] | None = None,
+    ) -> AssistantPersona:
         if session.live_conversation.persona_id != GENERAL_ASSISTANT_ID:
             raise ValueError("Persona management is only available when GeneralAssistant is active")
         persona = AssistantPersona(
             id=uuid4(),
             name=name,
             system_prompt=system_prompt,
+            languages=languages or [],
             is_system=False,
             created_at=now,
             updated_at=now,

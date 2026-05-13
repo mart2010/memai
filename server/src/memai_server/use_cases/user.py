@@ -1,8 +1,18 @@
-from datetime import datetime
-
 from ..domain.events import PrimaryLanguageChanged
 from ..domain.model import Language, User
 from .ports import UserRepository
+
+
+class CompleteOnboarding:
+    """Sets the user's primary language at the end of the onboarding conversation.
+    Safe to call multiple times — always overwrites (server is the source of truth)."""
+
+    def __init__(self, user_repo: UserRepository) -> None:
+        self._user_repo = user_repo
+
+    def execute(self, user: User, primary_language: Language) -> None:
+        user.update_primary_language(primary_language)
+        self._user_repo.save(user)
 
 
 class UpdatePrimaryLanguage:

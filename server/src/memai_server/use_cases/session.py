@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from uuid import UUID
 
-from ..domain.events import PersonaSuggested, PersonaSwitched
+from ..domain.events import PersonaSwitched
 from ..domain.model import (
     AssistantPersona,
     GENERAL_ASSISTANT_ID,
@@ -11,7 +11,6 @@ from ..domain.model import (
     Speaker,
     Turn,
     User,
-    should_suggest_persona,
 )
 from ..domain.protocols import PersonaIntentDetector, RecallIntentDetector
 from .ports import (
@@ -36,6 +35,7 @@ class SessionContext:
     active_persona: AssistantPersona
     live_conversation: LiveConversation
     memory_brief: MemoryBrief | None
+    needs_onboarding: bool = False
 
 
 @dataclass
@@ -43,7 +43,6 @@ class TurnResult:
     audio_chunks: list[bytes]
     assistant_content: str
     persona_switched: PersonaSwitched | None = None
-    persona_suggested: PersonaSuggested | None = None
 
 
 _SENTENCE_ENDINGS = {".", "!", "?"}
@@ -110,16 +109,18 @@ class StartSession:
     def execute(self, session_id: UUID, started_at: datetime) -> SessionContext:
         user = self._user_repo.get()
         if user is None:
-            raise RuntimeError("No user found — database not initialised")
+            raise RuntimeError("No user record found — database not initialised")
         persona = self._persona_repo.get(GENERAL_ASSISTANT_ID)
         if persona is None:
             raise RuntimeError("GeneralAssistant not found — database not initialised")
+        needs_onboarding = user.primary_language is None
         return SessionContext(
             session_id=session_id,
             user=user,
             active_persona=persona,
             live_conversation=LiveConversation(started_at=started_at, persona_id=persona.id),
-            memory_brief=self._memory_brief_repo.get(),
+            memory_brief=None if needs_onboarding else self._memory_brief_repo.get(),
+            needs_onboarding=needs_onboarding,
         )
 
 
@@ -207,17 +208,7 @@ class ProcessTurn:
         self._turn_logger.append(session.session_id, assistant_turn)
         session.live_conversation.add_turn(assistant_turn)
 
-        # 8. Implicit persona suggestion (evaluated on user turn language)
-        persona_suggested: PersonaSuggested | None = None
-        if should_suggest_persona(user_turn, session.user, session.live_conversation.persona_id):
-            candidate = self._persona_repo.find_by_language(user_turn.language)
-            if candidate:
-                persona_suggested = PersonaSuggested(
-                    detected_language=user_turn.language,
-                    suggested_persona_id=candidate.id,
-                )
-
-        # 9. Rolling window check
+        # 8. Rolling window check
         if (self._rolling_window_size > 0
                 and session.live_conversation.total_turn_count % self._rolling_window_size == 0):
             await self._summarise_window(session)
@@ -226,7 +217,6 @@ class ProcessTurn:
             audio_chunks=audio_chunks,
             assistant_content=assistant_content,
             persona_switched=persona_switched,
-            persona_suggested=persona_suggested,
         )
 
     async def _summarise_window(self, session: SessionContext) -> None:
