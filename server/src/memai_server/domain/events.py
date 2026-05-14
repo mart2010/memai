@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from enum import Enum
 from uuid import UUID
 
 from .model import Language, MemoryType
@@ -27,3 +28,11 @@ class PersonaSwitched:
     to_persona_id: UUID
 
 
+class BoundaryType(Enum):
+    BREAK = "break"
+    CONTINUATION = "continuation"
+
+
+@dataclass(frozen=True)
+class ConversationBoundaryDetected:
+    boundary_type: BoundaryType

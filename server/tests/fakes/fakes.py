@@ -4,7 +4,7 @@ from uuid import UUID
 from memai_server.domain.events import RecallTriggered
 from memai_server.domain.model import (
     AssistantPersona,
-    ConversationRecord,
+    Conversation,
     Concept,
     Episode,
     EngagementLevel,
@@ -21,6 +21,7 @@ from memai_server.use_cases.ports import (
     ExtractionResult,
     MemoryItem,
     Message,
+    SessionInfo,
 )
 
 
@@ -81,14 +82,30 @@ class FakeUserRepository:
         self._user = user
 
 
+class FakeSessionLogReader:
+    def __init__(
+        self,
+        previous: SessionInfo | None = None,
+        tail: list[Turn] | None = None,
+    ) -> None:
+        self._previous = previous
+        self._tail = tail or []
+
+    def get_previous(self) -> SessionInfo | None:
+        return self._previous
+
+    def read_tail(self, session_id: UUID, max_turns: int) -> list[Turn]:
+        return self._tail[-max_turns:]
+
+
 class FakeConversationRepository:
     def __init__(self) -> None:
-        self._records: dict[UUID, ConversationRecord] = {}
+        self._records: dict[UUID, Conversation] = {}
 
-    def save(self, record: ConversationRecord) -> None:
-        self._records[record.id] = record
+    def save(self, conversation: Conversation) -> None:
+        self._records[conversation.id] = conversation
 
-    def get_unconsolidated(self) -> list[ConversationRecord]:
+    def get_unconsolidated(self) -> list[Conversation]:
         return sorted(
             [r for r in self._records.values() if r.is_eligible_for_consolidation],
             key=lambda r: r.started_at,
@@ -122,7 +139,6 @@ class FakeMemoryRepository:
 class FakePersonaRepository:
     def __init__(self) -> None:
         self._personas: dict[UUID, AssistantPersona] = {}
-        self._language_map: dict[str, UUID] = {}
 
     def get(self, persona_id: UUID) -> AssistantPersona | None:
         return self._personas.get(persona_id)
@@ -130,19 +146,11 @@ class FakePersonaRepository:
     def list_all(self) -> list[AssistantPersona]:
         return list(self._personas.values())
 
-    def find_by_language(self, language: Language) -> AssistantPersona | None:
-        pid = self._language_map.get(language.code)
-        return self._personas.get(pid) if pid else None
-
     def save(self, persona: AssistantPersona) -> None:
         self._personas[persona.id] = persona
 
     def delete(self, persona_id: UUID) -> None:
         self._personas.pop(persona_id, None)
-
-    def register_language(self, language: Language, persona_id: UUID) -> None:
-        """Test helper: associate a language code with a persona for find_by_language."""
-        self._language_map[language.code] = persona_id
 
 
 class FakeMemoryBriefRepository:
@@ -160,12 +168,18 @@ class FakeTurnLogger:
     def __init__(self) -> None:
         self.written: list[tuple[UUID, Turn]] = []
         self.closed: dict[UUID, datetime] = {}
+        self.clean_exits: dict[UUID, bool] = {}
+        self.markers: list[tuple[UUID, str]] = []
 
     def append(self, session_id: UUID, turn: Turn) -> None:
         self.written.append((session_id, turn))
 
-    def close(self, session_id: UUID, ended_at: datetime) -> None:
+    def close(self, session_id: UUID, ended_at: datetime, clean_exit: bool) -> None:
         self.closed[session_id] = ended_at
+        self.clean_exits[session_id] = clean_exit
+
+    def write_marker(self, session_id: UUID, marker_type: str) -> None:
+        self.markers.append((session_id, marker_type))
 
 
 # ---------------------------------------------------------------------------
@@ -180,19 +194,11 @@ class FakeRecallIntentDetector:
         return self.result
 
 
-class FakePersonaIntentDetector:
-    def __init__(self, result: str | None = None) -> None:
-        self.result = result
-
-    def detect(self, text: str) -> str | None:
-        return self.result
-
-
 class FakeWorthinessEvaluator:
     def __init__(self, worthy: bool = True) -> None:
         self.worthy = worthy
 
-    def evaluate(self, record: ConversationRecord) -> bool:
+    def evaluate(self, conversation: Conversation) -> bool:
         return self.worthy
 
 
@@ -200,5 +206,5 @@ class FakeConsolidationExtractor:
     def __init__(self, result: ExtractionResult | None = None) -> None:
         self.result = result or ExtractionResult(episodes=[], concepts=[], procedures=[])
 
-    def extract(self, record: ConversationRecord) -> ExtractionResult:
+    def extract(self, conversation: Conversation) -> ExtractionResult:
         return self.result

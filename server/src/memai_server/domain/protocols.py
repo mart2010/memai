@@ -1,13 +1,13 @@
 from typing import Protocol
 
 from .events import RecallTriggered
-from .model import ConversationRecord
+from .model import Conversation
 
 
 class WorthinessEvaluator(Protocol):
-    """Decides whether a ConversationRecord is worth persisting as an Episode."""
+    """Decides whether a Conversation is worth persisting as an Episode."""
 
-    def evaluate(self, record: ConversationRecord) -> bool: ...
+    def evaluate(self, conversation: Conversation) -> bool: ...
 
 
 class RecallIntentDetector(Protocol):

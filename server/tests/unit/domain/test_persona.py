@@ -10,7 +10,7 @@ class TestAssistantPersonaGuards:
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
-            is_system=False, created_at=now, updated_at=now,
+            languages=[], is_system=False, created_at=now, updated_at=now,
         )
         later = datetime.now(UTC)
         persona.update(name="Expert Tutor", system_prompt="Teach rigorously.", updated_at=later)
@@ -22,7 +22,7 @@ class TestAssistantPersonaGuards:
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="General Assistant", system_prompt="Help.",
-            is_system=True, created_at=now, updated_at=now,
+            languages=[], is_system=True, created_at=now, updated_at=now,
         )
         with pytest.raises(ValueError, match="System personas"):
             persona.update(name="Hacked", updated_at=datetime.now(UTC))
@@ -31,7 +31,7 @@ class TestAssistantPersonaGuards:
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Original prompt.",
-            is_system=False, created_at=now, updated_at=now,
+            languages=[], is_system=False, created_at=now, updated_at=now,
         )
         persona.update(name="New Name", updated_at=datetime.now(UTC))
         assert persona.system_prompt == "Original prompt."

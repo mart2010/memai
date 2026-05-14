@@ -95,25 +95,7 @@ class Turn:
 
 
 @dataclass
-class LiveConversation:
-    started_at: datetime
-    persona_id: UUID
-    recent_turns: list[Turn] = field(default_factory=list)
-    rolling_summary: str | None = None
-    total_turn_count: int = 0
-
-    def add_turn(self, turn: Turn) -> None:
-        self.recent_turns.append(turn)
-        self.total_turn_count += 1
-
-    def apply_rolling_summary(self, summary: str, turns_summarised: int) -> None:
-        """Replace oldest turns with a compact summary block."""
-        self.rolling_summary = summary
-        self.recent_turns = self.recent_turns[turns_summarised:]
-
-
-@dataclass
-class ConversationRecord:
+class Conversation:
     id: UUID
     started_at: datetime
     persona_snapshot: AssistantPersona
@@ -125,7 +107,7 @@ class ConversationRecord:
 
     def add_turn(self, turn: Turn) -> None:
         if self.ended_at:
-            raise ValueError("Cannot add a turn to an ended ConversationRecord")
+            raise ValueError("Cannot add a turn to an ended Conversation")
         self.turns.append(turn)
 
     def end(self, ended_at: datetime) -> None:
@@ -133,11 +115,11 @@ class ConversationRecord:
 
     def mark_consolidated(self, worthiness: bool, summary: str | None) -> None:
         if self.consolidated:
-            raise ValueError("ConversationRecord is already consolidated")
+            raise ValueError("Conversation is already consolidated")
         if not self.ended_at:
-            raise ValueError("Cannot consolidate an active ConversationRecord")
+            raise ValueError("Cannot consolidate an active Conversation")
         if not self.turns:
-            raise ValueError("Cannot consolidate a ConversationRecord with no turns")
+            raise ValueError("Cannot consolidate a Conversation with no turns")
         self.worthiness = worthiness
         self.summary = summary
         self.consolidated = True
@@ -186,5 +168,3 @@ class Procedure:
 class MemoryBrief:
     content: str
     generated_at: datetime
-
-

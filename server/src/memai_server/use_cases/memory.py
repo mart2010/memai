@@ -61,11 +61,11 @@ class RunConsolidation:
         self._threshold = similarity_threshold
 
     async def execute(self) -> int:
-        records = self._conversation_repo.get_unconsolidated()
+        conversations = self._conversation_repo.get_unconsolidated()
         processed = 0
-        for record in records:
-            worthy = self._worthiness_evaluator.evaluate(record)
-            extraction = self._extractor.extract(record)
+        for conversation in conversations:
+            worthy = self._worthiness_evaluator.evaluate(conversation)
+            extraction = self._extractor.extract(conversation)
 
             if worthy:
                 for episode in extraction.episodes:
@@ -87,8 +87,8 @@ class RunConsolidation:
                 if not _should_merge(candidates, procedure.embedding, self._threshold):
                     self._memory_repo.upsert_procedure(procedure)
 
-            record.mark_consolidated(worthiness=worthy, summary=None)
-            self._conversation_repo.save(record)
+            conversation.mark_consolidated(worthiness=worthy, summary=None)
+            self._conversation_repo.save(conversation)
             processed += 1
 
         return processed

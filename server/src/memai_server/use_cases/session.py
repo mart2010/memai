@@ -1,18 +1,17 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from uuid import UUID
 
-from ..domain.events import PersonaSwitched
+from ..domain.events import BoundaryType, ConversationBoundaryDetected, PersonaSwitched
 from ..domain.model import (
-    AssistantPersona,
     GENERAL_ASSISTANT_ID,
-    LiveConversation,
+    AssistantPersona,
     MemoryBrief,
     Speaker,
     Turn,
     User,
 )
-from ..domain.protocols import PersonaIntentDetector, RecallIntentDetector
+from ..domain.protocols import RecallIntentDetector
 from .ports import (
     EmbeddingService,
     LLMService,
@@ -21,6 +20,7 @@ from .ports import (
     MemoryRepository,
     Message,
     PersonaRepository,
+    SessionLogReader,
     STTService,
     TTSService,
     TurnLogger,
@@ -31,11 +31,15 @@ from .ports import (
 @dataclass
 class SessionContext:
     session_id: UUID
+    started_at: datetime
     user: User
     active_persona: AssistantPersona
-    live_conversation: LiveConversation
     memory_brief: MemoryBrief | None
     needs_onboarding: bool = False
+    recent_turns: list[Turn] = field(default_factory=list)
+    rolling_summary: str | None = None
+    total_turn_count: int = 0
+    session_tail: list[Turn] = field(default_factory=list)
 
 
 @dataclass
@@ -43,6 +47,7 @@ class TurnResult:
     audio_chunks: list[bytes]
     assistant_content: str
     persona_switched: PersonaSwitched | None = None
+    conversation_boundary: ConversationBoundaryDetected | None = None
 
 
 _SENTENCE_ENDINGS = {".", "!", "?"}
@@ -59,6 +64,24 @@ def _strip_persona_prefix(text: str) -> tuple[str, str | None]:
         if end != -1:
             name = text[9:end].strip()
             return text[end + 1:].lstrip(), name
+    return text, None
+
+
+def _strip_conversation_marker(text: str, is_first_turn: bool) -> tuple[str, str | None]:
+    """Returns (stripped_text, marker_type_or_None).
+
+    marker_type is 'conversation_boundary' or 'topic_continuation'.
+    [TOPIC_CONTINUATION] is only valid on the first turn of a session.
+    """
+    for marker, marker_type in (
+        ("[TOPIC_CONTINUATION]", "topic_continuation"),
+        ("[TOPIC_BREAK]", "conversation_boundary"),
+    ):
+        if text.startswith(marker):
+            stripped = text[len(marker):].lstrip()
+            if marker_type == "topic_continuation" and not is_first_turn:
+                return stripped, None
+            return stripped, marker_type
     return text, None
 
 
@@ -83,12 +106,17 @@ def _build_llm_input(session: SessionContext, extra_context: list[MemoryItem]) -
     system_prompt = "\n\n".join(prompt_parts)
 
     messages: list[Message] = []
-    if session.live_conversation.rolling_summary:
+
+    if session.session_tail:
+        tail_text = "\n".join(f"{t.speaker.value}: {t.content}" for t in session.session_tail)
+        messages.append(Message(role="system", content=f"Tail of previous session:\n{tail_text}"))
+
+    if session.rolling_summary:
         messages.append(Message(
             role="system",
-            content=f"Earlier in this conversation: {session.live_conversation.rolling_summary}",
+            content=f"Earlier in this conversation: {session.rolling_summary}",
         ))
-    for turn in session.live_conversation.recent_turns:
+    for turn in session.recent_turns:
         role = "user" if turn.speaker == Speaker.USER else "assistant"
         messages.append(Message(role=role, content=turn.content))
 
@@ -101,10 +129,16 @@ class StartSession:
         user_repo: UserRepository,
         persona_repo: PersonaRepository,
         memory_brief_repo: MemoryBriefRepository,
+        session_log_reader: SessionLogReader,
+        session_tail_turns: int = 10,
+        session_continuation_threshold_hours: float = 24.0,
     ) -> None:
         self._user_repo = user_repo
         self._persona_repo = persona_repo
         self._memory_brief_repo = memory_brief_repo
+        self._session_log_reader = session_log_reader
+        self._tail_turns = session_tail_turns
+        self._threshold_hours = session_continuation_threshold_hours
 
     def execute(self, session_id: UUID, started_at: datetime) -> SessionContext:
         user = self._user_repo.get()
@@ -114,13 +148,25 @@ class StartSession:
         if persona is None:
             raise RuntimeError("GeneralAssistant not found — database not initialised")
         needs_onboarding = user.primary_language is None
+
+        session_tail: list[Turn] = []
+        if not needs_onboarding:
+            previous = self._session_log_reader.get_previous()
+            if previous:
+                delta_hours = (started_at - previous.ended_at).total_seconds() / 3600
+                if delta_hours <= self._threshold_hours:
+                    session_tail = self._session_log_reader.read_tail(
+                        previous.session_id, self._tail_turns
+                    )
+
         return SessionContext(
             session_id=session_id,
+            started_at=started_at,
             user=user,
             active_persona=persona,
-            live_conversation=LiveConversation(started_at=started_at, persona_id=persona.id),
             memory_brief=None if needs_onboarding else self._memory_brief_repo.get(),
             needs_onboarding=needs_onboarding,
+            session_tail=session_tail,
         )
 
 
@@ -133,7 +179,6 @@ class ProcessTurn:
         embedding_service: EmbeddingService,
         memory_repo: MemoryRepository,
         recall_detector: RecallIntentDetector,
-        persona_detector: PersonaIntentDetector,
         persona_repo: PersonaRepository,
         turn_logger: TurnLogger,
         rolling_window_size: int = 50,
@@ -144,13 +189,12 @@ class ProcessTurn:
         self._embedding_service = embedding_service
         self._memory_repo = memory_repo
         self._recall_detector = recall_detector
-        self._persona_detector = persona_detector
         self._persona_repo = persona_repo
         self._turn_logger = turn_logger
         self._rolling_window_size = rolling_window_size
 
     async def execute(self, session: SessionContext, audio: bytes, now: datetime) -> TurnResult | None:
-        # 1. STT — returns transcription and detected language together
+        # 1. STT
         text, detected_language = self._stt.transcribe(audio, session.user.primary_language)
         if not text.strip():
             return None
@@ -161,7 +205,9 @@ class ProcessTurn:
 
         # 3. Log to file (primary write) + update live context
         self._turn_logger.append(session.session_id, user_turn)
-        session.live_conversation.add_turn(user_turn)
+        is_first_turn = session.total_turn_count == 0
+        session.recent_turns.append(user_turn)
+        session.total_turn_count += 1
 
         # 4. Recall intent → enrich LLM context
         extra_context: list[MemoryItem] = []
@@ -170,13 +216,14 @@ class ProcessTurn:
             embedding = self._embedding_service.embed(recall.query)
             extra_context = self._memory_repo.search(embedding, recall.memory_types, top_n=5)
 
-        # 5. Collect LLM response, strip persona prefix, synthesise sentence-by-sentence
+        # 5. Collect LLM response, strip markers, synthesise sentence-by-sentence
         system_prompt, messages = _build_llm_input(session, extra_context)
         raw_response = ""
         async for token in self._llm.complete(messages, system_prompt):
             raw_response += token
 
         assistant_content, detected_name = _strip_persona_prefix(raw_response.strip())
+        assistant_content, boundary_marker = _strip_conversation_marker(assistant_content, is_first_turn)
 
         audio_chunks: list[bytes] = []
         sentence_buffer = ""
@@ -188,40 +235,48 @@ class ProcessTurn:
         if sentence_buffer.strip():
             audio_chunks.append(self._tts.synthesise(sentence_buffer))
 
-        # 6. Persona switch from detected prefix
+        # 6. Conversation boundary marker
+        boundary: ConversationBoundaryDetected | None = None
+        if boundary_marker:
+            self._turn_logger.write_marker(session.session_id, boundary_marker)
+            btype = BoundaryType.CONTINUATION if boundary_marker == "topic_continuation" else BoundaryType.BREAK
+            boundary = ConversationBoundaryDetected(boundary_type=btype)
+
+        # 7. Persona switch from detected prefix
         persona_switched: PersonaSwitched | None = None
         if detected_name:
             match = next(
                 (p for p in self._persona_repo.list_all() if p.name.lower() == detected_name.lower()),
                 None,
             )
-            if match and match.id != session.live_conversation.persona_id:
+            if match and match.id != session.active_persona.id:
                 persona_switched = PersonaSwitched(
-                    from_persona_id=session.live_conversation.persona_id,
+                    from_persona_id=session.active_persona.id,
                     to_persona_id=match.id,
                 )
-                session.live_conversation.persona_id = match.id
                 session.active_persona = match
 
-        # 7. Log assistant turn + update live context
+        # 8. Log assistant turn + update live context
         assistant_turn = Turn(timestamp=now, speaker=Speaker.ASSISTANT, content=assistant_content)
         self._turn_logger.append(session.session_id, assistant_turn)
-        session.live_conversation.add_turn(assistant_turn)
+        session.recent_turns.append(assistant_turn)
+        session.total_turn_count += 1
 
-        # 8. Rolling window check
+        # 9. Rolling window check
         if (self._rolling_window_size > 0
-                and session.live_conversation.total_turn_count % self._rolling_window_size == 0):
+                and session.total_turn_count % self._rolling_window_size == 0):
             await self._summarise_window(session)
 
         return TurnResult(
             audio_chunks=audio_chunks,
             assistant_content=assistant_content,
             persona_switched=persona_switched,
+            conversation_boundary=boundary,
         )
 
     async def _summarise_window(self, session: SessionContext) -> None:
         n = self._rolling_window_size // 2
-        turns = session.live_conversation.recent_turns[:n]
+        turns = session.recent_turns[:n]
         excerpt = "\n".join(f"{t.speaker.value}: {t.content}" for t in turns)
         tokens: list[str] = []
         async for token in self._llm.complete(
@@ -229,7 +284,8 @@ class ProcessTurn:
             system_prompt="You are a conversation summariser. Be brief.",
         ):
             tokens.append(token)
-        session.live_conversation.apply_rolling_summary("".join(tokens).strip(), n)
+        session.rolling_summary = "".join(tokens).strip()
+        session.recent_turns = session.recent_turns[n:]
 
 
 class EndSession:
@@ -237,4 +293,4 @@ class EndSession:
         self._turn_logger = turn_logger
 
     def execute(self, session: SessionContext, ended_at: datetime) -> None:
-        self._turn_logger.close(session.session_id, ended_at)
+        self._turn_logger.close(session.session_id, ended_at, clean_exit=True)

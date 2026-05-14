@@ -5,7 +5,7 @@ from uuid import UUID
 
 from ..domain.model import (
     AssistantPersona,
-    ConversationRecord,
+    Conversation,
     Concept,
     Episode,
     Language,
@@ -32,6 +32,13 @@ class ExtractionResult:
     procedures: list[Procedure]
 
 
+@dataclass(frozen=True)
+class SessionInfo:
+    session_id: UUID
+    ended_at: datetime
+    clean_exit: bool
+
+
 class STTService(Protocol):
     def transcribe(self, audio: bytes, language_hint: Language | None) -> tuple[str, Language]: ...
 
@@ -53,9 +60,15 @@ class UserRepository(Protocol):
     def save(self, user: User) -> None: ...
 
 
+class SessionLogReader(Protocol):
+    """Reads session metadata and turn tail from flat JSONL log files."""
+    def get_previous(self) -> SessionInfo | None: ...
+    def read_tail(self, session_id: UUID, max_turns: int) -> list[Turn]: ...
+
+
 class ConversationRepository(Protocol):
-    def save(self, record: ConversationRecord) -> None: ...
-    def get_unconsolidated(self) -> list[ConversationRecord]: ...
+    def save(self, conversation: Conversation) -> None: ...
+    def get_unconsolidated(self) -> list[Conversation]: ...
 
 
 class MemoryRepository(Protocol):
@@ -84,8 +97,9 @@ class MemoryBriefRepository(Protocol):
 
 class TurnLogger(Protocol):
     def append(self, session_id: UUID, turn: Turn) -> None: ...
-    def close(self, session_id: UUID, ended_at: datetime) -> None: ...
+    def close(self, session_id: UUID, ended_at: datetime, clean_exit: bool) -> None: ...
+    def write_marker(self, session_id: UUID, marker_type: str) -> None: ...
 
 
 class ConsolidationExtractor(Protocol):
-    def extract(self, record: ConversationRecord) -> ExtractionResult: ...
+    def extract(self, conversation: Conversation) -> ExtractionResult: ...

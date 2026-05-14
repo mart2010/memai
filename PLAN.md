@@ -21,42 +21,39 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 
 ### Value Objects & Enums
 - [x] `Language` value object (IETF language code)
-- [x] `CEFRLevel` enum (A1, A2, B1, B2, C1, C2)
-- [x] `LanguageProficiency` value object (language, level, is_native)
 - [x] `Speaker` enum (user, assistant)
 - [x] `EngagementLevel` enum — states: mentioned | explored | practiced | integrated
-      (transition rules removed — LLM assigns freely, no domain enforcement)
 - [x] `MemoryType` enum (EPISODE, CONCEPT, PROCEDURE)
+- [x] `BoundaryType` enum (BREAK, CONTINUATION)
 
 ### Entities & Aggregates
-- [x] `User` entity (id, primary_language: Language, proficiencies: list[LanguageProficiency])
-- [x] `Turn` entity (timestamp as identity, speaker, content, language)
-- [x] `LiveConversation` aggregate (runtime only, never persisted):
-      started_at as identity, rolling window summary + recent turns + active persona id
-- [x] `ConversationRecord` aggregate root (id, started_at, ended_at, worthiness,
+- [x] `User` entity (id, primary_language: Language | None, secondary_languages)
+- [x] `Turn` entity (timestamp, speaker, content, language)
+- [x] `SessionInfo` value object (session_id, ended_at, clean_exit: bool) — lives in ports, returned by SessionLogReader
+- [x] `Conversation` aggregate root (id, started_at, ended_at, worthiness,
       persona_snapshot, turns, consolidated flag)
-      — invariants: ended_at as single source of truth; ≥1 Turn + ended to consolidate; immutable once consolidated
-- [x] `Episode` entity (id, summary, happened_at, conversation_id, embedding: list[float] | None)
+      — logical grouping determined by LLM; may span sessions or be sub-divided within one
+      — invariants: ≥1 Turn + ended to consolidate; immutable once consolidated
+      — formerly named `ConversationRecord`; `LiveConversation` dropped entirely
+- [x] `Episode` entity (id, summary, happened_at, conversation_id, embedding)
 - [x] `Concept` entity (id, name, description, language, engagement_level, embedding)
 - [x] `Procedure` entity (id, name, steps, language, engagement_level, embedding)
 - [x] `MemoryBrief` singleton entity (content, generated_at)
-- [x] `AssistantPersona` entity (id, name, system_prompt, is_system, created_at, updated_at)
+- [x] `AssistantPersona` entity (id, name, system_prompt, languages, is_system, created_at, updated_at)
 
 ### Domain Events
 - [x] `PrimaryLanguageChanged` (user_id, old_language, new_language)
 - [x] `RecallTriggered` (query: str, memory_types: tuple[MemoryType, ...])
 - [x] `PersonaSwitched` (from_persona_id, to_persona_id)
-- [x] `PersonaSuggested` (detected_language, suggested_persona_id)
+- [x] `ConversationBoundaryDetected` (boundary_type: BoundaryType)
 
 ### Domain-owned Protocols
-- [x] `WorthinessEvaluator` Protocol (evaluate(record: ConversationRecord) → bool)
+- [x] `WorthinessEvaluator` Protocol (evaluate(conversation: Conversation) → bool)
 - [x] `RecallIntentDetector` Protocol (detect(text: str) → RecallTriggered | None)
-- [x] `LanguageDetector` Protocol (detect(text: str) → Language)
 - [x] `PersonaIntentDetector` Protocol (detect(text: str) → str | None)
-- [x] `should_suggest_persona` domain function (replaces EngagementEvaluator — pure function)
 
 ### Unit Tests — Phase 1
-- [x] `ConversationRecord` invariants (add_turn/consolidation guards, eligibility)
+- [x] `Conversation` invariants (add_turn/consolidation guards, eligibility)
 - [x] `AssistantPersona` guard (is_system cannot be modified)
 
 ---
@@ -66,16 +63,17 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 Application logic. All infrastructure behind Protocols. Fake* for tests.
 
 ### Infrastructure Ports (defined here, implemented in Phase 3)
-- [x] `STTService` Protocol (transcribe(audio: bytes, language: Language) → str)
+- [x] `STTService` Protocol (transcribe(audio: bytes, language_hint) → tuple[str, Language])
 - [x] `LLMService` Protocol (complete(messages, system_prompt) → AsyncIterator[str])
 - [x] `TTSService` Protocol (synthesise(text: str) → bytes)
 - [x] `EmbeddingService` Protocol (embed(text: str) → list[float])
 - [x] `UserRepository` Protocol
+- [x] `SessionLogReader` Protocol (get_previous() → SessionInfo | None; read_tail(session_id, max_turns) → list[Turn])
 - [x] `ConversationRepository` Protocol
 - [x] `MemoryRepository` Protocol (upsert + similarity_search per MemoryType)
 - [x] `PersonaRepository` Protocol
 - [x] `MemoryBriefRepository` Protocol
-- [x] `TurnLogger` Protocol (append(session_id, turn) + close(session_id, ended_at))
+- [x] `TurnLogger` Protocol (append, close, write_marker)
 
 ### Fake Implementations (in tests/fakes/)
 - [x] `FakeSTTService`
@@ -83,20 +81,21 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
 - [x] `FakeTTSService`
 - [x] `FakeEmbeddingService`
 - [x] `FakeUserRepository`
+- [x] `FakeSessionLogReader`
 - [x] `FakeConversationRepository`
 - [x] `FakeMemoryRepository`
 - [x] `FakePersonaRepository`
 - [x] `FakeMemoryBriefRepository`
-- [x] `FakeTurnLogger`
+- [x] `FakeTurnLogger` (tracks written turns, closed sessions, markers)
 
 ### Use Cases — Interaction Context
-- [x] `StartSession` — load User + MemoryBrief, initialise LiveConversation with active
-      persona; inject MemoryBrief as static system block
-- [x] `ProcessTurn` — detect language, detect recall intent, detect persona intent, run
-      STT→LLM→TTS pipeline, apply implicit persona suggestion rule, trigger rolling
-      window summarisation when turn-count watermark reached (async, between turns),
-      log turns via TurnLogger; ConversationRecord is an offline concern
-- [x] `EndSession` — close TurnLogger (write ended_at to flat file)
+- [x] `StartSession` — load User + MemoryBrief + active persona; check previous session
+      recency; inject session tail if within threshold; save new Session entity
+- [x] `ProcessTurn` — detect recall intent, detect persona intent, detect conversation
+      boundary markers ([TOPIC_BREAK] / [TOPIC_CONTINUATION] on first turn), run
+      STT→LLM→TTS pipeline, trigger rolling window summarisation when watermark reached,
+      log turns + markers via TurnLogger; Conversation grouping is an offline concern
+- [x] `EndSession` — close TurnLogger; mark Session clean_exit=True via SessionRepository
 
 ### Use Cases — Persona Context
 - [x] `CreatePersona` (guard: only when GeneralAssistant active)
@@ -133,9 +132,10 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
 One adapter at a time. Inner layers unchanged.
 
 ### Persistence (PostgreSQL + pgvector)
-- [ ] DB schema: users, personas, conversation_records, turns, episodes, concepts,
+- [ ] DB schema: users, personas, sessions, conversations, turns, episodes, concepts,
       procedures, memory_brief — with pgvector extension and HNSW index on embedding columns
 - [ ] `PostgresUserRepository`
+- [ ] `JSONLSessionLogReader` — reads previous session metadata + last N turns from JSONL flat files; no DB involved
 - [ ] `PostgresConversationRepository`
 - [ ] `PostgresMemoryRepository` (pgvector similarity_search)
 - [ ] `PostgresPersonaRepository` — seed GeneralAssistant at DB init

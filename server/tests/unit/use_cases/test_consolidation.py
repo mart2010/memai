@@ -5,7 +5,7 @@ from uuid import uuid4
 from memai_server.domain.model import (
     AssistantPersona,
     Concept,
-    ConversationRecord,
+    Conversation,
     Episode,
     Language,
     Speaker,
@@ -47,25 +47,24 @@ def _make_consolidation(
     return use_case, conversation_repo, memory_repo
 
 
-def _seed_ended_record(conversation_repo: FakeConversationRepository) -> None:
-    """Seed one ended, unconsolidated ConversationRecord with a single turn."""
-    record = ConversationRecord(
+def _seed_ended_conversation(conversation_repo: FakeConversationRepository) -> None:
+    conv = Conversation(
         id=uuid4(),
         started_at=_now(),
         persona_snapshot=_general_assistant(),
     )
-    record.add_turn(Turn(timestamp=_now(), speaker=Speaker.USER, content="hello"))
-    record.end(ended_at=_now())
-    conversation_repo.save(record)
+    conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.USER, content="hello"))
+    conv.end(ended_at=_now())
+    conversation_repo.save(conv)
 
 
 class TestRunConsolidation:
     @pytest.mark.asyncio
-    async def test_worthy_record_produces_episode(self):
+    async def test_worthy_conversation_produces_episode(self):
         episode = Episode(id=uuid4(), summary="Discussed Python.", happened_at=_now(), conversation_id=uuid4())
         extraction = ExtractionResult(episodes=[episode], concepts=[], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=True, extraction=extraction)
-        _seed_ended_record(conversation_repo)
+        _seed_ended_conversation(conversation_repo)
 
         count = await use_case.execute()
 
@@ -73,11 +72,11 @@ class TestRunConsolidation:
         assert len(memory_repo.episodes) == 1
 
     @pytest.mark.asyncio
-    async def test_unworthy_record_skips_episodes(self):
+    async def test_unworthy_conversation_skips_episodes(self):
         episode = Episode(id=uuid4(), summary="Short chat.", happened_at=_now(), conversation_id=uuid4())
         extraction = ExtractionResult(episodes=[episode], concepts=[], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=False, extraction=extraction)
-        _seed_ended_record(conversation_repo)
+        _seed_ended_conversation(conversation_repo)
 
         await use_case.execute()
 
@@ -88,25 +87,25 @@ class TestRunConsolidation:
         concept = Concept(id=uuid4(), name="Recursion", description="A function calling itself.", language=Language("en"))
         extraction = ExtractionResult(episodes=[], concepts=[concept], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=False, extraction=extraction)
-        _seed_ended_record(conversation_repo)
+        _seed_ended_conversation(conversation_repo)
 
         await use_case.execute()
 
         assert len(memory_repo.concepts) == 1
 
     @pytest.mark.asyncio
-    async def test_record_marked_consolidated(self):
+    async def test_conversation_marked_consolidated(self):
         use_case, conversation_repo, _ = _make_consolidation()
-        _seed_ended_record(conversation_repo)
+        _seed_ended_conversation(conversation_repo)
 
         await use_case.execute()
 
         assert all(r.consolidated for r in conversation_repo._records.values())
 
     @pytest.mark.asyncio
-    async def test_already_consolidated_records_skipped_on_rerun(self):
+    async def test_already_consolidated_conversations_skipped_on_rerun(self):
         use_case, conversation_repo, _ = _make_consolidation()
-        _seed_ended_record(conversation_repo)
+        _seed_ended_conversation(conversation_repo)
 
         await use_case.execute()
         count2 = await use_case.execute()
