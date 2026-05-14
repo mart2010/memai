@@ -11,8 +11,8 @@ from memai_server.domain.model import (
     Speaker,
     Turn,
 )
-from memai_server.use_cases.memory import RunConsolidation
-from memai_server.use_cases.ports import ExtractionResult
+from memai_server.services.memory import RunConsolidation
+from memai_server.services.ports import ExtractionResult
 
 from tests.fakes.fakes import (
     FakeConsolidationExtractor,

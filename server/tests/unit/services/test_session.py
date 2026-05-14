@@ -13,8 +13,8 @@ from memai_server.domain.model import (
     Turn,
     User,
 )
-from memai_server.use_cases.ports import SessionInfo
-from memai_server.use_cases.session import EndSession, ProcessTurn, StartSession
+from memai_server.services.ports import SessionInfo
+from memai_server.services.session import EndSession, ProcessTurn, StartSession
 
 from tests.fakes.fakes import (
     FakeEmbeddingService,

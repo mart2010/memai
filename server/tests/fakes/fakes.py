@@ -16,7 +16,7 @@ from memai_server.domain.model import (
     User,
 )
 from memai_server.domain.protocols import WorthinessEvaluator
-from memai_server.use_cases.ports import (
+from memai_server.services.ports import (
     ConsolidationExtractor,
     ExtractionResult,
     MemoryItem,

@@ -7,6 +7,7 @@ requires-python = ">=3.13"
 dependencies = [
     "numpy>=2.4.4",
     "python-dotenv>=1.0",
+    "questionary>=2.0",
     "sounddevice>=0.5.5",
     "webrtcvad-wheels>=2.0.14",
     "websockets>=16.0",

@@ -17,6 +17,17 @@ class Language:
             raise ValueError("Language code cannot be empty")
 
 
+# Intersection of faster-whisper (~99 languages) and XTTS v2 (~17 languages).
+# XTTS v2 is the limiting factor; this is the full set Memai supports.
+SUPPORTED_LANGUAGES: list[Language] = [
+    Language("en"), Language("fr"), Language("es"), Language("de"),
+    Language("it"), Language("pt"), Language("pl"), Language("tr"),
+    Language("ru"), Language("nl"), Language("cs"), Language("ar"),
+    Language("zh-cn"), Language("ja"), Language("ko"), Language("hu"),
+    Language("hi"),
+]
+
+
 class EngagementLevel(Enum):
     MENTIONED = "mentioned"
     EXPLORED = "explored"

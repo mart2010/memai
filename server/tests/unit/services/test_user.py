@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 from memai_server.domain.model import Language, User
-from memai_server.use_cases.user import UpdatePrimaryLanguage
+from memai_server.services.user import UpdatePrimaryLanguage
 
 from tests.fakes.fakes import FakeUserRepository
 
