@@ -124,6 +124,7 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
 - [x] `RunConsolidation` — worthy vs. unworthy conversation, concepts always extracted,
       consolidated flag set, already-consolidated conversations skipped on rerun
 - [x] `UpdatePrimaryLanguage` — event fired, no-op on same language
+- [x] `CreatePersona` / `EditPersona` / `RemovePersona` / `SwitchPersona` — guards, event, session update
 
 ---
 
@@ -166,7 +167,7 @@ One adapter at a time. Inner layers unchanged.
 
 ### Embeddings
 - [ ] `SentenceTransformerEmbeddingService` (multilingual-e5-large; runs as a subprocess
-      or lightweight separate process on the Ubuntu server)
+      or lightweight separate process on the server machine)
 
 ### Similarity threshold & merge logic
 - [ ] Replace hardcoded `similarity_threshold=0.85` in `RunConsolidation` with a global
@@ -222,6 +223,29 @@ Wire client ↔ server into Clean Architecture. All domain logic already tested.
       with the supported language list; send `language_selected` result
 - [ ] Suppress VAD from playback start until `speaking_end` received (mic muting)
 - [ ] Existing: sounddevice capture, webrtcvad, binary frames, SSH tunnel — keep as-is
+
+### ⚠ Revisit: Client-side first-launch onboarding flow
+Current design: server detects missing `primary_language` → pushes `select_language` to
+client → client renders questionary dropdown.
+
+Proposed change: move first-launch setup entirely to the client, using questionary for all
+three prompts in sequence before attempting any connection:
+1. Server address (`SSH_USER_HOST`) — saved locally (e.g. `.env`)
+2. SSH/WebSocket port (`WS_PORT`) — saved locally, defaults to 8765
+3. Primary language — sent to server as `language_selected` after connecting
+
+Rationale: the client already needs server address and port before it can connect at all;
+doing all three in a single client-side first-launch wizard is cleaner than a two-phase
+flow (local config + server-driven prompt). Language ownership stays server-side as agreed.
+
+Implications to resolve before implementing:
+- Server should still handle the `language_selected` message and call `UpdatePrimaryLanguage`
+  (no change to server protocol)
+- Server no longer sends `select_language`; remove that message type from the protocol, or
+  keep it as a fallback for headless/non-interactive clients
+- Decide on local config format: `.env` file written by the wizard vs. a dedicated
+  `config.json` — `.env` is simplest given `python-dotenv` is already a dependency
+- Define "first launch" on client: absence of `SSH_USER_HOST` in `.env` (or config file)
 
 ### End-to-End Smoke Test
 - [ ] Client connects, speaks a sentence, receives synthesised audio response

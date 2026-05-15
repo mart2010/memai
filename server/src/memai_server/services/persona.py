@@ -19,7 +19,7 @@ class CreatePersona:
         now: datetime,
         languages: list[Language] | None = None,
     ) -> AssistantPersona:
-        if session.live_conversation.persona_id != GENERAL_ASSISTANT_ID:
+        if session.active_persona.id != GENERAL_ASSISTANT_ID:
             raise ValueError("Persona management is only available when GeneralAssistant is active")
         persona = AssistantPersona(
             id=uuid4(),
@@ -83,9 +83,8 @@ class SwitchPersona:
         if persona is None:
             raise ValueError(f"Persona {persona_id} not found")
         event = PersonaSwitched(
-            from_persona_id=session.live_conversation.persona_id,
+            from_persona_id=session.active_persona.id,
             to_persona_id=persona_id,
         )
-        session.live_conversation.persona_id = persona_id
         session.active_persona = persona
         return event

@@ -22,7 +22,7 @@ covered by both the STT engine (faster-whisper, ~99 languages) and the TTS engin
 
 Build a two-component monorepo voice assistant with persistent, structured memory.
 
-### Client (Windows laptop)
+### Client
 
 - Capture microphone audio, apply VAD, stream raw PCM to server over binary WebSocket frames
 - Play back synthesized speech (received as binary WebSocket frames); suppress VAD during
@@ -30,7 +30,7 @@ Build a two-component monorepo voice assistant with persistent, structured memor
 - Stateless — no local config, no persistent state; single launch command: `memai`
 - Auto-establish SSH tunnel to server on launch
 
-### Server (Ubuntu workstation, GPU)
+### Server (GPU-equipped machine)
 
 - Real-time pipeline: STT (faster-whisper) → LLM (ollama/llama3.3, streamed) → TTS
   (XTTS v2 / Coqui), sentence-by-sentence synthesis for low latency
@@ -56,7 +56,7 @@ On first launch the server detects that `User.primary_language` is not set. The 
 1. Server sends `{"type": "select_language", "supported": [...]}` immediately after connection
 2. Client renders an interactive terminal selection (`questionary` dropdown) listing all
    supported languages — the user picks with arrow keys, confirms with Enter
-3. Client sends `{"type": "language_selected", "language": "fr"}` back to server
+3. Client sends `{"type": "language_selected", "language": "<lang_code>"}` back to server
 4. Server sets `User.primary_language` and starts an onboarding voice conversation in
    that language
 
@@ -128,7 +128,7 @@ and XTTS v2 support. XTTS v2 is the limiting factor (~17 languages):
 
 | Constraint | Detail |
 |---|---|
-| **Hardware split** | Client: Windows laptop (no GPU); Server: Ubuntu workstation (GPU required) |
+| **Hardware split** | Client: any OS (currently Windows; multi-OS support TBD); Server: any GPU-equipped machine (CUDA required; ROCm/Metal long-term goals) |
 | **Local-only** | All models run offline: faster-whisper, ollama, XTTS v2, multilingual-e5-large, pgvector |
 | **Language ceiling** | Intersection of faster-whisper (~99 languages) and XTTS v2 (~17 languages) |
 | **Live/offline boundary** | Live conversation: flat file writes only. Offline: DB, LLM extraction, embedding, vector search |

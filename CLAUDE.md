@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI voice assistant that runs entirely on local, open-source infrastructure — no cloud services. It is a monorepo with two independent Python packages:
 
-- **`client/`** — runs on a Windows laptop; captures microphone audio and plays back synthesized speech
-- **`server/`** — runs on an Ubuntu workstation with GPU; handles STT, LLM, and TTS
+- **`client/`** — runs on the user's machine; captures microphone audio and plays back synthesized speech. Currently developed on Windows; multi-OS support is planned but not yet implemented (approach TBD).
+- **`server/`** — runs on any GPU-equipped machine; handles STT, LLM, and TTS. Currently developed on Ubuntu; other GPU-capable OS are in scope.
 
 The assistant is **language-agnostic**: any primary language is supported as long as it is covered by both faster-whisper (~99 languages) and XTTS v2 (~17 languages). Development is not French-specific.
 
@@ -16,12 +16,12 @@ The assistant is **language-agnostic**: any primary language is supported as lon
 Each package has its own virtual environment. Python 3.13+ required.
 
 ```bash
-# Server (Ubuntu with GPU)
+# Server (GPU machine)
 cd server
 uv venv && uv pip install -e .
-# Then replace CPU torch with CUDA build (see pyproject.toml comment on TTS dependency)
+# Then replace CPU torch with CUDA build — CUDA (NVIDIA) is the current GPU backend; broader GPU support (ROCm, Metal) is a long-term goal
 
-# Client (Windows)
+# Client
 cd client
 uv venv && uv pip install -e .
 ```
@@ -29,13 +29,15 @@ uv venv && uv pip install -e .
 ## Running the Components
 
 ```bash
-# Start server (Ubuntu)
+# Start server (GPU machine)
 cd server
-.venv/bin/memai-server
+.venv/bin/memai-server          # Linux/macOS
+# .venv/Scripts/memai-server   # Windows
 
-# Start client (Windows) — SSH tunnel to server is started automatically
+# Start client — SSH tunnel to server is started automatically
 cd client
-.venv/Scripts/memai-client
+.venv/Scripts/memai-client      # Windows (current)
+# .venv/bin/memai-client        # Linux/macOS (planned)
 ```
 
 ## Linting
@@ -75,7 +77,7 @@ Audio is sent as raw binary WebSocket frames; control messages use JSON text fra
 |---|---|---|
 | binary frame | client→server | Raw PCM int16 bytes |
 | `{"type": "end_utterance"}` | client→server | Signals end of speech segment |
-| `{"type": "language_selected", "language": "fr"}` | client→server | Sent once during onboarding after user picks from terminal selection |
+| `{"type": "language_selected", "language": "<lang_code>"}` | client→server | Sent once during onboarding after user picks from terminal selection |
 | `{"type": "select_language", "supported": [...]}` | server→client | Sent on connect when `User.primary_language` is null; client renders terminal dropdown |
 | `{"type": "speaking_end"}` | server→client | Re-enables VAD on client |
 | binary frame | server→client | Synthesized float32 audio bytes |
@@ -86,7 +88,7 @@ Audio is sent as raw binary WebSocket frames; control messages use JSON text fra
 - `webrtcvad` (aggressiveness=2) determines if a frame contains speech
 - Accumulates speech frames; after 10 consecutive silent frames sends `end_utterance`
 - Suppresses VAD from playback start until `speaking_end` received (mic muting)
-- Auto-establishes an SSH tunnel (`localhost:8765 → tx940094.open.etat-de-vaud.ch:8765`) before connecting
+- Auto-establishes an SSH tunnel (`localhost:{WS_PORT} → {SSH_USER_HOST}:{WS_PORT}`) before connecting; both values come from env vars (`SSH_USER_HOST` required, `WS_PORT` defaults to 8765)
 - Stateless — no local config or persistent state of any kind
 - On connect: if server sends `select_language`, renders a `questionary` terminal dropdown
   listing supported languages; user selects once; result sent as `language_selected`
@@ -96,7 +98,7 @@ Audio is sent as raw binary WebSocket frames; control messages use JSON text fra
 - **STT**: `faster-whisper` — language auto-detected by Whisper (no forced language);
   returns `tuple[str, Language]`
 - **LLM**: `ollama` with `llama3.3`, streamed token by token
-- **TTS**: `XTTS v2` (Coqui) — single multilingual model, GPU-accelerated, ~17 languages
+- **TTS**: `XTTS v2` (Coqui) — single multilingual model, CUDA-accelerated (current), ~17 languages
 - Session log files written to `logs/conversations/YYYY-MM-DD_<session_id>.jsonl`;
   one JSON line per turn plus inline boundary markers
 
