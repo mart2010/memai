@@ -99,7 +99,7 @@ Audio is sent as raw binary WebSocket frames; control messages use JSON text fra
   returns `tuple[str, Language]`
 - **LLM**: `ollama` with `llama3.3`, streamed token by token
 - **TTS**: `XTTS v2` (Coqui) — single multilingual model, CUDA-accelerated (current), ~17 languages
-- Session log files written to `logs/conversations/YYYY-MM-DD_<session_id>.jsonl`;
+- Session log files written to `logs/sessions/YYYY-MM-DD_<session_id>.jsonl`;
   one JSON line per turn plus inline boundary markers
 
 ### Server Package Layout

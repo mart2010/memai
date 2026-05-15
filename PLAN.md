@@ -133,10 +133,10 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
 One adapter at a time. Inner layers unchanged.
 
 ### Flat File (session logs — live path, no DB)
-- [ ] `JSONLTurnLogger` — appends to `logs/conversations/YYYY-MM-DD_<session_id>.jsonl`;
+- [x] `JSONLTurnLogger` (`infrastructure/json_file.py`) — appends to `logs/sessions/YYYY-MM-DD_<session_id>.jsonl`;
       turn line: `{"ts": "…", "speaker": "…", "content": "…", "db_written": false}`;
       marker line: `{"type": "conversation_boundary"|"topic_continuation"|"session_closed", …}`
-- [ ] `JSONLSessionLogReader` — scans log directory for most recent session file;
+- [x] `JSONLSessionLogReader` (`infrastructure/json_file.py`) — scans log directory for most recent session file;
       reads `session_closed` marker for ended_at + clean_exit; reads tail turns
 
 ### Persistence (PostgreSQL + pgvector)

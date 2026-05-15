@@ -171,15 +171,14 @@ class FakeTurnLogger:
         self.clean_exits: dict[UUID, bool] = {}
         self.markers: list[tuple[UUID, str]] = []
 
-    def append(self, session_id: UUID, turn: Turn) -> None:
+    def append(self, session_id: UUID, turn: Turn, marker: str | None = None) -> None:
         self.written.append((session_id, turn))
+        if marker is not None:
+            self.markers.append((session_id, marker))
 
     def close(self, session_id: UUID, ended_at: datetime, clean_exit: bool) -> None:
         self.closed[session_id] = ended_at
         self.clean_exits[session_id] = clean_exit
-
-    def write_marker(self, session_id: UUID, marker_type: str) -> None:
-        self.markers.append((session_id, marker_type))
 
 
 # ---------------------------------------------------------------------------

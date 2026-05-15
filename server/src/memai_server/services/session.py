@@ -235,10 +235,9 @@ class ProcessTurn:
         if sentence_buffer.strip():
             audio_chunks.append(self._tts.synthesise(sentence_buffer))
 
-        # 6. Conversation boundary marker
+        # 6. Conversation boundary event — marker embedded in assistant turn below
         boundary: ConversationBoundaryDetected | None = None
         if boundary_marker:
-            self._turn_logger.write_marker(session.session_id, boundary_marker)
             btype = BoundaryType.CONTINUATION if boundary_marker == "topic_continuation" else BoundaryType.BREAK
             boundary = ConversationBoundaryDetected(boundary_type=btype)
 
@@ -258,7 +257,7 @@ class ProcessTurn:
 
         # 8. Log assistant turn + update live context
         assistant_turn = Turn(timestamp=now, speaker=Speaker.ASSISTANT, content=assistant_content)
-        self._turn_logger.append(session.session_id, assistant_turn)
+        self._turn_logger.append(session.session_id, assistant_turn, marker=boundary_marker)
         session.recent_turns.append(assistant_turn)
         session.total_turn_count += 1
 
