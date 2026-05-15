@@ -107,7 +107,7 @@ class Turn:
 
 @dataclass
 class Conversation:
-    id: UUID
+    id: int | None
     started_at: datetime
     persona_snapshot: AssistantPersona
     turns: list[Turn] = field(default_factory=list)
@@ -142,16 +142,16 @@ class Conversation:
 
 @dataclass
 class Episode:
-    id: UUID
+    id: int | None
     summary: str
     happened_at: datetime
-    conversation_id: UUID
+    conversation_id: int
     embedding: list[float] | None = None
 
 
 @dataclass
 class Concept:
-    id: UUID
+    id: int | None
     name: str
     description: str
     language: Language
@@ -164,7 +164,7 @@ class Concept:
 
 @dataclass
 class Procedure:
-    id: UUID
+    id: int | None
     name: str
     steps: list[str]
     language: Language

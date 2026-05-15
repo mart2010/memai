@@ -100,9 +100,13 @@ class FakeSessionLogReader:
 
 class FakeConversationRepository:
     def __init__(self) -> None:
-        self._records: dict[UUID, Conversation] = {}
+        self._records: dict[int, Conversation] = {}
+        self._next_id: int = 1
 
     def save(self, conversation: Conversation) -> None:
+        if conversation.id is None:
+            conversation.id = self._next_id
+            self._next_id += 1
         self._records[conversation.id] = conversation
 
     def get_unconsolidated(self) -> list[Conversation]:

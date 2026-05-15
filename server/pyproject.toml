@@ -1,7 +1,7 @@
 [project]
 name = "memai-server"
 version = "0.1.0"
-description = "Mémai voice assistant — server (Ubuntu/GPU)"
+description = "Mémai voice assistant — server (GPU-equipped machine)"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -12,6 +12,7 @@ dependencies = [
     "soundfile>=0.13.1",
     "TTS>=0.22.0",  # XTTS v2; installs CPU-only torch — replace with CUDA torch after: uv pip install torch --index-url https://download.pytorch.org/whl/cu121 (adjust cu121 for your CUDA version)
     "webrtcvad-wheels>=2.0.14",
+    "psycopg[binary]>=3.1",
     "websockets>=16.0",
 ]
 

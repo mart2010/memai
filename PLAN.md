@@ -140,8 +140,10 @@ One adapter at a time. Inner layers unchanged.
       reads `session_closed` marker for ended_at + clean_exit; reads tail turns
 
 ### Persistence (PostgreSQL + pgvector)
-- [ ] DB schema: users, personas, conversations, turns, episodes, concepts,
-      procedures, memory_brief — with pgvector extension and HNSW index on embedding columns
+- [x] DB schema (`migrations/001_initial_schema.sql`): users, personas, conversations, turns,
+      episodes, concepts, procedures, memory_brief — pgvector extension, HNSW indexes on
+      embedding columns, partial index on unconsolidated conversations, GeneralAssistant seed
+      — integer PKs (BIGSERIAL/SERIAL) for conversations/episodes/concepts/procedures; UUID for personas/users
 - [ ] `TurnLogReplayer` — on server start: scan flat files for `db_written: false` entries,
       replay into DB before accepting connections
 - [ ] `PostgresUserRepository`
