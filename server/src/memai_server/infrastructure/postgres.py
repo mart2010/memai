@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 """
 PostgreSQL repository implementations (psycopg 3 + pgvector).
 Call connect(dsn) to get a connection with the vector type already registered,

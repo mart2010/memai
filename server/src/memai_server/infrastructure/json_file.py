@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 import json
 from datetime import datetime, UTC
 from pathlib import Path

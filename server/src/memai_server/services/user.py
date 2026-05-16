@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 from ..domain.events import PrimaryLanguageChanged
 from ..domain.model import Language, User
 from .ports import UserRepository

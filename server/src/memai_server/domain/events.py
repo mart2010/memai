@@ -1,3 +1,4 @@
+# Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 from dataclasses import dataclass
 from enum import Enum
 from uuid import UUID
