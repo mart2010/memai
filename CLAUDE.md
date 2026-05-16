@@ -53,14 +53,16 @@ ruff format .
 
 ### Live / Offline Boundary
 
-**Live conversation** — writes only to local JSONL session log files. No DB writes, no
-embedding, no vector search during the real-time voice loop.
+**Live conversation** — DB reads are allowed (session start: User, MemoryBrief, Persona;
+RAG recall turns: Concept/Episode/Procedure similarity search). Writes go only to local JSONL session
+log files. No DB writes, no embedding generation for storage, no consolidation or upsert.
 
-**Offline (post-disconnect)** — all heavy processing: DB reads/writes, consolidation,
-LLM extraction, embedding generation, pgvector similarity search, MemoryBrief generation.
+**Offline (post-disconnect)** — all write-side heavy processing: DB writes, consolidation,
+LLM extraction, embedding generation for storage, pgvector upsert similarity search,
+MemoryBrief generation.
 
-This boundary is a hard invariant. Any design that bleeds DB or heavy compute into the
-live conversation path must be flagged and rejected.
+This boundary is a hard invariant. Any DB write or consolidation logic that bleeds into
+the live conversation path must be flagged and rejected.
 
 ### Data Flow
 
@@ -119,3 +121,87 @@ server/src/memai_server/
 | `FRAME_DURATION` | 30 ms | client |
 | WebSocket port | 8765 | both |
 | LLM model | `llama3.3` | server |
+
+## Data Model
+
+### Memory types
+
+Three types of long-term memory, all stored in PostgreSQL with 1024-dim pgvector embeddings (`multilingual-e5-large`):
+
+| Type | Purpose | Persona-scoped |
+|---|---|---|
+| `Episode` | What happened, anchored to its origin conversation | No — persona traceability via `conversation.persona_snapshot` |
+| `Concept` | Distilled knowledge about a subject | Yes — `persona_id` FK |
+| `Procedure` | How to do something — description + optional steps | Yes — `persona_id` FK |
+
+### Concept and Procedure: persona scope
+
+`Concept` and `Procedure` each carry a `persona_id` FK. Similarity search during
+consolidation is always scoped to the active persona before applying the upsert threshold.
+
+**Why scoping is necessary**: the same name can mean entirely different things in different
+persona contexts (e.g. "big bang" with an astronomy persona vs a pop-culture persona).
+Without scoping, the upsert would merge unrelated concepts. Engagement level is also
+inherently persona-specific — the user may have `integrated` a concept under one persona
+and only `mentioned` it under another.
+
+**Cascade delete is intentional**: dropping a persona removes all its concepts and
+procedures. A temporary persona (e.g. exam prep for a specific course) can be fully
+cleaned up by deleting the persona. Do not change to `SET NULL` without explicit
+discussion — the cascade is load-bearing behaviour, not an oversight.
+
+**`GeneralAssistant`** acts as the cross-domain catch-all for concepts that do not belong
+to a specialised persona.
+
+### Concept.description invariant
+
+`description` is a tight LLM synthesis — the best current understanding of what the user
+knows about this concept within its persona context. It is not an append log: old details
+are absorbed into the synthesis on each upsert. Hard cap ~300 words, chosen to stay
+safely within the 512-token input limit of `multilingual-e5-large`. Both `description`
+and `embedding` are always updated together on every enrichment.
+
+### Language field (Concept and Procedure)
+
+`language` records the language in which the concept or procedure was first introduced.
+It stays fixed even if the concept resurfaces in another language. The description is
+always maintained in this original language; content from other-language conversations is
+translated and synthesised into the existing description during the upsert LLM call.
+
+### Upsert similarity threshold
+
+Consolidation uses a two-tier threshold (exact values to be calibrated on real data):
+
+| Similarity | Action |
+|---|---|
+| > 0.93 | Auto-merge — almost certainly the same concept |
+| 0.75 – 0.93 | Send both to LLM for disambiguation: same concept or distinct? |
+| < 0.75 | Auto-insert as new concept |
+
+The middle-band LLM call is cheap (binary judgment, runs offline) and handles cases where
+embedding proximity alone is ambiguous (e.g. "golden retriever" vs "dog").
+
+### Episode.origin_conversation_id
+
+`origin_conversation_id` is NOT NULL — episodes are always extracted from a conversation,
+never invented. It records provenance (where we first learned about this event), not
+ownership. `happened_at` is the real temporal anchor: when the event occurred in the
+real world, which may predate the conversation significantly.
+
+When the same episode is revisited in later conversations, the upsert updates `summary`
+and `embedding` in place; `origin_conversation_id` stays fixed. Full multi-conversation
+traceability (which conversations touched a given episode) is deferred — an
+`episode_conversations` join table would be the path if needed.
+
+### Procedure.description and steps
+
+A procedure has both `description` (NOT NULL) and `steps` (defaults to `{}`):
+
+- `description` is a free-form LLM synthesis — same invariant as `Concept.description`
+  (~300 words, always in the original language). It is the primary carrier of knowledge
+  and is always populated.
+- `steps` is a flat ordered array, populated only when the procedure decomposes cleanly
+  into discrete sequential actions. Left empty for heuristics, principles, or any
+  procedural knowledge that does not have a natural step structure.
+
+Both `description` and `embedding` are updated together on every upsert.
