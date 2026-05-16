@@ -57,7 +57,7 @@ ruff format .
 RAG recall turns: Concept/Episode/Procedure similarity search). Writes go only to local JSONL session
 log files. No DB writes, no embedding generation for storage, no consolidation or upsert.
 
-**Offline (post-disconnect)** — all write-side heavy processing: DB writes, consolidation,
+**Offline (post-disconnect)** — all heavy processing: DB writes, consolidation,
 LLM extraction, embedding generation for storage, pgvector upsert similarity search,
 MemoryBrief generation.
 
