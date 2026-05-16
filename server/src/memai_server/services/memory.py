@@ -76,14 +76,19 @@ class RunConsolidation:
 
             for concept in extraction.concepts:
                 concept.embedding = self._embedding_service.embed(f"{concept.name}: {concept.description}")
-                candidates = self._memory_repo.search(concept.embedding, (MemoryType.CONCEPT,), top_n=1)
+                candidates = self._memory_repo.search(
+                    concept.embedding, (MemoryType.CONCEPT,), top_n=1,
+                    persona_id=conversation.persona_snapshot.id,
+                )
                 if not _should_merge(candidates, concept.embedding, self._threshold):
                     self._memory_repo.upsert_concept(concept)
 
             for procedure in extraction.procedures:
-                text = f"{procedure.name}: {'; '.join(procedure.steps)}"
-                procedure.embedding = self._embedding_service.embed(text)
-                candidates = self._memory_repo.search(procedure.embedding, (MemoryType.PROCEDURE,), top_n=1)
+                procedure.embedding = self._embedding_service.embed(f"{procedure.name}: {procedure.description}")
+                candidates = self._memory_repo.search(
+                    procedure.embedding, (MemoryType.PROCEDURE,), top_n=1,
+                    persona_id=conversation.persona_snapshot.id,
+                )
                 if not _should_merge(candidates, procedure.embedding, self._threshold):
                     self._memory_repo.upsert_procedure(procedure)
 

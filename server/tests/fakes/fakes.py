@@ -136,6 +136,7 @@ class FakeMemoryRepository:
         embedding: list[float],
         memory_types: tuple[MemoryType, ...],
         top_n: int,
+        persona_id: UUID | None = None,
     ) -> list[MemoryItem]:
         return []
 

@@ -144,13 +144,14 @@ One adapter at a time. Inner layers unchanged.
       episodes, concepts, procedures, memory_brief — pgvector extension, HNSW indexes on
       embedding columns, partial index on unconsolidated conversations, GeneralAssistant seed
       — integer PKs (BIGSERIAL/SERIAL) for conversations/episodes/concepts/procedures; UUID for personas/users
+      — concepts/procedures carry persona_id FK (ON DELETE CASCADE); episodes use origin_conversation_id
 - [ ] `TurnLogReplayer` — on server start: scan flat files for `db_written: false` entries,
       replay into DB before accepting connections
-- [ ] `PostgresUserRepository`
-- [ ] `PostgresConversationRepository`
-- [ ] `PostgresMemoryRepository` (pgvector similarity_search)
-- [ ] `PostgresPersonaRepository` — seed GeneralAssistant at DB init
-- [ ] `PostgresMemoryBriefRepository`
+- [x] `PSUserRepository` (`infrastructure/ps.py`)
+- [x] `PSConversationRepository` (`infrastructure/ps.py`)
+- [x] `PSMemoryRepository` (`infrastructure/ps.py`) — pgvector similarity search, persona-scoped for concepts/procedures
+- [x] `PSPersonaRepository` (`infrastructure/ps.py`)
+- [x] `PSMemoryBriefRepository` (`infrastructure/ps.py`)
 
 ### STT
 - [ ] `FasterWhisperSTTService` — auto-detects language (no forced language);

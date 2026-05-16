@@ -145,16 +145,17 @@ class Episode:
     id: int | None
     summary: str
     happened_at: datetime
-    conversation_id: int
+    origin_conversation_id: int  # provenance only — where this episode was first extracted
     embedding: list[float] | None = None
 
 
 @dataclass
 class Concept:
     id: int | None
+    persona_id: UUID
     name: str
     description: str
-    language: Language
+    language: Language  # first introduced; stays fixed on upsert
     engagement_level: EngagementLevel = EngagementLevel.MENTIONED
     embedding: list[float] | None = None
 
@@ -165,9 +166,11 @@ class Concept:
 @dataclass
 class Procedure:
     id: int | None
+    persona_id: UUID
     name: str
-    steps: list[str]
-    language: Language
+    description: str  # primary carrier of knowledge; always populated (~300 words)
+    language: Language  # first introduced; stays fixed on upsert
+    steps: list[str] = field(default_factory=list)  # empty when not decomposable into discrete steps
     engagement_level: EngagementLevel = EngagementLevel.MENTIONED
     embedding: list[float] | None = None
 

@@ -6,6 +6,7 @@ from memai_server.domain.model import (
     Concept,
     Conversation,
     Episode,
+    GENERAL_ASSISTANT_ID,
     Language,
     Speaker,
     Turn,
@@ -60,7 +61,7 @@ def _seed_ended_conversation(conversation_repo: FakeConversationRepository) -> N
 class TestRunConsolidation:
     @pytest.mark.asyncio
     async def test_worthy_conversation_produces_episode(self):
-        episode = Episode(id=None, summary="Discussed Python.", happened_at=_now(), conversation_id=1)
+        episode = Episode(id=None, summary="Discussed Python.", happened_at=_now(), origin_conversation_id=1)
         extraction = ExtractionResult(episodes=[episode], concepts=[], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=True, extraction=extraction)
         _seed_ended_conversation(conversation_repo)
@@ -72,7 +73,7 @@ class TestRunConsolidation:
 
     @pytest.mark.asyncio
     async def test_unworthy_conversation_skips_episodes(self):
-        episode = Episode(id=None, summary="Short chat.", happened_at=_now(), conversation_id=1)
+        episode = Episode(id=None, summary="Short chat.", happened_at=_now(), origin_conversation_id=1)
         extraction = ExtractionResult(episodes=[episode], concepts=[], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=False, extraction=extraction)
         _seed_ended_conversation(conversation_repo)
@@ -83,7 +84,7 @@ class TestRunConsolidation:
 
     @pytest.mark.asyncio
     async def test_concepts_extracted_regardless_of_worthiness(self):
-        concept = Concept(id=None, name="Recursion", description="A function calling itself.", language=Language("en"))
+        concept = Concept(id=None, persona_id=GENERAL_ASSISTANT_ID, name="Recursion", description="A function calling itself.", language=Language("en"))
         extraction = ExtractionResult(episodes=[], concepts=[concept], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=False, extraction=extraction)
         _seed_ended_conversation(conversation_repo)

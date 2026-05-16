@@ -92,7 +92,7 @@ def _format_memory_item(item: MemoryItem) -> str:
     if isinstance(item, Concept):
         return f"[Concept] {item.name}: {item.description}"
     if isinstance(item, Procedure):
-        return f"[Procedure] {item.name}: {'; '.join(item.steps)}"
+        return f"[Procedure] {item.name}: {item.description}"
     return str(item)
 
 
@@ -214,7 +214,10 @@ class ProcessTurn:
         recall = self._recall_detector.detect(text)
         if recall:
             embedding = self._embedding_service.embed(recall.query)
-            extra_context = self._memory_repo.search(embedding, recall.memory_types, top_n=5)
+            extra_context = self._memory_repo.search(
+                embedding, recall.memory_types, top_n=5,
+                persona_id=session.active_persona.id,
+            )
 
         # 5. Collect LLM response, strip markers, synthesise sentence-by-sentence
         system_prompt, messages = _build_llm_input(session, extra_context)

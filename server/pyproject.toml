@@ -6,13 +6,13 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "faster-whisper>=1.2.1",
-    "numpy>=2.4.4",
     "ollama>=0.6.1",
     "python-dotenv>=1.0",
     "soundfile>=0.13.1",
     "TTS>=0.22.0",  # XTTS v2; installs CPU-only torch — replace with CUDA torch after: uv pip install torch --index-url https://download.pytorch.org/whl/cu121 (adjust cu121 for your CUDA version)
     "webrtcvad-wheels>=2.0.14",
     "psycopg[binary]>=3.1",
+    "pgvector>=0.3",
     "websockets>=16.0",
 ]
 
@@ -34,6 +34,9 @@ build-backend = "uv_build"
 
 [tool.uv.build-backend]
 module-root = "src"
+
+[tool.uv.extra-build-dependencies]
+pandas = ["setuptools"]  # pandas==1.5.3 (via TTS) needs pkg_resources at build time
 
 [[tool.uv.index]]
 name = "pypi"
