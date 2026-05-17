@@ -34,7 +34,6 @@ class JSONLTurnLogger:
             "ts": turn.timestamp.isoformat(),
             "speaker": turn.speaker.value,
             "content": turn.content,
-            "db_written": False,
         }
         if turn.language is not None:
             line["language"] = turn.language.code

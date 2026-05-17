@@ -103,10 +103,14 @@ class FakeConversationRepository:
         self._records: dict[int, Conversation] = {}
         self._next_id: int = 1
 
-    def save(self, conversation: Conversation) -> None:
-        if conversation.id is None:
-            conversation.id = self._next_id
-            self._next_id += 1
+    def save_new(self, conversation: Conversation, session_id: UUID) -> int:
+        new_id = self._next_id
+        self._next_id += 1
+        self._records[new_id] = conversation
+        return new_id
+
+    def save_consolidation(self, conversation: Conversation) -> None:
+        assert conversation.id is not None
         self._records[conversation.id] = conversation
 
     def get_unconsolidated(self) -> list[Conversation]:
@@ -121,15 +125,24 @@ class FakeMemoryRepository:
         self.episodes: list[Episode] = []
         self.concepts: list[Concept] = []
         self.procedures: list[Procedure] = []
+        self._next_id: int = 1
 
-    def upsert_episode(self, episode: Episode) -> None:
+    def _next(self) -> int:
+        id_ = self._next_id
+        self._next_id += 1
+        return id_
+
+    def upsert_episode(self, episode: Episode) -> int:
         self.episodes.append(episode)
+        return episode.id if episode.id is not None else self._next()
 
-    def upsert_concept(self, concept: Concept) -> None:
+    def upsert_concept(self, concept: Concept) -> int:
         self.concepts.append(concept)
+        return concept.id if concept.id is not None else self._next()
 
-    def upsert_procedure(self, procedure: Procedure) -> None:
+    def upsert_procedure(self, procedure: Procedure) -> int:
         self.procedures.append(procedure)
+        return procedure.id if procedure.id is not None else self._next()
 
     def search(
         self,

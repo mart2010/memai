@@ -73,7 +73,7 @@ class RunConsolidation:
                     episode.embedding = self._embedding_service.embed(episode.summary)
                     candidates = self._memory_repo.search(episode.embedding, (MemoryType.EPISODE,), top_n=1)
                     if not _should_merge(candidates, episode.embedding, self._threshold):
-                        self._memory_repo.upsert_episode(episode)
+                        episode.id = self._memory_repo.upsert_episode(episode)
 
             for concept in extraction.concepts:
                 concept.embedding = self._embedding_service.embed(f"{concept.name}: {concept.description}")
@@ -82,7 +82,7 @@ class RunConsolidation:
                     persona_id=conversation.persona_snapshot.id,
                 )
                 if not _should_merge(candidates, concept.embedding, self._threshold):
-                    self._memory_repo.upsert_concept(concept)
+                    concept.id = self._memory_repo.upsert_concept(concept)
 
             for procedure in extraction.procedures:
                 procedure.embedding = self._embedding_service.embed(f"{procedure.name}: {procedure.description}")
@@ -91,10 +91,10 @@ class RunConsolidation:
                     persona_id=conversation.persona_snapshot.id,
                 )
                 if not _should_merge(candidates, procedure.embedding, self._threshold):
-                    self._memory_repo.upsert_procedure(procedure)
+                    procedure.id = self._memory_repo.upsert_procedure(procedure)
 
             conversation.mark_consolidated(worthiness=worthy, summary=None)
-            self._conversation_repo.save(conversation)
+            self._conversation_repo.save_consolidation(conversation)
             processed += 1
 
         return processed

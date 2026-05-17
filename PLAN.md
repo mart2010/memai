@@ -134,7 +134,7 @@ One adapter at a time. Inner layers unchanged.
 
 ### Flat File (session logs — live path, no DB)
 - [x] `JSONLTurnLogger` (`infrastructure/json_file.py`) — appends to `logs/sessions/YYYY-MM-DD_<session_id>.jsonl`;
-      turn line: `{"ts": "…", "speaker": "…", "content": "…", "db_written": false}`;
+      turn line: `{"ts": "…", "speaker": "…", "content": "…"}`;
       marker line: `{"type": "conversation_boundary"|"topic_continuation"|"session_closed", …}`
 - [x] `JSONLSessionLogReader` (`infrastructure/json_file.py`) — scans log directory for most recent session file;
       reads `session_closed` marker for ended_at + clean_exit; reads tail turns
@@ -145,8 +145,22 @@ One adapter at a time. Inner layers unchanged.
       embedding columns, partial index on unconsolidated conversations, GeneralAssistant seed
       — integer PKs (BIGSERIAL/SERIAL) for conversations/episodes/concepts/procedures; UUID for personas/users
       — concepts/procedures carry persona_id FK (ON DELETE CASCADE); episodes use origin_conversation_id
-- [ ] `TurnLogReplayer` — on server start: scan flat files for `db_written: false` entries,
-      replay into DB before accepting connections
+      — turns carry `session_id UUID NOT NULL` (source JSONL file); indexed for TurnLogReplayer idempotency
+- [ ] `TurnLogReplayer` — replays unprocessed JSONL session files into the DB (creates
+      Conversation + Turn records); triggered two ways:
+      (1) **Primary** — idle timer after clean session close: if no new session opens within
+          N minutes of the `session_closed` marker, fire TurnLogReplayer → RunConsolidation
+          → GenerateMemoryBrief; timer is cancelled if a new session starts first.
+      (2) **Recovery** — on server start: catch any sessions not yet in the DB due to a
+          crash or power loss (no `session_closed` marker present).
+      Scanning strategy: walk log files **newest-first**; collect unprocessed session_ids
+      (`SELECT 1 FROM turns WHERE session_id = $1 LIMIT 1`); stop immediately when a file
+      whose session_id is already in the DB is encountered — all older files are guaranteed
+      persisted (invariant: the replayer always commits oldest-first, so persistence is
+      monotonic). Reverse the collected list and process **oldest-first** to maintain
+      correct temporal ordering for conversation grouping and consolidation.
+      Conversation grouping: reads `[TOPIC_BREAK]`/`[TOPIC_CONTINUATION]` markers already
+      written during the live session — no new LLM inference at replay time.
 - [x] `PSUserRepository` (`infrastructure/ps.py`)
 - [x] `PSConversationRepository` (`infrastructure/ps.py`)
 - [x] `PSMemoryRepository` (`infrastructure/ps.py`) — pgvector similarity search, persona-scoped for concepts/procedures
@@ -219,7 +233,9 @@ Wire client ↔ server into Clean Architecture. All domain logic already tested.
 - [ ] Binary frames (audio) → buffer; `end_utterance` → ProcessTurn
 - [ ] Stream synthesised audio as binary frames; send `speaking_end` JSON frame after
       final chunk of each response
-- [ ] On disconnect: call EndSession → trigger RunConsolidation (async, non-blocking)
+- [ ] On disconnect: call EndSession; start idle timer — if no new session opens within
+      N minutes, fire TurnLogReplayer → RunConsolidation → GenerateMemoryBrief (all async,
+      non-blocking); cancel timer on new connection
 
 ### Client Entrypoint (refactor client.py)
 - [ ] On connect: if server sends `select_language`, render `questionary` terminal dropdown
@@ -261,7 +277,8 @@ Implications to resolve before implementing:
 
 Off-session memory consolidation runs reliably after every disconnect.
 
-- [ ] RunConsolidation wired to WebSocket disconnect event (async, non-blocking)
+- [ ] Full offline pipeline wired: TurnLogReplayer → RunConsolidation → GenerateMemoryBrief,
+      triggered by idle timer after clean disconnect (see Phase 4b)
 - [ ] Oldest-first processing of all unconsolidated Conversations
 - [ ] Per-conversation atomicity: Episodes + Concepts + Procedures + consolidated flag
       in one DB transaction

@@ -195,58 +195,45 @@ class PSConversationRepository:
     def __init__(self, conn: psycopg.Connection) -> None:
         self._conn = conn
 
-    def save(self, conversation: Conversation) -> None:
+    def save_new(self, conversation: Conversation, session_id: UUID) -> int:
         persona_jsonb = _persona_to_jsonb(conversation.persona_snapshot)
         with self._conn.cursor() as cur:
-            if conversation.id is None:
-                cur.execute(
-                    """
-                    INSERT INTO conversations
-                        (started_at, ended_at, persona_snapshot, worthiness, summary, consolidated)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    RETURNING id
-                    """,
-                    (
-                        conversation.started_at,
-                        conversation.ended_at,
-                        persona_jsonb,
-                        conversation.worthiness,
-                        conversation.summary,
-                        conversation.consolidated,
-                    ),
-                )
-                conversation.id = cur.fetchone()[0]
-            else:
-                cur.execute(
-                    """
-                    UPDATE conversations
-                    SET ended_at = %s, worthiness = %s, summary = %s, consolidated = %s
-                    WHERE id = %s
-                    """,
-                    (
-                        conversation.ended_at,
-                        conversation.worthiness,
-                        conversation.summary,
-                        conversation.consolidated,
-                        conversation.id,
-                    ),
-                )
-
+            cur.execute(
+                """
+                INSERT INTO conversations (started_at, ended_at, persona_snapshot, consolidated)
+                VALUES (%s, %s, %s, FALSE)
+                RETURNING id
+                """,
+                (conversation.started_at, conversation.ended_at, persona_jsonb),
+            )
+            new_id = cur.fetchone()[0]
             for turn in conversation.turns:
                 cur.execute(
                     """
-                    INSERT INTO turns (conversation_id, timestamp, speaker, content, language)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (conversation_id, timestamp) DO NOTHING
+                    INSERT INTO turns (conversation_id, session_id, timestamp, speaker, content, language)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     """,
                     (
-                        conversation.id,
+                        new_id,
+                        session_id,
                         turn.timestamp,
                         turn.speaker.value,
                         turn.content,
                         turn.language.code if turn.language else None,
                     ),
                 )
+        return new_id
+
+    def save_consolidation(self, conversation: Conversation) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE conversations
+                SET worthiness = %s, summary = %s, consolidated = TRUE
+                WHERE id = %s
+                """,
+                (conversation.worthiness, conversation.summary, conversation.id),
+            )
 
     def get_unconsolidated(self) -> list[Conversation]:
         with self._conn.cursor() as cur:
@@ -296,7 +283,7 @@ class PSMemoryRepository:
     def __init__(self, conn: psycopg.Connection) -> None:
         self._conn = conn
 
-    def upsert_episode(self, episode: Episode) -> None:
+    def upsert_episode(self, episode: Episode) -> int:
         with self._conn.cursor() as cur:
             if episode.id is None:
                 cur.execute(
@@ -307,14 +294,15 @@ class PSMemoryRepository:
                     """,
                     (episode.summary, episode.happened_at, episode.origin_conversation_id, _vec(episode.embedding)),
                 )
-                episode.id = cur.fetchone()[0]
+                return cur.fetchone()[0]
             else:
                 cur.execute(
                     "UPDATE episodes SET summary = %s, happened_at = %s, embedding = %s WHERE id = %s",
                     (episode.summary, episode.happened_at, _vec(episode.embedding), episode.id),
                 )
+                return episode.id
 
-    def upsert_concept(self, concept: Concept) -> None:
+    def upsert_concept(self, concept: Concept) -> int:
         with self._conn.cursor() as cur:
             if concept.id is None:
                 cur.execute(
@@ -332,7 +320,7 @@ class PSMemoryRepository:
                         _vec(concept.embedding),
                     ),
                 )
-                concept.id = cur.fetchone()[0]
+                return cur.fetchone()[0]
             else:
                 cur.execute(
                     """
@@ -341,8 +329,9 @@ class PSMemoryRepository:
                     """,
                     (concept.description, concept.engagement_level.value, _vec(concept.embedding), concept.id),
                 )
+                return concept.id
 
-    def upsert_procedure(self, procedure: Procedure) -> None:
+    def upsert_procedure(self, procedure: Procedure) -> int:
         with self._conn.cursor() as cur:
             if procedure.id is None:
                 cur.execute(
@@ -362,7 +351,7 @@ class PSMemoryRepository:
                         _vec(procedure.embedding),
                     ),
                 )
-                procedure.id = cur.fetchone()[0]
+                return cur.fetchone()[0]
             else:
                 cur.execute(
                     """
@@ -378,6 +367,7 @@ class PSMemoryRepository:
                         procedure.id,
                     ),
                 )
+                return procedure.id
 
     def search(
         self,

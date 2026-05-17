@@ -1,5 +1,6 @@
 import pytest
 from datetime import datetime, UTC
+from uuid import UUID
 
 from memai_server.domain.model import (
     AssistantPersona,
@@ -47,6 +48,9 @@ def _make_consolidation(
     return use_case, conversation_repo, memory_repo
 
 
+_DUMMY_SESSION = UUID("00000000-0000-0000-0000-000000000001")
+
+
 def _seed_ended_conversation(conversation_repo: FakeConversationRepository) -> None:
     conv = Conversation(
         id=None,
@@ -55,7 +59,7 @@ def _seed_ended_conversation(conversation_repo: FakeConversationRepository) -> N
     )
     conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.USER, content="hello"))
     conv.end(ended_at=_now())
-    conversation_repo.save(conv)
+    conv.id = conversation_repo.save_new(conv, session_id=_DUMMY_SESSION)
 
 
 class TestRunConsolidation:

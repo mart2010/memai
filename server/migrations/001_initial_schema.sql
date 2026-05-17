@@ -45,6 +45,7 @@ CREATE TABLE conversations (
 
 CREATE TABLE turns (
     conversation_id BIGINT      NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    session_id      UUID        NOT NULL,              -- source JSONL file; used by TurnLogReplayer for idempotency
     timestamp       TIMESTAMPTZ NOT NULL,
     speaker         TEXT        NOT NULL CHECK (speaker IN ('user', 'assistant')),
     content         TEXT        NOT NULL,
@@ -102,8 +103,9 @@ CREATE INDEX conversations_unconsolidated
     WHERE NOT consolidated;
 
 -- Turn retrieval always scoped to a conversation, ordered by timestamp.
--- The composite PK (conversation_id, timestamp) already covers this pattern;
--- no additional index needed.
+-- The composite PK (conversation_id, timestamp) already covers this pattern.
+-- session_id index used by TurnLogReplayer for idempotency check (EXISTS by session).
+CREATE INDEX turns_session_id ON turns (session_id);
 
 -- HNSW indexes for vector similarity search (cosine distance).
 -- m=16 and ef_construction=64 are pgvector defaults; tune after calibration.
