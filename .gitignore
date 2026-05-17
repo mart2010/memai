@@ -44,3 +44,6 @@ docs/_build/
 
 # Local environment config (contains secrets / machine-specific paths)
 .env
+
+# my exclusion
+xprivate/

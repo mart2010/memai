@@ -49,6 +49,21 @@ ruff check .
 ruff format .
 ```
 
+## Design Constraints
+
+- **Voice-only configuration** — everything is configured by voice; no CLI arguments, no
+  config files for the user to edit. Any new feature or setting must be reachable through
+  conversation, not through flags or environment variables.
+- **Single user** — no concurrency model, no authentication, no row-level security. All
+  design decisions can assume exactly one user.
+- **No barge-in** — mid-stream LLM interruption is out of scope. The TTS response plays
+  to completion before the mic is re-enabled.
+- **Session logs are kept forever** — no log rotation. Raw JSONL session files accumulate
+  indefinitely; do not introduce any cleanup or rotation logic without explicit discussion.
+- **Secondary languages: explicit switches only** — `User.secondary_languages` is tracked
+  but switching between them is always explicit (user asks to switch). There is no implicit
+  persona suggestion when a different language is detected mid-conversation.
+
 ## Architecture
 
 ### Live / Offline Boundary
