@@ -2,7 +2,7 @@ import pytest
 from datetime import datetime, UTC, timedelta
 from uuid import uuid4
 
-from memai_server.domain.events import BoundaryType, RecallTriggered
+from memai_server.domain.events import ConversationBoundaryType, RecallTriggered
 from memai_server.domain.model import (
     AssistantPersona,
     GENERAL_ASSISTANT_ID,
@@ -182,8 +182,8 @@ class TestProcessTurn:
         result = await process_turn.execute(ctx, audio=b"b", now=_now())
         assert result is not None
         assert result.conversation_boundary is not None
-        assert result.conversation_boundary.boundary_type == BoundaryType.BREAK
-        assert any(m == "conversation_boundary" for _, m in wal.markers)
+        assert result.conversation_boundary.boundary_type == ConversationBoundaryType.BREAK
+        assert any(m == ConversationBoundaryType.BREAK for _, m in wal.markers)
 
     @pytest.mark.asyncio
     async def test_topic_continuation_fires_on_first_turn(self):
@@ -194,8 +194,8 @@ class TestProcessTurn:
         result = await process_turn.execute(ctx, audio=b"a", now=_now())
         assert result is not None
         assert result.conversation_boundary is not None
-        assert result.conversation_boundary.boundary_type == BoundaryType.CONTINUATION
-        assert any(m == "topic_continuation" for _, m in wal.markers)
+        assert result.conversation_boundary.boundary_type == ConversationBoundaryType.CONTINUATION
+        assert any(m == ConversationBoundaryType.CONTINUATION for _, m in wal.markers)
 
     @pytest.mark.asyncio
     async def test_topic_continuation_ignored_on_non_first_turn(self):

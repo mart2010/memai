@@ -25,7 +25,7 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 - [x] `Speaker` enum (user, assistant)
 - [x] `EngagementLevel` enum — states: mentioned | explored | practiced | integrated
 - [x] `MemoryType` enum (EPISODE, CONCEPT, PROCEDURE)
-- [x] `BoundaryType` enum (BREAK, CONTINUATION)
+- [x] `ConversationBoundaryType` enum (BREAK, CONTINUATION)
 
 ### Entities & Aggregates
 - [x] `User` entity (id, primary_language: Language | None, secondary_languages)
@@ -37,14 +37,14 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 - [x] `Episode` entity (id, summary, happened_at, conversation_id, embedding)
 - [x] `Concept` entity (id, name, description, language, engagement_level, embedding)
 - [x] `Procedure` entity (id, name, steps, language, engagement_level, embedding)
-- [x] `MemoryBrief` singleton entity (content, generated_at)
+- [x] `MemoryBrief` singleton entity (content, created_at, updated_at)
 - [x] `AssistantPersona` entity (id, name, system_prompt, languages, is_system, created_at, updated_at)
 
 ### Domain Events
 - [x] `PrimaryLanguageChanged` (user_id, old_language, new_language)
 - [x] `RecallTriggered` (query: str, memory_types: tuple[MemoryType, ...])
 - [x] `PersonaSwitched` (from_persona_id, to_persona_id)
-- [x] `ConversationBoundaryDetected` (boundary_type: BoundaryType)
+- [x] `ConversationBoundaryDetected` (boundary_type: ConversationBoundaryType)
 
 ### Domain-owned Protocols
 - [x] `WorthinessEvaluator` Protocol (evaluate(conversation: Conversation) → bool)
@@ -73,7 +73,7 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
 - [x] `MemoryRepository` Protocol (upsert + similarity_search per MemoryType)
 - [x] `PersonaRepository` Protocol
 - [x] `MemoryBriefRepository` Protocol
-- [x] `TurnLogger` Protocol (append, close(session_id, ended_at, clean_exit), write_marker)
+- [x] `TurnLogger` Protocol (append(session_id, turn, marker: ConversationBoundaryType | None), close(session_id, ended_at, clean_exit))
 
 ### Fake Implementations (in tests/fakes/)
 - [x] `FakeSTTService`
@@ -146,7 +146,7 @@ One adapter at a time. Inner layers unchanged.
       — integer PKs (BIGSERIAL/SERIAL) for conversations/episodes/concepts/procedures; UUID for personas/users
       — concepts/procedures carry persona_id FK (ON DELETE CASCADE); episodes use origin_conversation_id
       — turns carry `session_id UUID NOT NULL` (source JSONL file); indexed for TurnLogReplayer idempotency
-- [ ] `TurnLogReplayer` — replays unprocessed JSONL session files into the DB (creates
+- [x] `TurnLogReplayer` — replays unprocessed JSONL session files into the DB (creates
       Conversation + Turn records); triggered two ways:
       (1) **Primary** — idle timer after clean session close: if no new session opens within
           N minutes of the `session_closed` marker, fire TurnLogReplayer → RunConsolidation
@@ -161,11 +161,11 @@ One adapter at a time. Inner layers unchanged.
       correct temporal ordering for conversation grouping and consolidation.
       Conversation grouping: reads `[TOPIC_BREAK]`/`[TOPIC_CONTINUATION]` markers already
       written during the live session — no new LLM inference at replay time.
-- [x] `PSUserRepository` (`infrastructure/ps.py`)
-- [x] `PSConversationRepository` (`infrastructure/ps.py`)
-- [x] `PSMemoryRepository` (`infrastructure/ps.py`) — pgvector similarity search, persona-scoped for concepts/procedures
-- [x] `PSPersonaRepository` (`infrastructure/ps.py`)
-- [x] `PSMemoryBriefRepository` (`infrastructure/ps.py`)
+- [x] `PSUserRepository` (`infrastructure/postgres.py`)
+- [x] `PSConversationRepository` (`infrastructure/postgres.py`)
+- [x] `PSMemoryRepository` (`infrastructure/postgres.py`) — pgvector similarity search, persona-scoped for concepts/procedures
+- [x] `PSPersonaRepository` (`infrastructure/postgres.py`)
+- [x] `PSMemoryBriefRepository` (`infrastructure/postgres.py`)
 
 ### STT
 - [ ] `FasterWhisperSTTService` — auto-detects language (no forced language);

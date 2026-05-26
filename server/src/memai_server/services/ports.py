@@ -1,9 +1,11 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import AsyncIterator, Protocol
 from uuid import UUID
 
+from ..domain.events import ConversationBoundaryType
 from ..domain.model import (
     AssistantPersona,
     Conversation,
@@ -13,11 +15,24 @@ from ..domain.model import (
     MemoryBrief,
     MemoryType,
     Procedure,
+    Speaker,
     Turn,
     User,
 )
 
 type MemoryItem = Episode | Concept | Procedure
+
+
+@dataclass(frozen=True)
+class SessionLine:
+    """One parsed line from a JSONL session log file."""
+    ts: datetime
+    speaker: Speaker | None = None       # None for the session_closed marker line
+    content: str | None = None
+    language: Language | None = None
+    marker: ConversationBoundaryType | None = None
+    is_session_closed: bool = False
+    clean_exit: bool = False
 
 
 @dataclass(frozen=True)
@@ -71,6 +86,18 @@ class ConversationRepository(Protocol):
     def save_new(self, conversation: Conversation, session_id: UUID) -> int: ...
     def save_consolidation(self, conversation: Conversation) -> None: ...
     def get_unconsolidated(self) -> list[Conversation]: ...
+    def is_session_persisted(self, session_id: UUID) -> bool: ...
+    def get_last_open_id(self) -> int | None: ...
+    def extend_conversation(self, conversation_id: int, session_id: UUID, turns: list[Turn], ended_at: datetime | None) -> None: ...
+
+
+class SessionReplayReader(Protocol):
+    """Walks session log files newest-first, stops at the first already-persisted
+    session (monotonic invariant), and returns unprocessed sessions oldest-first."""
+    def get_unprocessed(
+        self,
+        is_persisted: Callable[[UUID], bool],
+    ) -> list[tuple[UUID, list[SessionLine]]]: ...
 
 
 class MemoryRepository(Protocol):
@@ -99,7 +126,7 @@ class MemoryBriefRepository(Protocol):
 
 
 class TurnLogger(Protocol):
-    def append(self, session_id: UUID, turn: Turn, marker: str | None = None) -> None: ...
+    def append(self, session_id: UUID, turn: Turn, marker: ConversationBoundaryType | None = None) -> None: ...
     def close(self, session_id: UUID, ended_at: datetime, clean_exit: bool) -> None: ...
 
 

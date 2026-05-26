@@ -1,11 +1,13 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 import json
+from collections.abc import Callable
 from datetime import datetime, UTC
 from pathlib import Path
 from uuid import UUID
 
+from ..domain.events import ConversationBoundaryType
 from ..domain.model import Language, Speaker, Turn
-from ..services.ports import SessionInfo
+from ..services.ports import SessionInfo, SessionLine
 
 
 class JSONLTurnLogger:
@@ -28,7 +30,7 @@ class JSONLTurnLogger:
             self._log_dir.mkdir(parents=True, exist_ok=True)
             self._session_dates[session_id] = ts.date().isoformat()
 
-    def append(self, session_id: UUID, turn: Turn, marker: str | None = None) -> None:
+    def append(self, session_id: UUID, turn: Turn, marker: ConversationBoundaryType | None = None) -> None:
         self._register(session_id, turn.timestamp)
         line: dict = {
             "ts": turn.timestamp.isoformat(),
@@ -38,7 +40,7 @@ class JSONLTurnLogger:
         if turn.language is not None:
             line["language"] = turn.language.code
         if marker is not None:
-            line["marker"] = marker
+            line["marker"] = marker.value
         with self._file_path(session_id).open("a", encoding="utf-8") as f:
             f.write(json.dumps(line) + "\n")
 
@@ -138,3 +140,72 @@ class JSONLSessionLogReader:
                 except (json.JSONDecodeError, KeyError, ValueError):
                     continue
         return turns[-max_turns:]
+
+
+class JSONLSessionReplayReader:
+    """Walks the log directory newest-first, stops at the first session already
+    in the DB, and returns unprocessed sessions oldest-first for replay."""
+
+    def __init__(self, log_dir: Path) -> None:
+        self._log_dir = log_dir
+
+    @staticmethod
+    def _session_id_from_path(path: Path) -> UUID | None:
+        parts = path.stem.split("_", 1)
+        if len(parts) != 2:
+            return None
+        try:
+            return UUID(parts[1])
+        except ValueError:
+            return None
+
+    def _parse_file(self, path: Path) -> list[SessionLine]:
+        lines: list[SessionLine] = []
+        with path.open("r", encoding="utf-8") as f:
+            for raw in f:
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    data = json.loads(raw)
+                    if data.get("type") == "session_closed":
+                        lines.append(SessionLine(
+                            ts=datetime.fromisoformat(data["ts"]),
+                            is_session_closed=True,
+                            clean_exit=bool(data.get("clean_exit", False)),
+                        ))
+                    elif "speaker" in data:
+                        raw_marker = data.get("marker")
+                        lines.append(SessionLine(
+                            ts=datetime.fromisoformat(data["ts"]),
+                            speaker=Speaker(data["speaker"]),
+                            content=data.get("content", ""),
+                            language=Language(data["language"]) if "language" in data else None,
+                            marker=ConversationBoundaryType(raw_marker) if raw_marker else None,
+                        ))
+                except (json.JSONDecodeError, KeyError, ValueError):
+                    continue
+        return lines
+
+    def get_unprocessed(
+        self,
+        is_persisted: Callable[[UUID], bool],
+    ) -> list[tuple[UUID, list[SessionLine]]]:
+        if not self._log_dir.exists():
+            return []
+
+        files = sorted(self._log_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        collected: list[tuple[UUID, Path]] = []
+        for path in files:
+            session_id = self._session_id_from_path(path)
+            if session_id is None:
+                continue
+            if is_persisted(session_id):
+                break  # everything older is guaranteed persisted
+            collected.append((session_id, path))
+
+        # Parse and return oldest-first
+        return [
+            (session_id, self._parse_file(path))
+            for session_id, path in reversed(collected)
+        ]

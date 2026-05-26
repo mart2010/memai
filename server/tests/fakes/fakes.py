@@ -1,7 +1,7 @@
 from datetime import datetime, UTC
 from uuid import UUID
 
-from memai_server.domain.events import RecallTriggered
+from memai_server.domain.events import ConversationBoundaryType, RecallTriggered
 from memai_server.domain.model import (
     AssistantPersona,
     Conversation,
@@ -22,6 +22,7 @@ from memai_server.services.ports import (
     MemoryItem,
     Message,
     SessionInfo,
+    SessionLine,
 )
 
 
@@ -35,7 +36,7 @@ class FakeSTTService:
         self.language = language
         self.calls: list[tuple[bytes, Language]] = []
 
-    def transcribe(self, audio: bytes, language_hint: Language) -> tuple[str, Language]:
+    def transcribe(self, audio: bytes, language_hint: Language | None) -> tuple[str, Language]:
         self.calls.append((audio, language_hint))
         return self.transcript, self.language
 
@@ -102,11 +103,13 @@ class FakeConversationRepository:
     def __init__(self) -> None:
         self._records: dict[int, Conversation] = {}
         self._next_id: int = 1
+        self._session_ids: set[UUID] = set()
 
     def save_new(self, conversation: Conversation, session_id: UUID) -> int:
         new_id = self._next_id
         self._next_id += 1
         self._records[new_id] = conversation
+        self._session_ids.add(session_id)
         return new_id
 
     def save_consolidation(self, conversation: Conversation) -> None:
@@ -118,6 +121,28 @@ class FakeConversationRepository:
             [r for r in self._records.values() if r.is_eligible_for_consolidation],
             key=lambda r: r.started_at,
         )
+
+    def is_session_persisted(self, session_id: UUID) -> bool:
+        return session_id in self._session_ids
+
+    def get_last_open_id(self) -> int | None:
+        open_ids = [id_ for id_, conv in self._records.items() if not conv.consolidated]
+        if not open_ids:
+            return None
+        return max(open_ids, key=lambda id_: self._records[id_].started_at)
+
+    def extend_conversation(
+        self,
+        conversation_id: int,
+        session_id: UUID,
+        turns: list[Turn],
+        ended_at: datetime | None,
+    ) -> None:
+        conv = self._records.get(conversation_id)
+        if conv:
+            conv.turns.extend(turns)
+            conv.ended_at = ended_at
+        self._session_ids.add(session_id)
 
 
 class FakeMemoryRepository:
@@ -182,14 +207,32 @@ class FakeMemoryBriefRepository:
         self._brief = brief
 
 
+class FakeSessionReplayReader:
+    """Sessions provided in chronological order (oldest first)."""
+
+    def __init__(self, sessions: list[tuple[UUID, list[SessionLine]]] | None = None) -> None:
+        self._sessions = sessions or []
+
+    def get_unprocessed(
+        self,
+        is_persisted,
+    ) -> list[tuple[UUID, list[SessionLine]]]:
+        collected: list[tuple[UUID, list[SessionLine]]] = []
+        for session_id, lines in reversed(self._sessions):  # newest-first scan
+            if is_persisted(session_id):
+                break
+            collected.append((session_id, lines))
+        return list(reversed(collected))  # oldest-first for processing
+
+
 class FakeTurnLogger:
     def __init__(self) -> None:
         self.written: list[tuple[UUID, Turn]] = []
         self.closed: dict[UUID, datetime] = {}
         self.clean_exits: dict[UUID, bool] = {}
-        self.markers: list[tuple[UUID, str]] = []
+        self.markers: list[tuple[UUID, ConversationBoundaryType]] = []
 
-    def append(self, session_id: UUID, turn: Turn, marker: str | None = None) -> None:
+    def append(self, session_id: UUID, turn: Turn, marker: ConversationBoundaryType | None = None) -> None:
         self.written.append((session_id, turn))
         if marker is not None:
             self.markers.append((session_id, marker))

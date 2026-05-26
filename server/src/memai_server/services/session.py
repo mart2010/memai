@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from uuid import UUID
 
-from ..domain.events import BoundaryType, ConversationBoundaryDetected, PersonaSwitched
+from ..domain.events import ConversationBoundaryDetected, ConversationBoundaryType, PersonaSwitched
 from ..domain.model import (
     GENERAL_ASSISTANT_ID,
     AssistantPersona,
@@ -68,21 +68,22 @@ def _strip_persona_prefix(text: str) -> tuple[str, str | None]:
     return text, None
 
 
-def _strip_conversation_marker(text: str, is_first_turn: bool) -> tuple[str, str | None]:
-    """Returns (stripped_text, marker_type_or_None).
+def _strip_conversation_marker(
+    text: str, is_first_turn: bool
+) -> tuple[str, ConversationBoundaryType | None]:
+    """Strip an optional LLM boundary prefix and return the boundary type.
 
-    marker_type is 'conversation_boundary' or 'topic_continuation'.
     [TOPIC_CONTINUATION] is only valid on the first turn of a session.
     """
-    for marker, marker_type in (
-        ("[TOPIC_CONTINUATION]", "topic_continuation"),
-        ("[TOPIC_BREAK]", "conversation_boundary"),
+    for prefix, boundary_type in (
+        ("[TOPIC_CONTINUATION]", ConversationBoundaryType.CONTINUATION),
+        ("[TOPIC_BREAK]", ConversationBoundaryType.BREAK),
     ):
-        if text.startswith(marker):
-            stripped = text[len(marker):].lstrip()
-            if marker_type == "topic_continuation" and not is_first_turn:
+        if text.startswith(prefix):
+            stripped = text[len(prefix):].lstrip()
+            if boundary_type == ConversationBoundaryType.CONTINUATION and not is_first_turn:
                 return stripped, None
-            return stripped, marker_type
+            return stripped, boundary_type
     return text, None
 
 
@@ -240,10 +241,7 @@ class ProcessTurn:
             audio_chunks.append(self._tts.synthesise(sentence_buffer))
 
         # 6. Conversation boundary event — marker embedded in assistant turn below
-        boundary: ConversationBoundaryDetected | None = None
-        if boundary_marker:
-            btype = BoundaryType.CONTINUATION if boundary_marker == "topic_continuation" else BoundaryType.BREAK
-            boundary = ConversationBoundaryDetected(boundary_type=btype)
+        boundary = ConversationBoundaryDetected(boundary_type=boundary_marker) if boundary_marker else None
 
         # 7. Persona switch from detected prefix
         persona_switched: PersonaSwitched | None = None

@@ -29,11 +29,11 @@ class PersonaSwitched:
     to_persona_id: UUID
 
 
-class BoundaryType(Enum):
+class ConversationBoundaryType(Enum):
     BREAK = "break"
     CONTINUATION = "continuation"
 
 
 @dataclass(frozen=True)
 class ConversationBoundaryDetected:
-    boundary_type: BoundaryType
+    boundary_type: ConversationBoundaryType

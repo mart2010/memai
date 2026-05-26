@@ -235,6 +235,47 @@ class PSConversationRepository:
                 (conversation.worthiness, conversation.summary, conversation.id),
             )
 
+    def is_session_persisted(self, session_id: UUID) -> bool:
+        with self._conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM turns WHERE session_id = %s LIMIT 1", (session_id,))
+            return cur.fetchone() is not None
+
+    def get_last_open_id(self) -> int | None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM conversations WHERE NOT consolidated ORDER BY started_at DESC LIMIT 1"
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+
+    def extend_conversation(
+        self,
+        conversation_id: int,
+        session_id: UUID,
+        turns: list[Turn],
+        ended_at: datetime | None,
+    ) -> None:
+        with self._conn.cursor() as cur:
+            for turn in turns:
+                cur.execute(
+                    """
+                    INSERT INTO turns (conversation_id, session_id, timestamp, speaker, content, language)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        conversation_id,
+                        session_id,
+                        turn.timestamp,
+                        turn.speaker.value,
+                        turn.content,
+                        turn.language.code if turn.language else None,
+                    ),
+                )
+            cur.execute(
+                "UPDATE conversations SET ended_at = %s WHERE id = %s",
+                (ended_at, conversation_id),
+            )
+
     def get_unconsolidated(self) -> list[Conversation]:
         with self._conn.cursor() as cur:
             cur.execute(
