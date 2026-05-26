@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from memai_server.domain.events import ConversationBoundaryType
 from memai_server.domain.model import Language, Speaker, Turn
 from memai_server.infrastructure.json_file import JSONLSessionLogReader, JSONLTurnLogger
 
@@ -64,11 +65,11 @@ class TestJSONLTurnLogger:
         logger = JSONLTurnLogger(log_dir)
         sid = uuid4()
         logger.append(sid, _turn("first"))
-        logger.append(sid, _turn("response", speaker=Speaker.ASSISTANT), marker="topic_break")
+        logger.append(sid, _turn("response", speaker=Speaker.ASSISTANT), marker=ConversationBoundaryType.BREAK)
         file = next(log_dir.glob(f"*_{sid}.jsonl"))
         lines = [json.loads(l) for l in file.read_text().splitlines()]
         assert len(lines) == 2
-        assert lines[1]["marker"] == "topic_break"
+        assert lines[1]["marker"] == "break"
         assert lines[0].get("marker") is None
 
     def test_close_writes_session_closed_marker(self, log_dir: Path) -> None:
@@ -163,7 +164,7 @@ class TestJSONLSessionLogReader:
         reader = JSONLSessionLogReader(log_dir)
         sid = uuid4()
         logger.append(sid, _turn("user question"))
-        logger.append(sid, _turn("answer", speaker=Speaker.ASSISTANT), marker="topic_break")
+        logger.append(sid, _turn("answer", speaker=Speaker.ASSISTANT), marker=ConversationBoundaryType.BREAK)
         turns = reader.read_tail(sid, max_turns=10)
         assert len(turns) == 2
         assert turns[0].content == "user question"

@@ -35,6 +35,7 @@ class SessionContext:
     started_at: datetime
     user: User
     active_persona: AssistantPersona
+    available_personas: list[AssistantPersona]
     memory_brief: MemoryBrief | None
     needs_onboarding: bool = False
     recent_turns: list[Turn] = field(default_factory=list)
@@ -105,6 +106,9 @@ def _build_llm_input(session: SessionContext, extra_context: list[MemoryItem]) -
     if extra_context:
         lines = "\n".join(f"- {_format_memory_item(m)}" for m in extra_context)
         prompt_parts.append(f"Relevant memories:\n{lines}")
+    if len(session.available_personas) > 1:
+        persona_lines = "\n".join(f"- {p.name}" for p in session.available_personas)
+        prompt_parts.append(f"Available personas (reply with [PERSONA:name] to switch):\n{persona_lines}")
     system_prompt = "\n\n".join(prompt_parts)
 
     messages: list[Message] = []
@@ -166,6 +170,7 @@ class StartSession:
             started_at=started_at,
             user=user,
             active_persona=persona,
+            available_personas=self._persona_repo.list_all(),
             memory_brief=None if needs_onboarding else self._memory_brief_repo.get(),
             needs_onboarding=needs_onboarding,
             session_tail=session_tail,

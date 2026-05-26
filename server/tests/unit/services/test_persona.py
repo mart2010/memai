@@ -35,6 +35,7 @@ def _session(active_persona: AssistantPersona) -> SessionContext:
         started_at=_now(),
         user=User(id=uuid4(), primary_language=Language("en")),
         active_persona=active_persona,
+        available_personas=[active_persona],
         memory_brief=None,
     )
 
