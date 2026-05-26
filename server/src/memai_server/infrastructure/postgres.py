@@ -6,7 +6,7 @@ then pass it to each repository constructor.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, UTC
 from uuid import UUID
 
 import numpy as np
@@ -284,31 +284,33 @@ class PSMemoryRepository:
         self._conn = conn
 
     def upsert_episode(self, episode: Episode) -> int:
+        now = datetime.now(UTC)
         with self._conn.cursor() as cur:
             if episode.id is None:
                 cur.execute(
                     """
-                    INSERT INTO episodes (summary, happened_at, origin_conversation_id, embedding)
-                    VALUES (%s, %s, %s, %s)
+                    INSERT INTO episodes (summary, happened_at, origin_conversation_id, created_at, updated_at, embedding)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
-                    (episode.summary, episode.happened_at, episode.origin_conversation_id, _vec(episode.embedding)),
+                    (episode.summary, episode.happened_at, episode.origin_conversation_id, now, now, _vec(episode.embedding)),
                 )
                 return cur.fetchone()[0]
             else:
                 cur.execute(
-                    "UPDATE episodes SET summary = %s, happened_at = %s, embedding = %s WHERE id = %s",
-                    (episode.summary, episode.happened_at, _vec(episode.embedding), episode.id),
+                    "UPDATE episodes SET summary = %s, happened_at = %s, updated_at = %s, embedding = %s WHERE id = %s",
+                    (episode.summary, episode.happened_at, now, _vec(episode.embedding), episode.id),
                 )
                 return episode.id
 
     def upsert_concept(self, concept: Concept) -> int:
+        now = datetime.now(UTC)
         with self._conn.cursor() as cur:
             if concept.id is None:
                 cur.execute(
                     """
-                    INSERT INTO concepts (persona_id, name, description, language, engagement_level, embedding)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    INSERT INTO concepts (persona_id, name, description, language, engagement_level, created_at, updated_at, embedding)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -317,6 +319,8 @@ class PSMemoryRepository:
                         concept.description,
                         concept.language.code,
                         concept.engagement_level.value,
+                        now,
+                        now,
                         _vec(concept.embedding),
                     ),
                 )
@@ -324,21 +328,22 @@ class PSMemoryRepository:
             else:
                 cur.execute(
                     """
-                    UPDATE concepts SET description = %s, engagement_level = %s, embedding = %s
+                    UPDATE concepts SET description = %s, engagement_level = %s, updated_at = %s, embedding = %s
                     WHERE id = %s
                     """,
-                    (concept.description, concept.engagement_level.value, _vec(concept.embedding), concept.id),
+                    (concept.description, concept.engagement_level.value, now, _vec(concept.embedding), concept.id),
                 )
                 return concept.id
 
     def upsert_procedure(self, procedure: Procedure) -> int:
+        now = datetime.now(UTC)
         with self._conn.cursor() as cur:
             if procedure.id is None:
                 cur.execute(
                     """
                     INSERT INTO procedures
-                        (persona_id, name, description, steps, language, engagement_level, embedding)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        (persona_id, name, description, steps, language, engagement_level, created_at, updated_at, embedding)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -348,6 +353,8 @@ class PSMemoryRepository:
                         procedure.steps,
                         procedure.language.code,
                         procedure.engagement_level.value,
+                        now,
+                        now,
                         _vec(procedure.embedding),
                     ),
                 )
@@ -356,13 +363,14 @@ class PSMemoryRepository:
                 cur.execute(
                     """
                     UPDATE procedures
-                    SET description = %s, steps = %s, engagement_level = %s, embedding = %s
+                    SET description = %s, steps = %s, engagement_level = %s, updated_at = %s, embedding = %s
                     WHERE id = %s
                     """,
                     (
                         procedure.description,
                         procedure.steps,
                         procedure.engagement_level.value,
+                        now,
                         _vec(procedure.embedding),
                         procedure.id,
                     ),
@@ -383,7 +391,7 @@ class PSMemoryRepository:
             if MemoryType.EPISODE in memory_types:
                 cur.execute(
                     """
-                    SELECT id, summary, happened_at, origin_conversation_id, embedding,
+                    SELECT id, summary, happened_at, origin_conversation_id, created_at, updated_at, embedding,
                            embedding <=> %s AS distance
                     FROM episodes
                     ORDER BY distance
@@ -391,12 +399,14 @@ class PSMemoryRepository:
                     """,
                     (vec, top_n),
                 )
-                for id_, summary, happened_at, origin_conv_id, emb, distance in cur.fetchall():
+                for id_, summary, happened_at, origin_conv_id, created_at, updated_at, emb, distance in cur.fetchall():
                     results.append((distance, Episode(
                         id=id_,
                         summary=summary,
                         happened_at=happened_at,
                         origin_conversation_id=origin_conv_id,
+                        created_at=created_at,
+                        updated_at=updated_at,
                         embedding=_list(emb),
                     )))
 
@@ -404,7 +414,7 @@ class PSMemoryRepository:
                 if persona_id is not None:
                     cur.execute(
                         """
-                        SELECT id, persona_id, name, description, language, engagement_level, embedding,
+                        SELECT id, persona_id, name, description, language, engagement_level, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM concepts
                         WHERE persona_id = %s
@@ -416,7 +426,7 @@ class PSMemoryRepository:
                 else:
                     cur.execute(
                         """
-                        SELECT id, persona_id, name, description, language, engagement_level, embedding,
+                        SELECT id, persona_id, name, description, language, engagement_level, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM concepts
                         ORDER BY distance
@@ -424,7 +434,7 @@ class PSMemoryRepository:
                         """,
                         (vec, top_n),
                     )
-                for id_, p_id, name, description, language, engagement_level, emb, distance in cur.fetchall():
+                for id_, p_id, name, description, language, engagement_level, created_at, updated_at, emb, distance in cur.fetchall():
                     results.append((distance, Concept(
                         id=id_,
                         persona_id=p_id,
@@ -432,6 +442,8 @@ class PSMemoryRepository:
                         description=description,
                         language=Language(language),
                         engagement_level=EngagementLevel(engagement_level),
+                        created_at=created_at,
+                        updated_at=updated_at,
                         embedding=_list(emb),
                     )))
 
@@ -439,7 +451,7 @@ class PSMemoryRepository:
                 if persona_id is not None:
                     cur.execute(
                         """
-                        SELECT id, persona_id, name, description, steps, language, engagement_level, embedding,
+                        SELECT id, persona_id, name, description, steps, language, engagement_level, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM procedures
                         WHERE persona_id = %s
@@ -451,7 +463,7 @@ class PSMemoryRepository:
                 else:
                     cur.execute(
                         """
-                        SELECT id, persona_id, name, description, steps, language, engagement_level, embedding,
+                        SELECT id, persona_id, name, description, steps, language, engagement_level, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM procedures
                         ORDER BY distance
@@ -459,7 +471,7 @@ class PSMemoryRepository:
                         """,
                         (vec, top_n),
                     )
-                for id_, p_id, name, description, steps, language, engagement_level, emb, distance in cur.fetchall():
+                for id_, p_id, name, description, steps, language, engagement_level, created_at, updated_at, emb, distance in cur.fetchall():
                     results.append((distance, Procedure(
                         id=id_,
                         persona_id=p_id,
@@ -468,6 +480,8 @@ class PSMemoryRepository:
                         steps=list(steps) if steps else [],
                         language=Language(language),
                         engagement_level=EngagementLevel(engagement_level),
+                        created_at=created_at,
+                        updated_at=updated_at,
                         embedding=_list(emb),
                     )))
 
@@ -485,21 +499,21 @@ class PSMemoryBriefRepository:
 
     def get(self) -> MemoryBrief | None:
         with self._conn.cursor() as cur:
-            cur.execute("SELECT content, generated_at FROM memory_brief WHERE id = 1")
+            cur.execute("SELECT content, created_at, updated_at FROM memory_brief WHERE id = 1")
             row = cur.fetchone()
             if row is None:
                 return None
-            return MemoryBrief(content=row[0], generated_at=row[1])
+            return MemoryBrief(content=row[0], created_at=row[1], updated_at=row[2])
 
     def save(self, brief: MemoryBrief) -> None:
         with self._conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO memory_brief (id, content, generated_at)
-                VALUES (1, %s, %s)
+                INSERT INTO memory_brief (id, content, created_at, updated_at)
+                VALUES (1, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     content = EXCLUDED.content,
-                    generated_at = EXCLUDED.generated_at
+                    updated_at = EXCLUDED.updated_at
                 """,
-                (brief.content, brief.generated_at),
+                (brief.content, brief.created_at, brief.updated_at),
             )

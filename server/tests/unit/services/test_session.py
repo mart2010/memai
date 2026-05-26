@@ -97,7 +97,7 @@ class TestStartSession:
         assert ctx.memory_brief is None
 
     def test_injects_memory_brief(self):
-        brief = MemoryBrief(content="User likes Python.", generated_at=_now())
+        brief = MemoryBrief(content="User likes Python.", created_at=_now(), updated_at=_now())
         use_case, _ = _make_start_session(brief=brief)
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
         assert ctx.memory_brief is brief

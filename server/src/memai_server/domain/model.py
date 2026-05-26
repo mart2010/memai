@@ -147,6 +147,8 @@ class Episode:
     summary: str
     happened_at: datetime
     origin_conversation_id: int  # provenance only — where this episode was first extracted
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     embedding: list[float] | None = None
 
 
@@ -158,6 +160,8 @@ class Concept:
     description: str
     language: Language  # first introduced; stays fixed on upsert
     engagement_level: EngagementLevel = EngagementLevel.MENTIONED
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     embedding: list[float] | None = None
 
     def update_engagement(self, new_level: EngagementLevel) -> None:
@@ -173,6 +177,8 @@ class Procedure:
     language: Language  # first introduced; stays fixed on upsert
     steps: list[str] = field(default_factory=list)  # empty when not decomposable into discrete steps
     engagement_level: EngagementLevel = EngagementLevel.MENTIONED
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
     embedding: list[float] | None = None
 
     def update_engagement(self, new_level: EngagementLevel) -> None:
@@ -182,4 +188,5 @@ class Procedure:
 @dataclass
 class MemoryBrief:
     content: str
-    generated_at: datetime
+    created_at: datetime
+    updated_at: datetime

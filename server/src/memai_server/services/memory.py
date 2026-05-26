@@ -112,6 +112,6 @@ class GenerateMemoryBrief:
             system_prompt="You are a memory manager. Summarise the user's profile, recurring themes, and key knowledge concisely.",
         ):
             tokens.append(token)
-        brief = MemoryBrief(content="".join(tokens).strip(), generated_at=generated_at)
+        brief = MemoryBrief(content="".join(tokens).strip(), created_at=generated_at, updated_at=generated_at)
         self._memory_brief_repo.save(brief)
         return brief

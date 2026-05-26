@@ -62,6 +62,8 @@ CREATE TABLE episodes (
     summary                TEXT        NOT NULL,
     happened_at            TIMESTAMPTZ NOT NULL,
     origin_conversation_id BIGINT      NOT NULL REFERENCES conversations(id),  -- first conversation where this episode was extracted
+    created_at             TIMESTAMPTZ NOT NULL,
+    updated_at             TIMESTAMPTZ NOT NULL,
     embedding              vector(1024)
 );
 
@@ -72,6 +74,8 @@ CREATE TABLE concepts (
     description      TEXT        NOT NULL,  -- LLM synthesis ~300 words; see CLAUDE.md
     language         TEXT        NOT NULL,  -- first introduced; fixed on upsert
     engagement_level TEXT        NOT NULL DEFAULT 'mentioned',
+    created_at       TIMESTAMPTZ NOT NULL,
+    updated_at       TIMESTAMPTZ NOT NULL,
     embedding        vector(1024)
 );
 
@@ -83,13 +87,16 @@ CREATE TABLE procedures (
     steps            TEXT[]      NOT NULL DEFAULT '{}',  -- empty when not decomposable into discrete steps
     language         TEXT        NOT NULL,  -- first introduced; fixed on upsert
     engagement_level TEXT        NOT NULL DEFAULT 'mentioned',
+    created_at       TIMESTAMPTZ NOT NULL,
+    updated_at       TIMESTAMPTZ NOT NULL,
     embedding        vector(1024)
 );
 
 CREATE TABLE memory_brief (
-    id           INTEGER     PRIMARY KEY DEFAULT 1 CHECK (id = 1),  -- singleton
-    content      TEXT        NOT NULL,
-    generated_at TIMESTAMPTZ NOT NULL
+    id         INTEGER     PRIMARY KEY DEFAULT 1 CHECK (id = 1),  -- singleton
+    content    TEXT        NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
