@@ -168,23 +168,25 @@ One adapter at a time. Inner layers unchanged.
 - [x] `PSMemoryBriefRepository` (`infrastructure/postgres.py`)
 
 ### STT
-- [ ] `FasterWhisperSTTService` — auto-detects language (no forced language);
-      accepts primary_language as a hint; returns tuple[str, Language]
+- [x] `FasterWhisperSTTService` (`infrastructure/stt.py`) — auto-detects language (no forced language);
+      language_hint accepted but unused; CUDA float16
 
 ### LLM
-- [ ] `OllamaLLMService` — streamed; system prompt language follows primary_language
-- [ ] `OllamaWorthinessEvaluator`
-- [ ] `OllamaRecallIntentDetector`
-- [ ] `OllamaPersonaIntentDetector`
-- [ ] `OllamaConsolidationExtractor` (extracts Episodes/Concepts/Procedures from turns)
+- [x] `OllamaLLMService` (`infrastructure/llm.py`) — async streaming via `ollama.AsyncClient`
+- [x] `OllamaWorthinessEvaluator` (`infrastructure/llm.py`) — sync one-shot, YES/NO prompt
+- [x] `OllamaRecallIntentDetector` (`infrastructure/llm.py`) — sync, JSON format mode
+- [x] `OllamaConsolidationExtractor` (`infrastructure/llm.py`) — sync, JSON format mode;
+      extracts Episodes/Concepts/Procedures; persona_id from conversation snapshot
+      — `OllamaPersonaIntentDetector` removed: persona switching is LLM self-report only
+        (`_strip_persona_prefix` inline in `ProcessTurn`); no domain protocol needed
 
 ### TTS
-- [ ] `XttsTTSService` (XTTS v2 / Coqui) — single multilingual model; voice/language
-      driven by primary_language; reconfigures on PrimaryLanguageChanged
+- [ ] `XttsTTSService` — deferred pending licence resolution (Coqui MPL-2.0 + Exhibit B
+      incompatible with AGPL-3.0); fallback candidates: Piper, Kokoro
 
 ### Embeddings
-- [ ] `SentenceTransformerEmbeddingService` (multilingual-e5-large; runs as a subprocess
-      or lightweight separate process on the server machine)
+- [x] `SentenceTransformerEmbeddingService` (`infrastructure/embedding.py`) —
+      `intfloat/multilingual-e5-large`, 1024-dim, L2-normalised
 
 ### Similarity threshold & merge logic
 - [ ] Replace hardcoded `similarity_threshold=0.85` in `RunConsolidation` with a global
