@@ -27,12 +27,13 @@ type MemoryItem = Episode | Concept | Procedure
 class SessionLine:
     """One parsed line from a JSONL session log file."""
     ts: datetime
-    speaker: Speaker | None = None       # None for the session_closed marker line
+    speaker: Speaker | None = None
     content: str | None = None
     language: Language | None = None
     marker: ConversationBoundaryType | None = None
     is_session_closed: bool = False
     clean_exit: bool = False
+    persona_id: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -136,7 +137,7 @@ class MemoryBriefRepository(Protocol):
 
 
 class TurnLogger(Protocol):
-    def append(self, session_id: UUID, turn: Turn, marker: ConversationBoundaryType | None = None) -> None: ...
+    def append(self, session_id: UUID, turn: Turn, marker: ConversationBoundaryType | None = None, persona_id: UUID | None = None) -> None: ...
     def close(self, session_id: UUID, ended_at: datetime, clean_exit: bool) -> None: ...
 
 

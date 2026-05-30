@@ -267,7 +267,7 @@ class ProcessTurn:
         # 8. Log assistant turn + update live context
         # Fresh timestamp captures when the LLM finished — gap from `now` reflects response time.
         assistant_turn = Turn(timestamp=datetime.now(UTC), speaker=Speaker.ASSISTANT, content=assistant_content)
-        self._turn_logger.append(session.session_id, assistant_turn, marker=boundary_marker)
+        self._turn_logger.append(session.session_id, assistant_turn, marker=boundary_marker, persona_id=session.active_persona.id)
         session.recent_turns.append(assistant_turn)
         session.total_turn_count += 1
 

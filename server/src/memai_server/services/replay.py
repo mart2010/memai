@@ -3,6 +3,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from ..domain.events import ConversationBoundaryType
+from uuid import UUID
+
 from ..domain.model import GENERAL_ASSISTANT_ID, Conversation, Speaker, Turn
 from .ports import (
     ConversationRepository,
@@ -17,6 +19,7 @@ class _ConversationGroup:
     turns: list[Turn]
     ended_at: datetime | None
     is_continuation: bool  # True → extend the last open conversation in the DB
+    persona_id: UUID
 
 
 def _group_into_conversations(lines: list[SessionLine]) -> list[_ConversationGroup]:
@@ -37,6 +40,8 @@ def _group_into_conversations(lines: list[SessionLine]) -> list[_ConversationGro
     is_continuation = False
     first_assistant_seen = False
     session_ended = False
+    current_persona_id: UUID = GENERAL_ASSISTANT_ID
+    group_persona_id: UUID = GENERAL_ASSISTANT_ID
 
     for line in lines:
         if line.is_session_closed:
@@ -46,6 +51,7 @@ def _group_into_conversations(lines: list[SessionLine]) -> list[_ConversationGro
                     turns=current_turns,
                     ended_at=line.ts,
                     is_continuation=is_continuation,
+                    persona_id=group_persona_id,
                 ))
             break
 
@@ -62,21 +68,29 @@ def _group_into_conversations(lines: list[SessionLine]) -> list[_ConversationGro
 
         if line.speaker == Speaker.ASSISTANT and not first_assistant_seen:
             first_assistant_seen = True
+            if line.persona_id is not None:
+                current_persona_id = line.persona_id
+                group_persona_id = current_persona_id
             # topic_continuation only valid on the first assistant turn of the first group
             if line.marker == ConversationBoundaryType.CONTINUATION and not groups:
                 is_continuation = True
             # ConversationBoundaryType.BREAK on the very first assistant turn → no split
 
-        elif line.marker == ConversationBoundaryType.BREAK and line.speaker == Speaker.ASSISTANT:
-            # Mid-session split: close current group, start fresh
-            groups.append(_ConversationGroup(
-                turns=current_turns,
-                ended_at=line.ts,
-                is_continuation=is_continuation,
-            ))
-            current_turns = []
-            is_continuation = False
-            first_assistant_seen = False
+        elif line.speaker == Speaker.ASSISTANT:
+            if line.persona_id is not None:
+                current_persona_id = line.persona_id
+            if line.marker == ConversationBoundaryType.BREAK:
+                # Mid-session split: close current group, start fresh
+                groups.append(_ConversationGroup(
+                    turns=current_turns,
+                    ended_at=line.ts,
+                    is_continuation=is_continuation,
+                    persona_id=group_persona_id,
+                ))
+                current_turns = []
+                is_continuation = False
+                first_assistant_seen = False
+                group_persona_id = current_persona_id
 
     if not session_ended and current_turns:
         # Crashed session — no session_closed marker; use last turn timestamp
@@ -84,6 +98,7 @@ def _group_into_conversations(lines: list[SessionLine]) -> list[_ConversationGro
             turns=current_turns,
             ended_at=current_turns[-1].timestamp,
             is_continuation=is_continuation,
+            persona_id=group_persona_id,
         ))
 
     return groups
@@ -115,8 +130,8 @@ class TurnLogReplayer:
         if not sessions:
             return 0
 
-        persona = self._persona_repo.get(GENERAL_ASSISTANT_ID)
-        if persona is None:
+        general_assistant = self._persona_repo.get(GENERAL_ASSISTANT_ID)
+        if general_assistant is None:
             raise RuntimeError("GeneralAssistant not found — database not initialised")
 
         for session_id, lines in sessions:
@@ -133,6 +148,7 @@ class TurnLogReplayer:
                         continue
                     # No prior conversation — fall through and save as new
 
+                persona = self._persona_repo.get(group.persona_id) or general_assistant
                 conv = Conversation(
                     id=None,
                     started_at=group.turns[0].timestamp,

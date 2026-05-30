@@ -30,7 +30,7 @@ class JSONLTurnLogger:
             self._log_dir.mkdir(parents=True, exist_ok=True)
             self._session_dates[session_id] = ts.date().isoformat()
 
-    def append(self, session_id: UUID, turn: Turn, marker: ConversationBoundaryType | None = None) -> None:
+    def append(self, session_id: UUID, turn: Turn, marker: ConversationBoundaryType | None = None, persona_id: UUID | None = None) -> None:
         self._register(session_id, turn.timestamp)
         line: dict = {
             "ts": turn.timestamp.isoformat(),
@@ -41,6 +41,8 @@ class JSONLTurnLogger:
             line["language"] = turn.language.code
         if marker is not None:
             line["marker"] = marker.value
+        if persona_id is not None:
+            line["persona_id"] = str(persona_id)
         with self._file_path(session_id).open("a", encoding="utf-8") as f:
             f.write(json.dumps(line) + "\n")
 
@@ -166,12 +168,14 @@ class JSONLSessionReplayReader:
                         ))
                     elif "speaker" in data:
                         raw_marker = data.get("marker")
+                        raw_persona = data.get("persona_id")
                         lines.append(SessionLine(
                             ts=datetime.fromisoformat(data["ts"]),
                             speaker=Speaker(data["speaker"]),
                             content=data.get("content", ""),
                             language=Language(data["language"]) if "language" in data else None,
                             marker=ConversationBoundaryType(raw_marker) if raw_marker else None,
+                            persona_id=UUID(raw_persona) if raw_persona else None,
                         ))
                 except (json.JSONDecodeError, KeyError, ValueError):
                     continue
