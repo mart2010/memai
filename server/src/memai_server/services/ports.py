@@ -110,7 +110,17 @@ class MemoryRepository(Protocol):
         memory_types: tuple[MemoryType, ...],
         top_n: int,
         persona_id: UUID | None = None,
-    ) -> list[MemoryItem]: ...
+    ) -> list[tuple[float, MemoryItem]]: ...  # float is cosine similarity in [0, 1]
+
+
+class DisambiguationEvaluator(Protocol):
+    def is_same(self, existing: MemoryItem, candidate: MemoryItem) -> bool: ...
+
+
+class MemorySynthesizer(Protocol):
+    def synthesize_episode(self, existing_summary: str, new_summary: str) -> str: ...
+    def synthesize_concept(self, existing: Concept, new_description: str) -> str: ...
+    def synthesize_procedure(self, existing: Procedure, new_description: str, new_steps: list[str]) -> tuple[str, list[str]]: ...
 
 
 class PersonaRepository(Protocol):

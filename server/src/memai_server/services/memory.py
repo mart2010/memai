@@ -1,37 +1,66 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
-import math
 from datetime import datetime
+from enum import Enum
 
-from ..domain.model import MemoryBrief, MemoryType
+from ..domain.model import EngagementLevel, MemoryBrief, MemoryType
 from ..domain.protocols import WorthinessEvaluator
 from .ports import (
     ConsolidationExtractor,
+    DisambiguationEvaluator,
     EmbeddingService,
     LLMService,
     MemoryBriefRepository,
     MemoryItem,
     MemoryRepository,
+    MemorySynthesizer,
     ConversationRepository,
     Message,
 )
 
-
-def _cosine_similarity(a: list[float], b: list[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
-    if norm_a == 0 or norm_b == 0:
-        return 0.0
-    return dot / (norm_a * norm_b)
+_ENGAGEMENT_ORDER = [
+    EngagementLevel.MENTIONED,
+    EngagementLevel.EXPLORED,
+    EngagementLevel.PRACTICED,
+    EngagementLevel.INTEGRATED,
+]
 
 
-def _should_merge(candidates: list[MemoryItem], embedding: list[float], threshold: float) -> bool:
+def _max_engagement(a: EngagementLevel, b: EngagementLevel) -> EngagementLevel:
+    return a if _ENGAGEMENT_ORDER.index(a) >= _ENGAGEMENT_ORDER.index(b) else b
+
+_MERGE_THRESHOLD = 0.93
+_DISAMBIGUATE_THRESHOLD = 0.75
+
+
+class _MergeAction(Enum):
+    AUTO_MERGE = "auto_merge"
+    DISAMBIGUATE = "disambiguate"
+    AUTO_INSERT = "auto_insert"
+
+
+def _merge_action(similarity: float) -> _MergeAction:
+    if similarity >= _MERGE_THRESHOLD:
+        return _MergeAction.AUTO_MERGE
+    if similarity >= _DISAMBIGUATE_THRESHOLD:
+        return _MergeAction.DISAMBIGUATE
+    return _MergeAction.AUTO_INSERT
+
+
+def _existing_to_merge(
+    candidates: list[tuple[float, MemoryItem]],
+    candidate: MemoryItem,
+    disambiguator: DisambiguationEvaluator,
+) -> MemoryItem | None:
+    """Returns the existing record to merge into, or None to insert as new."""
     if not candidates:
-        return False
-    first = candidates[0]
-    if first.embedding is None:
-        return False
-    return _cosine_similarity(embedding, first.embedding) >= threshold
+        return None
+    similarity, best = candidates[0]
+    action = _merge_action(similarity)
+    if action == _MergeAction.AUTO_INSERT:
+        return None
+    if action == _MergeAction.AUTO_MERGE:
+        return best
+    return best if disambiguator.is_same(best, candidate) else None
 
 
 class TriggerRecall:
@@ -41,7 +70,7 @@ class TriggerRecall:
 
     def execute(self, query: str, memory_types: tuple[MemoryType, ...], top_n: int = 5) -> list[MemoryItem]:
         embedding = self._embedding_service.embed(query)
-        return self._memory_repo.search(embedding, memory_types, top_n)
+        return [item for _, item in self._memory_repo.search(embedding, memory_types, top_n)]
 
 
 class RunConsolidation:
@@ -52,14 +81,16 @@ class RunConsolidation:
         embedding_service: EmbeddingService,
         extractor: ConsolidationExtractor,
         worthiness_evaluator: WorthinessEvaluator,
-        similarity_threshold: float = 0.85,
+        disambiguator: DisambiguationEvaluator,
+        synthesizer: MemorySynthesizer,
     ) -> None:
         self._conversation_repo = conversation_repo
         self._memory_repo = memory_repo
         self._embedding_service = embedding_service
         self._extractor = extractor
         self._worthiness_evaluator = worthiness_evaluator
-        self._threshold = similarity_threshold
+        self._disambiguator = disambiguator
+        self._synthesizer = synthesizer
 
     async def execute(self) -> int:
         conversations = self._conversation_repo.get_unconsolidated()
@@ -72,8 +103,12 @@ class RunConsolidation:
                 for episode in extraction.episodes:
                     episode.embedding = self._embedding_service.embed(episode.summary)
                     candidates = self._memory_repo.search(episode.embedding, (MemoryType.EPISODE,), top_n=1)
-                    if not _should_merge(candidates, episode.embedding, self._threshold):
-                        episode.id = self._memory_repo.upsert_episode(episode)
+                    existing = _existing_to_merge(candidates, episode, self._disambiguator)
+                    if existing is not None:
+                        episode.summary = self._synthesizer.synthesize_episode(existing.summary, episode.summary)
+                        episode.embedding = self._embedding_service.embed(episode.summary)
+                        episode.id = existing.id
+                    episode.id = self._memory_repo.upsert_episode(episode)
 
             for concept in extraction.concepts:
                 concept.embedding = self._embedding_service.embed(f"{concept.name}: {concept.description}")
@@ -81,8 +116,13 @@ class RunConsolidation:
                     concept.embedding, (MemoryType.CONCEPT,), top_n=1,
                     persona_id=conversation.persona_snapshot.id,
                 )
-                if not _should_merge(candidates, concept.embedding, self._threshold):
-                    concept.id = self._memory_repo.upsert_concept(concept)
+                existing = _existing_to_merge(candidates, concept, self._disambiguator)
+                if existing is not None:
+                    concept.description = self._synthesizer.synthesize_concept(existing, concept.description)
+                    concept.embedding = self._embedding_service.embed(f"{concept.name}: {concept.description}")
+                    concept.engagement_level = _max_engagement(existing.engagement_level, concept.engagement_level)
+                    concept.id = existing.id
+                concept.id = self._memory_repo.upsert_concept(concept)
 
             for procedure in extraction.procedures:
                 procedure.embedding = self._embedding_service.embed(f"{procedure.name}: {procedure.description}")
@@ -90,8 +130,15 @@ class RunConsolidation:
                     procedure.embedding, (MemoryType.PROCEDURE,), top_n=1,
                     persona_id=conversation.persona_snapshot.id,
                 )
-                if not _should_merge(candidates, procedure.embedding, self._threshold):
-                    procedure.id = self._memory_repo.upsert_procedure(procedure)
+                existing = _existing_to_merge(candidates, procedure, self._disambiguator)
+                if existing is not None:
+                    procedure.description, procedure.steps = self._synthesizer.synthesize_procedure(
+                        existing, procedure.description, procedure.steps
+                    )
+                    procedure.embedding = self._embedding_service.embed(f"{procedure.name}: {procedure.description}")
+                    procedure.engagement_level = _max_engagement(existing.engagement_level, procedure.engagement_level)
+                    procedure.id = existing.id
+                procedure.id = self._memory_repo.upsert_procedure(procedure)
 
             conversation.mark_consolidated(worthiness=worthy, summary=None)
             self._conversation_repo.save_consolidation(conversation)

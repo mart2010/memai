@@ -527,7 +527,7 @@ class PSMemoryRepository:
                     )))
 
         results.sort(key=lambda x: x[0])
-        return [item for _, item in results[:top_n]]
+        return [(1.0 - dist, item) for dist, item in results[:top_n]]
 
 
 # ---------------------------------------------------------------------------

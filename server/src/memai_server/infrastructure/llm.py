@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 import json
-from datetime import datetime, UTC
+from datetime import datetime
 
 import ollama
 
@@ -14,7 +14,7 @@ from ..domain.model import (
     Procedure,
     Speaker,
 )
-from ..services.ports import ConsolidationExtractor, ExtractionResult, Message
+from ..services.ports import ExtractionResult, MemoryItem, Message
 
 
 def _format_conversation(conversation: Conversation) -> str:
@@ -118,6 +118,119 @@ class OllamaRecallIntentDetector:
             MemoryType(t) for t in data.get("memory_types", []) if t in valid_values
         ) or tuple(MemoryType)
         return RecallTriggered(query=query, memory_types=memory_types)
+
+
+class OllamaMemorySynthesizer:
+    def __init__(self, model: str = "llama3.3", host: str | None = None) -> None:
+        self._client = ollama.Client(host=host)
+        self._model = model
+
+    def synthesize_episode(self, existing_summary: str, new_summary: str) -> str:
+        response = self._client.chat(
+            model=self._model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Merge two summaries of the same event into one coherent, concise summary. "
+                        "Preserve all factual details from both. Output only the merged summary, nothing else."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Summary A:\n{existing_summary}\n\nSummary B:\n{new_summary}",
+                },
+            ],
+        )
+        return response.message.content.strip()
+
+    def synthesize_concept(self, existing: Concept, new_description: str) -> str:
+        response = self._client.chat(
+            model=self._model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"Synthesize two descriptions of the same concept into one (~300 words max). "
+                        f"Write in language '{existing.language.code}'. "
+                        "Absorb all details — do not append, synthesize. Output only the merged description."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Concept: {existing.name}\n\n"
+                        f"Existing description:\n{existing.description}\n\n"
+                        f"New information:\n{new_description}"
+                    ),
+                },
+            ],
+        )
+        return response.message.content.strip()
+
+    def synthesize_procedure(self, existing: Procedure, new_description: str, new_steps: list[str]) -> tuple[str, list[str]]:
+        existing_steps = "\n".join(f"{i+1}. {s}" for i, s in enumerate(existing.steps)) or "(none)"
+        new_steps_fmt = "\n".join(f"{i+1}. {s}" for i, s in enumerate(new_steps)) or "(none)"
+        response = self._client.chat(
+            model=self._model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        f"Synthesize two descriptions of the same procedure into one. "
+                        f"Write in language '{existing.language.code}'. "
+                        'Output JSON with "description" (string, ~300 words) and '
+                        '"steps" (array of strings, empty array if no clear sequential steps).'
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"Procedure: {existing.name}\n\n"
+                        f"Existing:\nDescription: {existing.description}\nSteps:\n{existing_steps}\n\n"
+                        f"New:\nDescription: {new_description}\nSteps:\n{new_steps_fmt}"
+                    ),
+                },
+            ],
+            format="json",
+        )
+        try:
+            data = json.loads(response.message.content)
+            return data.get("description", new_description).strip(), data.get("steps", new_steps)
+        except (json.JSONDecodeError, AttributeError):
+            return new_description, new_steps
+
+
+class OllamaDisambiguationEvaluator:
+    def __init__(self, model: str = "llama3.3", host: str | None = None) -> None:
+        self._client = ollama.Client(host=host)
+        self._model = model
+
+    def is_same(self, existing: MemoryItem, candidate: MemoryItem) -> bool:
+        def _fmt(item: MemoryItem) -> str:
+            if isinstance(item, Episode):
+                return f"Episode: {item.summary}"
+            if isinstance(item, Concept):
+                return f"Concept '{item.name}': {item.description}"
+            return f"Procedure '{item.name}': {item.description}"
+
+        response = self._client.chat(
+            model=self._model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "Decide whether two memory records refer to the same real-world entity, event, or topic. "
+                        "Reply with exactly one word: YES or NO."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": f"Record A:\n{_fmt(existing)}\n\nRecord B:\n{_fmt(candidate)}",
+                },
+            ],
+        )
+        return "yes" in response.message.content.strip().lower()
 
 
 class OllamaConsolidationExtractor:
