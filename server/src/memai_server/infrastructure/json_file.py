@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 import json
 from collections.abc import Callable
-from datetime import datetime, UTC
+from datetime import datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -51,6 +51,16 @@ class JSONLTurnLogger:
             f.write(json.dumps(line) + "\n")
 
 
+def _session_id_from_path(path: Path) -> UUID | None:
+    parts = path.stem.split("_", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        return UUID(parts[1])
+    except ValueError:
+        return None
+
+
 class JSONLSessionLogReader:
     """Reads session metadata and turn tails from JSONL log files.
 
@@ -66,22 +76,12 @@ class JSONLSessionLogReader:
             return []
         return sorted(self._log_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime)
 
-    @staticmethod
-    def _session_id_from_path(path: Path) -> UUID | None:
-        parts = path.stem.split("_", 1)
-        if len(parts) != 2:
-            return None
-        try:
-            return UUID(parts[1])
-        except ValueError:
-            return None
-
     def get_previous(self) -> SessionInfo | None:
         files = self._log_files_newest_last()
         if not files:
             return None
         latest = files[-1]
-        session_id = self._session_id_from_path(latest)
+        session_id = _session_id_from_path(latest)
         if session_id is None:
             return None
 
@@ -149,16 +149,6 @@ class JSONLSessionReplayReader:
     def __init__(self, log_dir: Path) -> None:
         self._log_dir = log_dir
 
-    @staticmethod
-    def _session_id_from_path(path: Path) -> UUID | None:
-        parts = path.stem.split("_", 1)
-        if len(parts) != 2:
-            return None
-        try:
-            return UUID(parts[1])
-        except ValueError:
-            return None
-
     def _parse_file(self, path: Path) -> list[SessionLine]:
         lines: list[SessionLine] = []
         with path.open("r", encoding="utf-8") as f:
@@ -197,7 +187,7 @@ class JSONLSessionReplayReader:
         files = sorted(self._log_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
         collected: list[tuple[UUID, Path]] = []
         for path in files:
-            session_id = self._session_id_from_path(path)
+            session_id = _session_id_from_path(path)
             if session_id is None:
                 continue
             if is_persisted(session_id):

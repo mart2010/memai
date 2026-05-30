@@ -56,7 +56,7 @@ class SessionInfo:
 
 
 class STTService(Protocol):
-    def transcribe(self, audio: bytes, language_hint: Language | None) -> tuple[str, Language]: ...
+    def transcribe(self, audio: bytes) -> tuple[str, Language]: ...
 
 
 class LLMService(Protocol):
@@ -138,6 +138,10 @@ class MemoryBriefRepository(Protocol):
 class TurnLogger(Protocol):
     def append(self, session_id: UUID, turn: Turn, marker: ConversationBoundaryType | None = None) -> None: ...
     def close(self, session_id: UUID, ended_at: datetime, clean_exit: bool) -> None: ...
+
+
+class WorthinessEvaluator(Protocol):
+    def evaluate(self, conversation: Conversation) -> bool: ...
 
 
 class ConsolidationExtractor(Protocol):

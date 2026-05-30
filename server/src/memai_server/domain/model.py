@@ -164,9 +164,6 @@ class Concept:
     updated_at: datetime | None = None
     embedding: list[float] | None = None
 
-    def update_engagement(self, new_level: EngagementLevel) -> None:
-        self.engagement_level = new_level
-
 
 @dataclass
 class Procedure:
@@ -180,9 +177,6 @@ class Procedure:
     created_at: datetime | None = None
     updated_at: datetime | None = None
     embedding: list[float] | None = None
-
-    def update_engagement(self, new_level: EngagementLevel) -> None:
-        self.engagement_level = new_level
 
 
 @dataclass

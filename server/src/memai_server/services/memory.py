@@ -3,9 +3,9 @@ from datetime import datetime
 from enum import Enum
 
 from ..domain.model import EngagementLevel, MemoryBrief, MemoryType
-from ..domain.protocols import WorthinessEvaluator
 from .ports import (
     ConsolidationExtractor,
+    ConversationRepository,
     DisambiguationEvaluator,
     EmbeddingService,
     LLMService,
@@ -13,8 +13,8 @@ from .ports import (
     MemoryItem,
     MemoryRepository,
     MemorySynthesizer,
-    ConversationRepository,
     Message,
+    WorthinessEvaluator,
 )
 
 _ENGAGEMENT_ORDER = [
@@ -99,6 +99,9 @@ class RunConsolidation:
             worthy = self._worthiness_evaluator.evaluate(conversation)
             extraction = self._extractor.extract(conversation)
 
+            # Episodes require a worthy conversation — trivial exchanges shouldn't
+            # generate episodic memories. Concepts and procedures are extracted
+            # unconditionally: knowledge is worth keeping regardless of conversation quality.
             if worthy:
                 for episode in extraction.episodes:
                     episode.embedding = self._embedding_service.embed(episode.summary)

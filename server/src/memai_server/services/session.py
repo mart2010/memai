@@ -202,7 +202,7 @@ class ProcessTurn:
 
     async def execute(self, session: SessionContext, audio: bytes, now: datetime) -> TurnResult | None:
         # 1. STT
-        text, detected_language = self._stt.transcribe(audio, session.user.primary_language)
+        text, detected_language = self._stt.transcribe(audio)
         if not text.strip():
             return None
 
@@ -221,10 +221,12 @@ class ProcessTurn:
         recall = self._recall_detector.detect(text)
         if recall:
             embedding = self._embedding_service.embed(recall.query)
-            extra_context = self._memory_repo.search(
-                embedding, recall.memory_types, top_n=5,
-                persona_id=session.active_persona.id,
-            )
+            extra_context = [
+                item for _, item in self._memory_repo.search(
+                    embedding, recall.memory_types, top_n=5,
+                    persona_id=session.active_persona.id,
+                )
+            ]
 
         # 5. Collect LLM response, strip markers, synthesise sentence-by-sentence
         system_prompt, messages = _build_llm_input(session, extra_context)
@@ -285,9 +287,12 @@ class ProcessTurn:
         n = self._rolling_window_size // 2
         turns = session.recent_turns[:n]
         excerpt = "\n".join(f"{t.speaker.value}: {t.content}" for t in turns)
+        content = excerpt
+        if session.rolling_summary:
+            content = f"Previous summary:\n{session.rolling_summary}\n\nNew turns:\n{excerpt}"
         tokens: list[str] = []
         async for token in self._llm.complete(
-            messages=[Message(role="user", content=f"Summarise concisely:\n{excerpt}")],
+            messages=[Message(role="user", content=f"Summarise concisely:\n{content}")],
             system_prompt="You are a conversation summariser. Be brief.",
         ):
             tokens.append(token)

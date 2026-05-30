@@ -9,7 +9,7 @@ from .model import Language, MemoryType
 @dataclass(frozen=True)
 class PrimaryLanguageChanged:
     user_id: UUID
-    old_language: Language
+    old_language: Language | None  # None when language was not set before (post-onboarding update)
     new_language: Language
 
 
