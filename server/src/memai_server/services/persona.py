@@ -18,15 +18,20 @@ class CreatePersona:
         name: str,
         system_prompt: str,
         now: datetime,
+        response_language: Language | None = None,
+        tts_voice: str = "af_heart",
         languages: list[Language] | None = None,
     ) -> AssistantPersona:
         if session.active_persona.id != GENERAL_ASSISTANT_ID:
             raise ValueError("Persona management is only available when GeneralAssistant is active")
+        lang = response_language or session.user.primary_language or Language("en")
         persona = AssistantPersona(
             id=uuid4(),
             name=name,
             system_prompt=system_prompt,
             languages=languages or [],
+            response_language=lang,
+            tts_voice=tts_voice,
             is_system=False,
             created_at=now,
             updated_at=now,

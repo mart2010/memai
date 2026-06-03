@@ -15,7 +15,8 @@ def _persona() -> AssistantPersona:
     now = datetime.now(UTC)
     return AssistantPersona(
         id=uuid4(), name="Test", system_prompt="Be helpful.",
-        languages=[], is_system=False, created_at=now, updated_at=now,
+        languages=[], response_language=Language("en"), tts_voice="af_heart",
+        is_system=False, created_at=now, updated_at=now,
     )
 
 

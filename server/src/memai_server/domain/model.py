@@ -18,14 +18,11 @@ class Language:
             raise ValueError("Language code cannot be empty")
 
 
-# Intersection of faster-whisper (~99 languages) and XTTS v2 (~17 languages).
-# XTTS v2 is the limiting factor; this is the full set Memai supports.
+# Intersection of faster-whisper (~99 languages) and Kokoro (~9 languages).
+# Kokoro is the limiting factor; this is the full set Memai supports.
 SUPPORTED_LANGUAGES: list[Language] = [
-    Language("en"), Language("fr"), Language("es"), Language("de"),
-    Language("it"), Language("pt"), Language("pl"), Language("tr"),
-    Language("ru"), Language("nl"), Language("cs"), Language("ar"),
-    Language("zh-cn"), Language("ja"), Language("ko"), Language("hu"),
-    Language("hi"),
+    Language("en"), Language("fr"), Language("es"), Language("it"),
+    Language("pt"), Language("ja"), Language("ko"), Language("zh-cn"),
 ]
 
 
@@ -60,7 +57,9 @@ class AssistantPersona:
     id: UUID
     name: str
     system_prompt: str
-    languages: list[Language]  # languages this persona operates in; empty = primary language only
+    languages: list[Language]  # languages this persona accepts as input; empty = primary language only
+    response_language: Language  # language this persona responds in; drives TTS voice selection
+    tts_voice: str              # Kokoro voice identifier, e.g. "af_heart", "ff_siwis"
     is_system: bool
     created_at: datetime
     updated_at: datetime
@@ -75,13 +74,20 @@ class AssistantPersona:
         self.updated_at = updated_at
 
     @classmethod
-    def general_assistant(cls, system_prompt: str) -> "AssistantPersona":
+    def general_assistant(
+        cls,
+        system_prompt: str,
+        response_language: "Language" = Language("en"),
+        tts_voice: str = "af_heart",
+    ) -> "AssistantPersona":
         now = datetime.now(UTC)
         return cls(
             id=GENERAL_ASSISTANT_ID,
             name="General Assistant",
             system_prompt=system_prompt,
             languages=[],
+            response_language=response_language,
+            tts_voice=tts_voice,
             is_system=True,
             created_at=now,
             updated_at=now,

@@ -20,13 +20,15 @@ CREATE TABLE users (
 -- ─────────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE personas (
-    id             UUID        PRIMARY KEY,
-    name           TEXT        NOT NULL,
-    system_prompt  TEXT        NOT NULL,
-    languages      TEXT[]      NOT NULL DEFAULT '{}',  -- empty = primary language only
-    is_system      BOOLEAN     NOT NULL DEFAULT FALSE,
-    created_at     TIMESTAMPTZ NOT NULL,
-    updated_at     TIMESTAMPTZ NOT NULL
+    id                UUID        PRIMARY KEY,
+    name              TEXT        NOT NULL,
+    system_prompt     TEXT        NOT NULL,
+    languages         TEXT[]      NOT NULL DEFAULT '{}',  -- input languages; empty = primary language only
+    response_language TEXT        NOT NULL DEFAULT 'en',  -- IETF tag; drives TTS voice selection
+    tts_voice         TEXT        NOT NULL DEFAULT 'af_heart',  -- Kokoro voice identifier
+    is_system         BOOLEAN     NOT NULL DEFAULT FALSE,
+    created_at        TIMESTAMPTZ NOT NULL,
+    updated_at        TIMESTAMPTZ NOT NULL
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -131,12 +133,14 @@ CREATE INDEX procedures_embedding_hnsw
 -- always present regardless of application state. The system_prompt can be
 -- updated after first launch via voice; the id is fixed and must match
 -- GENERAL_ASSISTANT_ID in domain/model.py.
-INSERT INTO personas (id, name, system_prompt, languages, is_system, created_at, updated_at)
+INSERT INTO personas (id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000001',
     'General Assistant',
     'You are a helpful, honest assistant.',
     '{}',
+    'en',
+    'af_heart',
     TRUE,
     NOW(),
     NOW()

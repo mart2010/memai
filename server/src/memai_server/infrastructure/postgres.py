@@ -47,6 +47,8 @@ def _persona_to_jsonb(persona: AssistantPersona) -> Jsonb:
         "name": persona.name,
         "system_prompt": persona.system_prompt,
         "languages": [l.code for l in persona.languages],
+        "response_language": persona.response_language.code,
+        "tts_voice": persona.tts_voice,
         "is_system": persona.is_system,
         "created_at": persona.created_at.isoformat(),
         "updated_at": persona.updated_at.isoformat(),
@@ -59,6 +61,8 @@ def _jsonb_to_persona(data: dict) -> AssistantPersona:
         name=data["name"],
         system_prompt=data["system_prompt"],
         languages=[Language(c) for c in data["languages"]],
+        response_language=Language(data.get("response_language", "en")),
+        tts_voice=data.get("tts_voice", "af_heart"),
         is_system=data["is_system"],
         created_at=datetime.fromisoformat(data["created_at"]),
         updated_at=datetime.fromisoformat(data["updated_at"]),
@@ -123,19 +127,21 @@ class PSPersonaRepository:
     def get(self, persona_id: UUID) -> AssistantPersona | None:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT id, name, system_prompt, languages, is_system, created_at, updated_at "
+                "SELECT id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at "
                 "FROM personas WHERE id = %s",
                 (persona_id,),
             )
             row = cur.fetchone()
             if row is None:
                 return None
-            id_, name, system_prompt, languages, is_system, created_at, updated_at = row
+            id_, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at = row
             return AssistantPersona(
                 id=id_,
                 name=name,
                 system_prompt=system_prompt,
                 languages=[Language(c) for c in languages],
+                response_language=Language(response_language),
+                tts_voice=tts_voice,
                 is_system=is_system,
                 created_at=created_at,
                 updated_at=updated_at,
@@ -144,7 +150,7 @@ class PSPersonaRepository:
     def list_all(self) -> list[AssistantPersona]:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT id, name, system_prompt, languages, is_system, created_at, updated_at FROM personas"
+                "SELECT id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at FROM personas"
             )
             return [
                 AssistantPersona(
@@ -152,23 +158,27 @@ class PSPersonaRepository:
                     name=name,
                     system_prompt=system_prompt,
                     languages=[Language(c) for c in languages],
+                    response_language=Language(response_language),
+                    tts_voice=tts_voice,
                     is_system=is_system,
                     created_at=created_at,
                     updated_at=updated_at,
                 )
-                for id_, name, system_prompt, languages, is_system, created_at, updated_at in cur.fetchall()
+                for id_, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at in cur.fetchall()
             ]
 
     def save(self, persona: AssistantPersona) -> None:
         with self._conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO personas (id, name, system_prompt, languages, is_system, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO personas (id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     name = EXCLUDED.name,
                     system_prompt = EXCLUDED.system_prompt,
                     languages = EXCLUDED.languages,
+                    response_language = EXCLUDED.response_language,
+                    tts_voice = EXCLUDED.tts_voice,
                     updated_at = EXCLUDED.updated_at
                 """,
                 (
@@ -176,6 +186,8 @@ class PSPersonaRepository:
                     persona.name,
                     persona.system_prompt,
                     [l.code for l in persona.languages],
+                    persona.response_language.code,
+                    persona.tts_voice,
                     persona.is_system,
                     persona.created_at,
                     persona.updated_at,

@@ -51,8 +51,8 @@ ruff format .
 
 ## Design Constraints
 
-- **Voice-only configuration** — everything is configured by voice; no CLI arguments, no
-  config files for the user to edit. Any new feature or setting must be reachable through
+- **Voice-only configuration** — everything is configured by voice; minimal/optinal CLI arguments 
+  or config files for the user to edit. Any new feature or setting must be reachable through
   conversation, not through flags or environment variables.
 - **Single user** — no concurrency model, no authentication, no row-level security. All
   design decisions can assume exactly one user.

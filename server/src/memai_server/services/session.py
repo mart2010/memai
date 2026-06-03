@@ -237,15 +237,16 @@ class ProcessTurn:
         assistant_content, detected_name = _strip_persona_prefix(raw_response.strip())
         assistant_content, boundary_marker = _strip_conversation_marker(assistant_content, is_first_turn)
 
+        voice = session.active_persona.tts_voice
         audio_chunks: list[bytes] = []
         sentence_buffer = ""
         for ch in assistant_content:
             sentence_buffer += ch
             if _is_sentence_end(sentence_buffer.rstrip()):
-                audio_chunks.append(self._tts.synthesise(sentence_buffer))
+                audio_chunks.append(self._tts.synthesise(sentence_buffer, voice))
                 sentence_buffer = ""
         if sentence_buffer.strip():
-            audio_chunks.append(self._tts.synthesise(sentence_buffer))
+            audio_chunks.append(self._tts.synthesise(sentence_buffer, voice))
 
         # 6. Conversation boundary event — marker embedded in assistant turn below
         boundary = ConversationBoundaryDetected(boundary_type=boundary_marker) if boundary_marker else None
