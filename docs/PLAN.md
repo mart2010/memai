@@ -21,7 +21,7 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 
 ### Value Objects & Enums
 - [x] `Language` value object (IETF language code)
-- [x] `SUPPORTED_LANGUAGES` constant — intersection of faster-whisper and XTTS v2 (~17 languages)
+- [x] `SUPPORTED_LANGUAGES` constant — intersection of faster-whisper and Kokoro (~8 languages; Kokoro is the limiting factor)
 - [x] `Speaker` enum (user, assistant)
 - [x] `EngagementLevel` enum — states: mentioned | explored | practiced | integrated
 - [x] `MemoryType` enum (EPISODE, CONCEPT, PROCEDURE)
@@ -38,7 +38,7 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 - [x] `Concept` entity (id, name, description, language, engagement_level, embedding)
 - [x] `Procedure` entity (id, name, steps, language, engagement_level, embedding)
 - [x] `MemoryBrief` singleton entity (content, created_at, updated_at)
-- [x] `AssistantPersona` entity (id, name, system_prompt, languages, is_system, created_at, updated_at)
+- [x] `AssistantPersona` entity (id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at)
 
 ### Domain Events
 - [x] `PrimaryLanguageChanged` (user_id, old_language, new_language)
@@ -64,7 +64,7 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
 ### Infrastructure Ports (defined here, implemented in Phase 3)
 - [x] `STTService` Protocol (transcribe(audio: bytes, language_hint) → tuple[str, Language])
 - [x] `LLMService` Protocol (complete(messages, system_prompt) → AsyncIterator[str])
-- [x] `TTSService` Protocol (synthesise(text: str) → bytes)
+- [x] `TTSService` Protocol (synthesise(text: str, voice: str) → bytes)
 - [x] `EmbeddingService` Protocol (embed(text: str) → list[float])
 - [x] `UserRepository` Protocol
 - [x] `SessionLogReader` Protocol (get_previous() → SessionInfo | None; read_tail(session_id, max_turns) → list[Turn])
@@ -181,8 +181,9 @@ One adapter at a time. Inner layers unchanged.
         (`_strip_persona_prefix` inline in `ProcessTurn`); no domain protocol needed
 
 ### TTS
-- [ ] `XttsTTSService` — deferred pending licence resolution (Coqui MPL-2.0 + Exhibit B
-      incompatible with AGPL-3.0); fallback candidates: Piper, Kokoro
+- [x] `KokoroTTSService` (`infrastructure/tts.py`) — Kokoro (Apache-2.0); lazily initialises
+      one `KPipeline` per language prefix (cached); resamples 24 kHz → 16 kHz via `resample_poly`;
+      voice selected per-persona via `AssistantPersona.tts_voice`
 
 ### Embeddings
 - [x] `SentenceTransformerEmbeddingService` (`infrastructure/embedding.py`) —
@@ -198,54 +199,67 @@ One adapter at a time. Inner layers unchanged.
 ### Integration Tests — Phase 3
 - [ ] PostgreSQL repositories (real DB, test schema)
 - [ ] `FasterWhisperSTTService` (real model, short audio fixture)
-- [ ] `XttsTTSService` (real model, short text fixture)
+- [ ] `KokoroTTSService` (real model, short text fixture; verify default voice names match installed version)
 - [ ] `SentenceTransformerEmbeddingService` — real model, calibration test: embed pairs
       of semantically similar vs. dissimilar texts and print similarity scores to help
       determine a good threshold value for the merge decision
 
 ---
 
-## Phase 4 — Pipeline Tuning + WebSocket Layer
+## Phase 4 — WebSocket Layer (two-pass wiring)
 
-### 4a — Pipeline Tuning (before refactor)
+Fully replace the PoC `server.py` with Clean Architecture wiring.
+Must run on the GPU server. Do not keep PoC code alongside the real wiring — replace in full.
 
-Establish a smooth, GPU-accelerated baseline on the existing monolithic server.py before
-any architectural changes. Do not refactor yet — validate performance first.
+### Pass 1 — Thin wiring (audio loop validation)
 
-- [ ] Switch faster-whisper to CUDA device (float16 or int8 on GPU); confirm GPU is used
-      via nvidia-smi during transcription
-- [ ] Benchmark STT latency: measure time from end_utterance to first LLM token; target
-      is perceptibly snappy (< ~1s for typical short utterance)
-- [ ] Switch TTS to XTTS v2; confirm GPU acceleration; benchmark first audio chunk latency
-- [ ] End-to-end latency check: speak → first audio chunk back; identify dominant
-      bottleneck (STT / first LLM token / first TTS sentence)
-- [ ] Confirm smooth playback with no audio glitches or buffer underruns
+Goal: validate the full audio loop (mic → WebSocket → STT → LLM → TTS → speaker) on real
+hardware before wiring the DB. Use real services; stub the DB with in-memory repos.
 
-Only proceed to 4b once the pipeline feels responsive and GPU utilisation is confirmed.
+- [ ] Wire `StartSession`, `ProcessTurn`, `EndSession` into a real WebSocket handler
+- [ ] Real services: `FasterWhisperSTTService` (CUDA float16), `OllamaLLMService`, `KokoroTTSService`
+- [ ] In-memory stubs: fixed `User` (primary_language = "en"), fixed `GeneralAssistant` persona
+      (response_language = "en", tts_voice = "af_heart"), no-op `TurnLogger`
+- [ ] Verify GPU is active for STT (nvidia-smi during transcription)
+- [ ] Benchmark STT latency: time from `end_utterance` to first LLM token; target < ~1s
+- [ ] Benchmark TTS latency: time from first complete LLM sentence to first audio chunk
+- [ ] End-to-end: speak → first audio chunk back; identify dominant bottleneck
+- [ ] Confirm smooth playback, no audio glitches or buffer underruns
+- [ ] Verify Kokoro voice names match the installed version (see `KOKORO_DEFAULT_VOICES` in `infrastructure/tts.py`)
 
-### 4b — WebSocket Layer (refactor)
+Only proceed to Pass 2 once the audio loop is confirmed responsive on GPU.
 
-Wire client ↔ server into Clean Architecture. All domain logic already tested.
+### Pass 2 — Full wiring
 
-### Server Entrypoint (refactor server.py)
-- [ ] On connect: run TurnLogReplayer if unwritten entries exist; check User.primary_language
-- [ ] If primary_language is None: send `select_language` with SUPPORTED_LANGUAGES list;
-      await `language_selected` frame; call UpdatePrimaryLanguage; then start onboarding session
-- [ ] Normal session: call StartSession (injects MemoryBrief + session tail if applicable)
-- [ ] Binary frames (audio) → buffer; `end_utterance` → ProcessTurn
+Swap in real repositories and wire the offline consolidation pipeline.
+
+#### Server Entrypoint
+- [ ] On connect: run `TurnLogReplayer` if unwritten entries exist; check `User.primary_language`
+- [ ] If `primary_language` is None: send `select_language` with `SUPPORTED_LANGUAGES` list;
+      await `language_selected` frame; call `UpdatePrimaryLanguage`; then start onboarding session
+- [ ] Normal session: call `StartSession` (injects MemoryBrief + session tail if applicable)
+- [ ] Binary frames (audio) → buffer; `end_utterance` → `ProcessTurn`
 - [ ] Stream synthesised audio as binary frames; send `speaking_end` JSON frame after
       final chunk of each response
-- [ ] On disconnect: call EndSession; start idle timer — if no new session opens within
-      N minutes, fire TurnLogReplayer → RunConsolidation → GenerateMemoryBrief (all async,
+- [ ] On disconnect: call `EndSession`; start idle timer — if no new session opens within
+      N minutes, fire `TurnLogReplayer` → `RunConsolidation` → `GenerateMemoryBrief` (all async,
       non-blocking); cancel timer on new connection
 
-### Client Entrypoint (refactor client.py)
+#### Real repositories
+- [ ] `PSUserRepository`, `PSPersonaRepository`, `PSConversationRepository`,
+      `PSMemoryRepository`, `PSMemoryBriefRepository`
+- [ ] `JSONLTurnLogger` (live path)
+- [ ] `TurnLogReplayer` (crash recovery on startup + idle timer trigger post-disconnect)
+- [ ] `RunConsolidation` + `GenerateMemoryBrief` (triggered by idle timer)
+- [ ] DB pre-requisite: run `001_initial_schema.sql`; insert User record before first connect
+
+#### Client Entrypoint (refactor client.py)
 - [ ] On connect: if server sends `select_language`, render `questionary` terminal dropdown
       with the supported language list; send `language_selected` result
 - [ ] Suppress VAD from playback start until `speaking_end` received (mic muting)
 - [ ] Existing: sounddevice capture, webrtcvad, binary frames, SSH tunnel — keep as-is
 
-### ⚠ Revisit: Client-side first-launch onboarding flow
+#### ⚠ Revisit: Client-side first-launch onboarding flow
 Current design: server detects missing `primary_language` → pushes `select_language` to
 client → client renders questionary dropdown.
 
