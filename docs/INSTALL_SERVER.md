@@ -115,13 +115,14 @@ All commands run from `memai/server/` after `uv sync`.
 ### Whisper — faster-whisper medium (~1.5 GB)
 
 ```bash
-uv run python -c "
-from huggingface_hub import snapshot_download
-snapshot_download('Systran/faster-whisper-medium', local_dir='$HOME/models/faster-whisper-medium')
-"
+uv run huggingface-cli download Systran/faster-whisper-medium \
+  --local-dir ~/models/faster-whisper-medium
 ```
 
 Then point `WHISPER_MODEL_PATH` in your `.env` at the same directory (step 8 sets this up).
+
+Alternatively, set `WHISPER_MODEL_PATH=medium` in `.env` and skip this download entirely —
+faster-whisper accepts model names and will download on first start automatically.
 
 ### Kokoro voice model (~0.4 GB)
 
@@ -129,15 +130,18 @@ Then point `WHISPER_MODEL_PATH` in your `.env` at the same directory (step 8 set
 uv run python -c "from kokoro import KPipeline; KPipeline(lang_code='a')"
 ```
 
-This downloads the shared Kokoro weights to `~/.cache/huggingface/`. No extra config needed.
+Kokoro manages its own internal download and cache (`~/.cache/huggingface/`); there is no
+standalone CLI equivalent. No extra config needed after this runs.
 
 ### Embedding model — multilingual-e5-large (~2 GB)
 
 ```bash
-uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"
+uv run huggingface-cli download intfloat/multilingual-e5-large
 ```
 
 Cached to `~/.cache/huggingface/`. No extra config needed.
+
+All three models are public — no HuggingFace account or token is required.
 
 ---
 
