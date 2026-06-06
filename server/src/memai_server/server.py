@@ -2,117 +2,225 @@
 import asyncio
 import json
 import os
+import uuid
+from datetime import datetime, UTC
 from pathlib import Path
+from uuid import UUID
 
-import numpy as np
-import ollama
 import websockets
-from dotenv import load_dotenv
-from faster_whisper import WhisperModel
-from piper import PiperVoice
 
-load_dotenv()
-
-SAMPLE_RATE = 16000
-WS_PORT = int(os.getenv("WS_PORT", "8765"))
-LANGUAGE = os.getenv("LANGUAGE", "fr")
-LLM_MODEL = os.getenv("LLM_MODEL", "llama3.3")
-WHISPER_MODEL_PATH = Path(os.getenv("WHISPER_MODEL_PATH", "~/models/faster-whisper-small")).expanduser()
-PIPER_MODEL_PATH = Path(os.getenv("PIPER_MODEL_PATH", "~/models/piper")).expanduser()
-PIPER_VOICE = os.getenv("PIPER_VOICE", "fr_FR-siwis-medium")
-
-whisper = WhisperModel(str(WHISPER_MODEL_PATH), device="cpu", compute_type="int8")
-
-voice_fr = PiperVoice.load(
-    str(PIPER_MODEL_PATH / f"{PIPER_VOICE}.onnx"),
-    config_path=str(PIPER_MODEL_PATH / f"{PIPER_VOICE}.onnx.json"),
+from .domain.model import (
+    GENERAL_ASSISTANT_ID,
+    AssistantPersona,
+    Language,
+    MemoryBrief,
+    SUPPORTED_LANGUAGES,
+    User,
 )
+from .infrastructure.json_file import JSONLSessionLogReader, JSONLTurnLogger
+from .infrastructure.llm import OllamaLLMService
+from .infrastructure.stt import FasterWhisperSTTService
+from .infrastructure.tts import KOKORO_DEFAULT_VOICES, KokoroTTSService
+from .services.ports import MemoryItem
+from .services.session import EndSession, ProcessTurn, StartSession
 
-SYSTEM_PROMPT_FR = (
-    "Tu es un assistant vocal francophone. "
-    "Réponds toujours en français, de façon concise et naturelle."
-)
+# ---------------------------------------------------------------------------
+# In-memory stubs (Pass 1 — no DB)
+# ---------------------------------------------------------------------------
 
 
-# -------- STT --------
-def transcribe(audio):
-    segments, _ = whisper.transcribe(audio, beam_size=1, language=LANGUAGE)
-    return " ".join([s.text for s in segments]).strip()
+class _UserRepo:
+    def __init__(self, language: Language | None) -> None:
+        self._user = User(id=UUID("00000000-0000-0000-0000-000000000010"), primary_language=language)
 
-# -------- LLM STREAM --------
-async def stream_llm(text):
-    loop = asyncio.get_event_loop()
+    def get(self) -> User | None:
+        return self._user
 
-    def run_ollama():
-        return ollama.chat(
-            model=LLM_MODEL,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT_FR},
-                {"role": "user", "content": text},
-            ],
-            stream=True,
+    def save(self, user: User) -> None:
+        self._user = user
+
+
+class _PersonaRepo:
+    def __init__(self) -> None:
+        self._persona = AssistantPersona.general_assistant(
+            system_prompt=(
+                "You are a helpful voice assistant. "
+                "Keep responses concise and natural — one or two sentences. "
+                "Never use markdown formatting."
+            ),
         )
 
-    stream = await loop.run_in_executor(None, run_ollama)
+    def get(self, persona_id: UUID) -> AssistantPersona | None:
+        return self._persona if persona_id == GENERAL_ASSISTANT_ID else None
 
-    for chunk in stream:
-        if "message" in chunk and "content" in chunk["message"]:
-            yield chunk["message"]["content"]
+    def list_all(self) -> list[AssistantPersona]:
+        return [self._persona]
+
+    def save(self, persona: AssistantPersona) -> None:
+        self._persona = persona
+
+    def delete(self, persona_id: UUID) -> None:
+        pass
 
 
-# -------- Piper TTS --------
-def synthesize(text):
-    raw = b"".join(chunk.audio_int16_bytes for chunk in voice_fr.synthesize(text))
-    audio = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
-    return audio.tobytes()
+class _MemoryBriefRepo:
+    def get(self) -> MemoryBrief | None:
+        return None
+
+    def save(self, brief: MemoryBrief) -> None:
+        pass
 
 
-# -------- Sentence buffer --------
-def is_sentence_end(buffer):
-    return any(buffer.endswith(p) for p in [".", "!", "?"])
+class _MemoryRepo:
+    def upsert_episode(self, episode) -> int:
+        return 0
 
-# -------- Handler --------
-async def handler(ws):
+    def upsert_concept(self, concept) -> int:
+        return 0
+
+    def upsert_procedure(self, procedure) -> int:
+        return 0
+
+    def search(self, embedding, memory_types, top_n, persona_id=None) -> list[tuple[float, MemoryItem]]:
+        return []
+
+
+class _NullRecallDetector:
+    def detect(self, text: str):
+        return None
+
+
+class _NullEmbeddingService:
+    def embed(self, text: str) -> list[float]:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# WebSocket handler (one per connection)
+# ---------------------------------------------------------------------------
+
+
+async def _handle(
+    ws,
+    stt: FasterWhisperSTTService,
+    llm: OllamaLLMService,
+    tts: KokoroTTSService,
+    log_dir: Path,
+    primary_language: Language | None,
+) -> None:
     print("Client connected")
 
-    audio_buffer = np.array([], dtype=np.float32)
+    session_id = uuid.uuid4()
+    started_at = datetime.now(UTC)
 
-    async for msg in ws:
-        if isinstance(msg, bytes):
-            chunk = np.frombuffer(msg, dtype=np.int16).astype(np.float32) / 32768.0
-            audio_buffer = np.concatenate([audio_buffer, chunk])
-            continue
+    user_repo = _UserRepo(primary_language)
+    persona_repo = _PersonaRepo()
 
-        data = json.loads(msg)
+    start_session = StartSession(
+        user_repo=user_repo,
+        persona_repo=persona_repo,
+        memory_brief_repo=_MemoryBriefRepo(),
+        session_log_reader=JSONLSessionLogReader(log_dir),
+    )
+    turn_logger = JSONLTurnLogger(log_dir)
 
-        if data["type"] == "end_utterance":
-            if len(audio_buffer) == 0:
+    session = start_session.execute(session_id, started_at)
+
+    process_turn = ProcessTurn(
+        stt=stt,
+        llm=llm,
+        tts=tts,
+        embedding_service=_NullEmbeddingService(),
+        memory_repo=_MemoryRepo(),
+        recall_detector=_NullRecallDetector(),
+        persona_repo=persona_repo,
+        turn_logger=turn_logger,
+    )
+    end_session = EndSession(turn_logger=turn_logger)
+
+    if session.needs_onboarding:
+        supported = [lang.code for lang in SUPPORTED_LANGUAGES]
+        await ws.send(json.dumps({"type": "select_language", "supported": supported}))
+
+    audio_buffer = b""
+    onboarding_done = not session.needs_onboarding
+
+    try:
+        async for msg in ws:
+            if isinstance(msg, bytes):
+                if onboarding_done:
+                    audio_buffer += msg
                 continue
 
-            text = transcribe(audio_buffer)
-            print("User:", text)
+            try:
+                data = json.loads(msg)
+            except json.JSONDecodeError:
+                continue
+            msg_type = data.get("type")
 
-            audio_buffer = np.array([], dtype=np.float32)
+            if msg_type == "language_selected" and not onboarding_done:
+                lang_code = data.get("language", "en")
+                lang = Language(lang_code)
+                voice = KOKORO_DEFAULT_VOICES.get(lang_code, "af_heart")
+                # Persist into the stubs so the session context is coherent
+                user_repo.save(User(id=session.user.id, primary_language=lang))
+                session.user.primary_language = lang
+                session.active_persona.tts_voice = voice
+                session.active_persona.response_language = lang
+                session.needs_onboarding = False
+                onboarding_done = True
+                print(f"Language selected: {lang_code}, voice: {voice}")
+                continue
 
-            buffer = ""
-            async for token in stream_llm(text):
-                buffer += token
-                print("Token:", token)
-                if is_sentence_end(buffer):
-                    audio_bytes = synthesize(buffer)
-                    await ws.send(audio_bytes)
-                    buffer = ""
+            if msg_type == "end_utterance" and onboarding_done:
+                if not audio_buffer:
+                    continue
+                audio = audio_buffer
+                audio_buffer = b""
+                result = await process_turn.execute(session, audio, datetime.now(UTC))
+                if result is not None:
+                    for chunk in result.audio_chunks:
+                        await ws.send(chunk)
+                await ws.send(json.dumps({"type": "speaking_end"}))
 
-    print("Client disconnected")
+    except websockets.exceptions.ConnectionClosed:
+        pass
+    finally:
+        end_session.execute(session, datetime.now(UTC))
+        print("Client disconnected")
 
 
-async def _run():
-    async with websockets.serve(handler, "0.0.0.0", WS_PORT):
-        print("Server ready")
-        await asyncio.Future()
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
 
 
-def main():
+def main() -> None:
+    ws_port = int(os.getenv("WS_PORT", "8765"))
+    whisper_model_path = str(Path(os.getenv("WHISPER_MODEL_PATH", "~/models/faster-whisper-small")).expanduser())
+    whisper_device = os.getenv("WHISPER_DEVICE", "cuda")
+    whisper_compute = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
+    llm_model = os.getenv("LLM_MODEL", "llama3.3")
+    ollama_host = os.getenv("OLLAMA_HOST", None)
+    log_dir = Path(os.getenv("LOG_DIR", "logs/sessions"))
+
+    raw_lang = os.getenv("PRIMARY_LANGUAGE")
+    primary_language = Language(raw_lang) if raw_lang else None
+
+    print("Loading Whisper model…")
+    stt = FasterWhisperSTTService(whisper_model_path, device=whisper_device, compute_type=whisper_compute)
+    llm = OllamaLLMService(model=llm_model, host=ollama_host)
+    tts = KokoroTTSService()
+    print("Services ready.")
+
+    async def _run() -> None:
+        async def handler(ws):
+            await _handle(ws, stt, llm, tts, log_dir, primary_language)
+
+        async with websockets.serve(handler, "0.0.0.0", ws_port):
+            print(f"Server listening on :{ws_port}")
+            await asyncio.Future()
+
     asyncio.run(_run())
 
 
