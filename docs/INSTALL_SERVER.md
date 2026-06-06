@@ -105,7 +105,43 @@ service automatically.
 
 ---
 
-## 6. Set up PostgreSQL
+## 6. (Optional) Pre-download AI models
+
+Whisper, Kokoro, and the embedding model are downloaded automatically on first start
+(~4 GB total). Run the commands below now to avoid the wait, or skip straight to step 7.
+
+All commands run from `memai/server/` after `uv sync`.
+
+### Whisper — faster-whisper medium (~1.5 GB)
+
+```bash
+uv run python -c "
+from huggingface_hub import snapshot_download
+snapshot_download('Systran/faster-whisper-medium', local_dir='$HOME/models/faster-whisper-medium')
+"
+```
+
+Then point `WHISPER_MODEL_PATH` in your `.env` at the same directory (step 8 sets this up).
+
+### Kokoro voice model (~0.4 GB)
+
+```bash
+uv run python -c "from kokoro import KPipeline; KPipeline(lang_code='a')"
+```
+
+This downloads the shared Kokoro weights to `~/.cache/huggingface/`. No extra config needed.
+
+### Embedding model — multilingual-e5-large (~2 GB)
+
+```bash
+uv run python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('intfloat/multilingual-e5-large')"
+```
+
+Cached to `~/.cache/huggingface/`. No extra config needed.
+
+---
+
+## 7. Set up PostgreSQL
 
 ### Create the database and a dedicated user
 
@@ -146,7 +182,7 @@ SQL
 
 ---
 
-## 7. Configure environment variables
+## 8. Configure environment variables
 
 Create a `.env` file in `memai/server/` (or set these variables in your shell / systemd
 unit — whichever you prefer):
@@ -180,15 +216,9 @@ LOG_DIR=logs/sessions
 # PRIMARY_LANGUAGE=en
 ```
 
-> **Note on model downloads:** Whisper, Kokoro voice weights, and the
-> `multilingual-e5-large` embedding model are downloaded automatically on first run by
-> their respective Python libraries. Total size is approximately 4 GB.
-> Set `WHISPER_MODEL_PATH` to a directory that already contains a downloaded model to
-> skip the Whisper download.
-
 ---
 
-## 8. Start the server
+## 9. Start the server
 
 ```bash
 cd memai/server
@@ -203,12 +233,12 @@ Services ready.
 Server listening on :8765
 ```
 
-The first start may take a few minutes while Kokoro and Whisper download their model
-weights. Subsequent starts are fast.
+If you skipped step 6, Kokoro and Whisper will download their weights now (~4 GB total);
+subsequent starts are fast.
 
 ---
 
-## 9. Configure SSH access for the client
+## 10. Configure SSH access for the client
 
 The client auto-establishes an SSH tunnel to the server before opening the WebSocket.
 Key-based authentication must be in place:
