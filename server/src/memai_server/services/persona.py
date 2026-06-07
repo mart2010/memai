@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 from ..domain.events import PersonaSwitched
 from ..domain.model import AssistantPersona, GENERAL_ASSISTANT_ID, Language
 from .ports import PersonaRepository
-from .session import SessionContext
+from .session import WorkingMemory
 
 
 class CreatePersona:
@@ -14,7 +14,7 @@ class CreatePersona:
 
     def execute(
         self,
-        session: SessionContext,
+        session: WorkingMemory,
         name: str,
         system_prompt: str,
         now: datetime,
@@ -84,7 +84,7 @@ class SwitchPersona:
     def __init__(self, persona_repo: PersonaRepository) -> None:
         self._repo = persona_repo
 
-    def execute(self, session: SessionContext, persona_id: UUID) -> PersonaSwitched:
+    def execute(self, session: WorkingMemory, persona_id: UUID) -> PersonaSwitched:
         persona = self._repo.get(persona_id)
         if persona is None:
             raise ValueError(f"Persona {persona_id} not found")

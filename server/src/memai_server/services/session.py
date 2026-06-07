@@ -30,7 +30,7 @@ from .ports import (
 
 
 @dataclass
-class SessionContext:
+class WorkingMemory:
     session_id: UUID
     started_at: datetime
     user: User
@@ -91,7 +91,7 @@ def _strip_conversation_marker(
 def _format_memory_item(item: MemoryItem) -> str:
     from ..domain.model import Concept, Episode, Procedure
     if isinstance(item, Episode):
-        return f"[Memory] {item.summary}"
+        return f"[Episode] {item.summary}"
     if isinstance(item, Concept):
         return f"[Concept] {item.name}: {item.description}"
     if isinstance(item, Procedure):
@@ -99,30 +99,30 @@ def _format_memory_item(item: MemoryItem) -> str:
     return str(item)
 
 
-def _build_llm_input(session: SessionContext, extra_context: list[MemoryItem]) -> tuple[str, list[Message]]:
-    prompt_parts = [session.active_persona.system_prompt]
-    if session.memory_brief:
-        prompt_parts.append(session.memory_brief.content)
-    if extra_context:
-        lines = "\n".join(f"- {_format_memory_item(m)}" for m in extra_context)
+def _compose_working_context(wm: WorkingMemory, recalled_memories: list[MemoryItem]) -> tuple[str, list[Message]]:
+    prompt_parts = [wm.active_persona.system_prompt]
+    if wm.memory_brief:
+        prompt_parts.append(wm.memory_brief.content)
+    if recalled_memories:
+        lines = "\n".join(f"- {_format_memory_item(m)}" for m in recalled_memories)
         prompt_parts.append(f"Relevant memories:\n{lines}")
-    if len(session.available_personas) > 1:
-        persona_lines = "\n".join(f"- {p.name}" for p in session.available_personas)
+    if len(wm.available_personas) > 1:
+        persona_lines = "\n".join(f"- {p.name}" for p in wm.available_personas)
         prompt_parts.append(f"Available personas (reply with [PERSONA:name] to switch):\n{persona_lines}")
     system_prompt = "\n\n".join(prompt_parts)
 
     messages: list[Message] = []
 
-    if session.session_tail:
-        tail_text = "\n".join(f"{t.speaker.value}: {t.content}" for t in session.session_tail)
+    if wm.session_tail:
+        tail_text = "\n".join(f"{t.speaker.value}: {t.content}" for t in wm.session_tail)
         messages.append(Message(role="system", content=f"Tail of previous session:\n{tail_text}"))
 
-    if session.rolling_summary:
+    if wm.rolling_summary:
         messages.append(Message(
             role="system",
-            content=f"Earlier in this conversation: {session.rolling_summary}",
+            content=f"Earlier in this conversation: {wm.rolling_summary}",
         ))
-    for turn in session.recent_turns:
+    for turn in wm.recent_turns:
         role = "user" if turn.speaker == Speaker.USER else "assistant"
         messages.append(Message(role=role, content=turn.content))
 
@@ -146,7 +146,7 @@ class StartSession:
         self._tail_turns = session_tail_turns
         self._threshold_hours = session_continuation_threshold_hours
 
-    def execute(self, session_id: UUID, started_at: datetime) -> SessionContext:
+    def execute(self, session_id: UUID, started_at: datetime) -> WorkingMemory:
         user = self._user_repo.get()
         if user is None:
             raise RuntimeError("No user record found — database not initialised")
@@ -165,7 +165,7 @@ class StartSession:
                         previous.session_id, self._tail_turns
                     )
 
-        return SessionContext(
+        return WorkingMemory(
             session_id=session_id,
             started_at=started_at,
             user=user,
@@ -200,7 +200,7 @@ class ProcessTurn:
         self._turn_logger = turn_logger
         self._rolling_window_size = rolling_window_size
 
-    async def execute(self, session: SessionContext, audio: bytes, now: datetime) -> TurnResult | None:
+    async def execute(self, wm: WorkingMemory, audio: bytes, now: datetime) -> TurnResult | None:
         # 1. STT
         text, detected_language = self._stt.transcribe(audio)
         if not text.strip():
@@ -210,26 +210,26 @@ class ProcessTurn:
         user_turn = Turn(timestamp=now, speaker=Speaker.USER, content=text)
         user_turn.language = detected_language
 
-        # 3. Log to file (primary write) + update live context
-        self._turn_logger.append(session.session_id, user_turn)
-        is_first_turn = session.total_turn_count == 0
-        session.recent_turns.append(user_turn)
-        session.total_turn_count += 1
+        # 3. Log to file (primary write) + update working memory
+        self._turn_logger.append(wm.session_id, user_turn)
+        is_first_turn = wm.total_turn_count == 0
+        wm.recent_turns.append(user_turn)
+        wm.total_turn_count += 1
 
-        # 4. Recall intent → enrich LLM context
-        extra_context: list[MemoryItem] = []
+        # 4. Recall intent → enrich working context from LTM
+        recalled_memories: list[MemoryItem] = []
         recall = self._recall_detector.detect(text)
         if recall:
             embedding = self._embedding_service.embed(recall.query)
-            extra_context = [
+            recalled_memories = [
                 item for _, item in self._memory_repo.search(
                     embedding, recall.memory_types, top_n=5,
-                    persona_id=session.active_persona.id,
+                    persona_id=wm.active_persona.id,
                 )
             ]
 
         # 5. Collect LLM response, strip markers, synthesise sentence-by-sentence
-        system_prompt, messages = _build_llm_input(session, extra_context)
+        system_prompt, messages = _compose_working_context(wm, recalled_memories)
         raw_response = ""
         async for token in self._llm.complete(messages, system_prompt):
             raw_response += token
@@ -237,7 +237,7 @@ class ProcessTurn:
         assistant_content, detected_name = _strip_persona_prefix(raw_response.strip())
         assistant_content, boundary_marker = _strip_conversation_marker(assistant_content, is_first_turn)
 
-        voice = session.active_persona.tts_voice
+        voice = wm.active_persona.tts_voice
         audio_chunks: list[bytes] = []
         sentence_buffer = ""
         for ch in assistant_content:
@@ -258,24 +258,24 @@ class ProcessTurn:
                 (p for p in self._persona_repo.list_all() if p.name.lower() == detected_name.lower()),
                 None,
             )
-            if match and match.id != session.active_persona.id:
+            if match and match.id != wm.active_persona.id:
                 persona_switched = PersonaSwitched(
-                    from_persona_id=session.active_persona.id,
+                    from_persona_id=wm.active_persona.id,
                     to_persona_id=match.id,
                 )
-                session.active_persona = match
+                wm.active_persona = match
 
-        # 8. Log assistant turn + update live context
+        # 8. Log assistant turn + update working memory
         # Fresh timestamp captures when the LLM finished — gap from `now` reflects response time.
         assistant_turn = Turn(timestamp=datetime.now(UTC), speaker=Speaker.ASSISTANT, content=assistant_content)
-        self._turn_logger.append(session.session_id, assistant_turn, marker=boundary_marker, persona_id=session.active_persona.id)
-        session.recent_turns.append(assistant_turn)
-        session.total_turn_count += 1
+        self._turn_logger.append(wm.session_id, assistant_turn, marker=boundary_marker, persona_id=wm.active_persona.id)
+        wm.recent_turns.append(assistant_turn)
+        wm.total_turn_count += 1
 
         # 9. Rolling window check
         if (self._rolling_window_size > 0
-                and session.total_turn_count % self._rolling_window_size == 0):
-            await self._summarise_window(session)
+                and wm.total_turn_count % self._rolling_window_size == 0):
+            await self._summarise_window(wm)
 
         return TurnResult(
             audio_chunks=audio_chunks,
@@ -284,26 +284,26 @@ class ProcessTurn:
             conversation_boundary=boundary,
         )
 
-    async def _summarise_window(self, session: SessionContext) -> None:
+    async def _summarise_window(self, wm: WorkingMemory) -> None:
         n = self._rolling_window_size // 2
-        turns = session.recent_turns[:n]
+        turns = wm.recent_turns[:n]
         excerpt = "\n".join(f"{t.speaker.value}: {t.content}" for t in turns)
         content = excerpt
-        if session.rolling_summary:
-            content = f"Previous summary:\n{session.rolling_summary}\n\nNew turns:\n{excerpt}"
+        if wm.rolling_summary:
+            content = f"Previous summary:\n{wm.rolling_summary}\n\nNew turns:\n{excerpt}"
         tokens: list[str] = []
         async for token in self._llm.complete(
             messages=[Message(role="user", content=f"Summarise concisely:\n{content}")],
             system_prompt="You are a conversation summariser. Be brief.",
         ):
             tokens.append(token)
-        session.rolling_summary = "".join(tokens).strip()
-        session.recent_turns = session.recent_turns[n:]
+        wm.rolling_summary = "".join(tokens).strip()
+        wm.recent_turns = wm.recent_turns[n:]
 
 
 class EndSession:
     def __init__(self, turn_logger: TurnLogger) -> None:
         self._turn_logger = turn_logger
 
-    def execute(self, session: SessionContext, ended_at: datetime) -> None:
-        self._turn_logger.close(session.session_id, ended_at, clean_exit=True)
+    def execute(self, wm: WorkingMemory, ended_at: datetime) -> None:
+        self._turn_logger.close(wm.session_id, ended_at, clean_exit=True)

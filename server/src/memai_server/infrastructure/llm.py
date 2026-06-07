@@ -4,7 +4,7 @@ from datetime import datetime
 
 import ollama
 
-from ..domain.events import RecallTriggered
+from ..domain.events import RecallSource, RecallTriggered
 from ..domain.model import (
     Concept,
     Conversation,
@@ -117,7 +117,7 @@ class OllamaRecallIntentDetector:
         memory_types = tuple(
             MemoryType(t) for t in data.get("memory_types", []) if t in valid_values
         ) or tuple(MemoryType)
-        return RecallTriggered(query=query, memory_types=memory_types)
+        return RecallTriggered(query=query, memory_types=memory_types, source=RecallSource.USER)
 
 
 class OllamaMemorySynthesizer:

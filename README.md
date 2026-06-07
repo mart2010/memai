@@ -18,6 +18,51 @@ Memai is a real-time voice assistant that listens, thinks, and speaks — and ac
 
 ---
 
+## Cognitive inspiration
+
+Memai's memory architecture is modelled on how human memory actually works, drawing from decades of cognitive science research and modern AI memory frameworks. The goal is not to simulate a brain — it is to make an assistant that *behaves* like one: remembering what matters, forgetting what does not, and deepening its understanding of you over time.
+
+### Short-term memory — the working context
+
+Human short-term memory (STM) is a limited-capacity workspace that holds only what is immediately relevant. The LLM context window is its computational analogue — bounded, precious, and actively managed:
+
+- A **memory brief** (distilled persona and recurring themes) is injected at every session start
+- A **session tail** carries the most recent turns from the previous session when continuing a conversation
+- A **rolling summary** folds the oldest turns into compact form as sessions grow long, preventing context overflow
+- **On-demand recall** pulls targeted chunks from long-term memory directly into the working context when needed
+
+### Long-term memory — three distinct subsystems
+
+Cognitive research distinguishes three types of long-term memory, each with different structure and retrieval characteristics. Memai implements all three:
+
+| Human memory type | What it stores | Memai equivalent |
+|---|---|---|
+| **Episodic** | Personal events anchored in time | `Episode` — *"you mentioned the Paris trip last spring"* |
+| **Semantic** | Conceptual knowledge about the world | `Concept` — domain knowledge, persona-scoped, synthesised over time |
+| **Procedural** | How to do things | `Procedure` — step-by-step or heuristic know-how |
+
+All three types are stored as 1024-dimensional vector embeddings alongside their structured fields, enabling semantic similarity search at recall time.
+
+### Memory consolidation — the feedback loop
+
+In humans, memories are consolidated during sleep: the hippocampus replays recent experiences and integrates them into long-term cortical storage. Memai mirrors this with an **offline consolidation pass** triggered after each session ends:
+
+1. Raw conversation turns are fed to an LLM, which extracts candidate Episodes, Concepts, and Procedures
+2. Each candidate is embedded and compared against existing long-term memory via vector similarity — merging with known memories above the threshold, or inserting as new ones below it
+3. A fresh memory brief is generated, ready for the next session
+
+This boundary between live conversation (read-only, low-latency) and offline consolidation (write-heavy, async) is a hard architectural invariant — keeping the real-time voice loop fast while ensuring nothing is ever lost.
+
+### Engagement levels — depth of learning
+
+Inspired by learning science (spaced repetition, the Ebbinghaus forgetting curve), Memai tracks how deeply each concept has been absorbed across sessions:
+
+`unseen → mentioned → explored → practiced → integrated`
+
+A specialised persona uses this to calibrate responses to the user's actual level — introducing a concept gently the first time, and going deep once it is integrated. Concepts loaded from injected reference documents start as `unseen`; the progression unfolds naturally through conversation.
+
+---
+
 ## Architecture
 
 Memai is a two-component monorepo:

@@ -18,6 +18,7 @@ from .ports import (
 )
 
 _ENGAGEMENT_ORDER = [
+    EngagementLevel.UNSEEN,
     EngagementLevel.MENTIONED,
     EngagementLevel.EXPLORED,
     EngagementLevel.PRACTICED,
@@ -73,7 +74,7 @@ class TriggerRecall:
         return [item for _, item in self._memory_repo.search(embedding, memory_types, top_n)]
 
 
-class RunConsolidation:
+class ConsolidateMemory:
     def __init__(
         self,
         conversation_repo: ConversationRepository,

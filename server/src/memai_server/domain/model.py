@@ -27,6 +27,7 @@ SUPPORTED_LANGUAGES: list[Language] = [
 
 
 class EngagementLevel(Enum):
+    UNSEEN = "unseen"
     MENTIONED = "mentioned"
     EXPLORED = "explored"
     PRACTICED = "practiced"
