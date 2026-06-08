@@ -16,6 +16,7 @@ dependencies = [
     "pgvector>=0.3",
     "sentence-transformers>=3.0",
     "websockets>=16.0",
+    "openai>=1.30",
 ]
 
 [project.optional-dependencies]

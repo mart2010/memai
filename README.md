@@ -120,6 +120,31 @@ On first launch, Memai guides you through language selection. After that, everyt
 
 ---
 
+## Deployment alternatives
+
+The default setup above is fully local and air-gapped. But every inference service in Memai is a swappable adapter — there is no lock-in. If you are comfortable trading some privacy for convenience (or simply do not have a GPU), each component can be replaced independently:
+
+| Component | Local (default) | Cloud alternative |
+|---|---|---|
+| Speech-to-text | `faster-whisper` on GPU | Whisper API, Deepgram, AssemblyAI |
+| Language model | `llama3.3` via `ollama` | OpenRouter, OpenAI, Anthropic, … |
+| Text-to-speech | Kokoro on GPU | ElevenLabs, Azure TTS, … |
+| Embeddings | `multilingual-e5-large` on CPU/GPU | OpenAI Embeddings API |
+| Memory store | PostgreSQL on your machine | Managed cloud PostgreSQL + pgvector |
+
+OpenRouter support is already built in — set `OPENROUTER_API_KEY` and pick your model. Everything else stays local.
+
+**On the privacy spectrum**, the components are not equally sensitive:
+
+- **LLM** — sees each conversation in full, but only transiently. No conversation text is stored by Memai on the provider's side.
+- **STT / TTS** — audio and synthesised speech pass through the provider. If you use a cloud STT, each utterance is sent upstream.
+- **Embeddings** — the most sensitive to outsource. Every Episode, Concept, and Procedure you have ever stored gets fingerprinted by the embedding provider if you swap this out. The local default keeps your entire long-term memory index private.
+- **Memory store** — the crown jewel. Hosting PostgreSQL on a cloud VM is reasonable (you own the instance); using a fully managed third-party DB-as-a-service means your accumulated personal knowledge lives on someone else's disk.
+
+The fully local setup is the recommended default. Everything else is an explicit trade-off that you make with full awareness.
+
+---
+
 ## License
 
 This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See the [LICENSE](LICENSE) file for details.
