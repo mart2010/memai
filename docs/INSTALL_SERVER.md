@@ -37,14 +37,53 @@ CUDA toolkit installation is needed; only the driver is required.
 ```bash
 sudo apt update
 
-# PostgreSQL 15 + pgvector
-sudo apt install -y postgresql-15 postgresql-15-pgvector
-
 # espeak-ng — phonemiser backend used by Kokoro TTS for non-English languages
 sudo apt install -y espeak-ng
 
 # Build tools (needed by some Python wheels)
 sudo apt install -y build-essential
+```
+
+### PostgreSQL + pgvector
+
+**Option A — Docker (recommended)**
+
+```bash
+sudo docker run -d \
+  --name memai-postgres \
+  --restart unless-stopped \
+  -e POSTGRES_USER=memai \
+  -e POSTGRES_PASSWORD=memai \
+  -e POSTGRES_DB=memai \
+  -p 5432:5432 \
+  pgvector/pgvector:pg16
+```
+
+Verify pgvector is available:
+
+```bash
+sudo docker exec -it memai-postgres psql -U memai -d memai \
+  -c "CREATE EXTENSION IF NOT EXISTS vector; SELECT extversion FROM pg_extension WHERE extname = 'vector';"
+```
+
+You should see a version number (e.g. `0.8.2`). The container restarts automatically on
+reboot (`--restart unless-stopped`). To persist data across `docker rm`, add
+`-v /opt/memai/pgdata:/var/lib/postgresql/data` to the `docker run` command.
+
+**Option B — system apt**
+
+If Docker is not available, add the official PostgreSQL apt repository first, then install:
+
+```bash
+sudo apt install -y curl ca-certificates
+sudo install -d /usr/share/postgresql-common/pgdg
+sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
+  https://www.postgresql.org/media/keys/ACCC4CF8.asc
+sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+  https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+  > /etc/apt/sources.list.d/pgdg.list'
+sudo apt update
+sudo apt install -y postgresql-16 postgresql-16-pgvector
 ```
 
 ### Install Ollama
@@ -112,10 +151,24 @@ Whisper, Kokoro, and the embedding model are downloaded automatically on first s
 
 All commands run from `memai/server/` after `uv sync`.
 
+The `hf` CLI is installed automatically as part of `uv sync`. If for any reason it is
+missing, install it manually:
+
+```bash
+uv pip install huggingface_hub[cli]
+```
+
+If downloads fail with an SSL certificate error, prefix commands with `SSL_CERT_FILE`:
+
+```bash
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt uv run hf download ...
+```
+
 ### Whisper — faster-whisper medium (~1.5 GB)
 
 ```bash
-uv run huggingface-cli download Systran/faster-whisper-medium \
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+uv run hf download Systran/faster-whisper-medium \
   --local-dir ~/models/faster-whisper-medium
 ```
 
@@ -127,6 +180,7 @@ faster-whisper accepts model names and will download on first start automaticall
 ### Kokoro voice model (~0.4 GB)
 
 ```bash
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
 uv run python -c "from kokoro import KPipeline; KPipeline(lang_code='a')"
 ```
 
@@ -136,7 +190,8 @@ standalone CLI equivalent. No extra config needed after this runs.
 ### Embedding model — multilingual-e5-large (~2 GB)
 
 ```bash
-uv run huggingface-cli download intfloat/multilingual-e5-large
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
+uv run hf download intfloat/multilingual-e5-large
 ```
 
 Cached to `~/.cache/huggingface/`. No extra config needed.
@@ -147,7 +202,15 @@ All three models are public — no HuggingFace account or token is required.
 
 ## 7. Set up PostgreSQL
 
-### Create the database and a dedicated user
+### Docker setup (recommended)
+
+If you followed the Docker path in step 2, the `memai` database and user were created
+automatically by the `POSTGRES_*` environment variables. Skip straight to the "Run the schema migration"
+below — then continue with the User record seed.
+
+### System apt setup
+
+If you used the system apt path, create the database and user manually:
 
 ```bash
 sudo -u postgres psql <<'SQL'
@@ -159,11 +222,20 @@ GRANT ALL ON SCHEMA public TO memai;
 SQL
 ```
 
-Replace `changeme` with a password of your choice.
+Replace `changeme` with a password of your choice and update `DATABASE_URL` in step 8.
 
 ### Run the schema migration
 
-From the `memai/server` directory:
+From the `memai/server` directory.
+
+**Docker:**
+
+```bash
+sudo docker exec -i memai-postgres psql -U memai -d memai \
+  < migrations/001_initial_schema.sql
+```
+
+**System apt:**
 
 ```bash
 psql -h localhost -U memai -d memai -f migrations/001_initial_schema.sql
@@ -176,6 +248,15 @@ This creates all tables, HNSW vector indexes, and seeds the `GeneralAssistant` p
 Memai is a single-user application; one row in `users` must exist before the server
 can start. Language is left NULL here — it is set during the first voice session via
 the onboarding flow.
+
+**Docker:**
+
+```bash
+sudo docker exec -it memai-postgres psql -U memai -d memai \
+  -c "INSERT INTO users (id, primary_language, secondary_languages) VALUES (gen_random_uuid(), NULL, '{}');"
+```
+
+**System apt:**
 
 ```bash
 psql -h localhost -U memai -d memai <<'SQL'
@@ -274,7 +355,8 @@ rule for port 8765 is needed on the server; SSH (port 22) is sufficient.
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `RuntimeError: No user record found` | User row not inserted | Re-run step 6 seed SQL |
+| `manifest unknown` on `docker pull` | Wrong image tag | Use `pgvector/pgvector:pg16` (no `-ubuntu` suffix) |
+| `RuntimeError: No user record found` | User row not inserted | Re-run step 7 seed SQL |
 | `ollama: connection refused` | Ollama not running | `systemctl start ollama` |
 | `CUDA out of memory` | VRAM exhausted | Reduce `WHISPER_COMPUTE_TYPE` to `int8`; or offload LLM with `OLLAMA_NUM_GPU=0` |
 | Kokoro TTS silent / error | `espeak-ng` missing | `sudo apt install espeak-ng` |
