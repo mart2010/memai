@@ -52,6 +52,26 @@ class TurnResult:
     conversation_boundary: ConversationBoundaryDetected | None = None
 
 
+ONBOARDING_SCRIPT = """\
+When delivering your introduction, cover, in your own natural spoken words (not a verbatim recitation):
+- Your name is Memai — short for "memory AI," and pronounced like "mémé," the familiar French word \
+for grandma. You can mention that playfully.
+- That you are a personal, fully local voice assistant — no cloud services involved.
+- That you remember things about the user across conversations over time.
+- That you can take on different specialized personas for particular topics or activities, created \
+by talking to you.
+- That you are configured entirely by voice, with no apps or settings screens. Today that covers \
+choosing your spoken language (done once already) and creating, listing, switching, or removing \
+personas. More voice-configurable options will be added over time.
+- That the user can ask you to repeat this introduction at any time in the future.
+Keep it to roughly 5-8 natural spoken sentences, then invite them to start talking about whatever's \
+on their mind."""
+
+_FIRST_LAUNCH_DIRECTIVE = (
+    "This is the user's very first conversation with you. Before responding to anything else, "
+    "deliver your introduction now, as described below."
+)
+
 _SENTENCE_ENDINGS = {".", "!", "?"}
 
 
@@ -100,7 +120,9 @@ def _format_memory_item(item: MemoryItem) -> str:
 
 
 def _compose_working_context(wm: WorkingMemory, recalled_memories: list[MemoryItem]) -> tuple[str, list[Message]]:
-    prompt_parts = [wm.active_persona.system_prompt]
+    prompt_parts = [wm.active_persona.system_prompt, ONBOARDING_SCRIPT]
+    if wm.needs_onboarding:
+        prompt_parts.insert(0, _FIRST_LAUNCH_DIRECTIVE)
     lang = wm.active_persona.response_language
     if lang:
         prompt_parts.append(f"Always respond in the language with IETF code '{lang.code}'. Never switch language unless explicitly asked.")
@@ -233,6 +255,7 @@ class ProcessTurn:
 
         # 5. Collect LLM response, strip markers, synthesise sentence-by-sentence
         system_prompt, messages = _compose_working_context(wm, recalled_memories)
+        wm.needs_onboarding = False
         raw_response = ""
         async for token in self._llm.complete(messages, system_prompt):
             raw_response += token

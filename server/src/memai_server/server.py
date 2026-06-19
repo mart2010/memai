@@ -46,7 +46,9 @@ class _PersonaRepo:
             system_prompt=(
                 "You are a helpful voice assistant. "
                 "Keep responses concise and natural — one or two sentences. "
-                "Never use markdown formatting."
+                "Never use markdown formatting. "
+                "If the user asks what you can do, how to configure you, or asks to hear your "
+                "introduction again, deliver the onboarding introduction."
             ),
         )
 
@@ -167,7 +169,6 @@ async def _handle(
                 session.user.primary_language = lang
                 session.active_persona.tts_voice = voice
                 session.active_persona.response_language = lang
-                session.needs_onboarding = False
                 onboarding_done = True
                 print(f"Language selected: {lang_code}, voice: {voice}")
                 continue

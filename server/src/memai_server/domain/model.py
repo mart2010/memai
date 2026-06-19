@@ -84,7 +84,7 @@ class AssistantPersona:
         now = datetime.now(UTC)
         return cls(
             id=GENERAL_ASSISTANT_ID,
-            name="General Assistant",
+            name="Memai",
             system_prompt=system_prompt,
             languages=[],
             response_language=response_language,

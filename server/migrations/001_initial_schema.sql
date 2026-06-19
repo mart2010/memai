@@ -136,8 +136,8 @@ CREATE INDEX procedures_embedding_hnsw
 INSERT INTO personas (id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000001',
-    'General Assistant',
-    'You are a helpful, honest assistant.',
+    'Memai',
+    'You are a helpful, honest voice assistant. If the user asks what you can do, how to configure you, or asks to hear your introduction again, deliver the onboarding introduction.',
     '{}',
     'en',
     'af_heart',
