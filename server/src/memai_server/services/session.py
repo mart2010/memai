@@ -101,6 +101,9 @@ def _format_memory_item(item: MemoryItem) -> str:
 
 def _compose_working_context(wm: WorkingMemory, recalled_memories: list[MemoryItem]) -> tuple[str, list[Message]]:
     prompt_parts = [wm.active_persona.system_prompt]
+    lang = wm.active_persona.response_language
+    if lang:
+        prompt_parts.append(f"Always respond in the language with IETF code '{lang.code}'. Never switch language unless explicitly asked.")
     if wm.memory_brief:
         prompt_parts.append(wm.memory_brief.content)
     if recalled_memories:
@@ -233,7 +236,6 @@ class ProcessTurn:
         raw_response = ""
         async for token in self._llm.complete(messages, system_prompt):
             raw_response += token
-
         assistant_content, detected_name = _strip_persona_prefix(raw_response.strip())
         assistant_content, boundary_marker = _strip_conversation_marker(assistant_content, is_first_turn)
 

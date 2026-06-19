@@ -87,7 +87,7 @@ async def run() -> None:
             else:
                 if speech_active:
                     silence_counter += 1
-                if silence_counter > 10:
+                if silence_counter > 25:
                     print("End of utterance")
                     speech_active = False
                     silence_counter = 0

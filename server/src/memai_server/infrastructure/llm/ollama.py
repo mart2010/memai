@@ -22,7 +22,7 @@ class OllamaLLMService:
         ollama_messages = [{"role": "system", "content": system_prompt}]
         for m in messages:
             ollama_messages.append({"role": m.role, "content": m.content})
-        async for part in self._client.chat(
+        async for part in await self._client.chat(
             model=self._model,
             messages=ollama_messages,
             stream=True,

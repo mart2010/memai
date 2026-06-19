@@ -307,7 +307,7 @@ LOG_DIR=logs/sessions
 
 ```bash
 cd memai/server
-.venv/bin/memai-server
+SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt .venv/bin/memai-server
 ```
 
 Expected startup output:

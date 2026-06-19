@@ -74,8 +74,8 @@ Microphone → [VAD] → WebSocket → [STT] → [LLM stream] → [TTS] → WebS
 
 | Component | Runs on | Role |
 |---|---|---|
-| `client/` | Your everyday machine (Windows today, multi-OS planned) | Captures audio, plays back speech, auto-opens SSH tunnel to server |
-| `server/` | Any GPU-equipped machine on your network | STT → LLM → TTS pipeline, persistent memory, consolidation |
+| `client/` | Your everyday machine (Windows, macOS, Linux) | Captures audio, plays back speech, auto-opens SSH tunnel to server |
+| `server/` | Any NVIDIA GPU-equipped machine (Linux recommended; Windows with CUDA untested) | STT → LLM → TTS pipeline, persistent memory, consolidation |
 
 **All models run locally:**
 
@@ -94,17 +94,16 @@ Microphone → [VAD] → WebSocket → [STT] → [LLM stream] → [TTS] → WebS
 **Requirements:** Python 3.13+, a GPU server with CUDA, PostgreSQL with pgvector.
 
 ```bash
-# Server (GPU machine — Ubuntu)
-cd server
-uv venv && uv pip install -e .
-# Replace CPU torch with the CUDA build for your toolkit version
-memai-server
+# Server (GPU machine — Linux/Ubuntu)
+cd server && uv sync
+.venv/bin/memai-server
 
-# Client (your machine — Windows)
-cd client
-uv venv && uv pip install -e .
-# Set SSH_USER_HOST=user@your-gpu-machine in your environment
-memai-client
+# Client (your machine — Windows, macOS, or Linux)
+mkdir memai-client && cd memai-client
+uv venv && uv pip install "git+<repo-url>#subdirectory=client"
+# Set SSH_USER_HOST=user@your-gpu-machine in a .env file
+.venv/bin/memai-client   # Linux/macOS
+# .venv\Scripts\memai-client  # Windows
 ```
 
 On first launch, Memai guides you through language selection. After that, everything is configured by voice — no CLI arguments, no config files to edit.
