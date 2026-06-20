@@ -10,7 +10,7 @@ It handles speech-to-text, LLM inference, and text-to-speech — all locally, no
 | Component | Minimum |
 |---|---|
 | OS | Ubuntu 22.04+ (other Debian-based distros should work) |
-| GPU | NVIDIA GPU with ≥ 8 GB VRAM (10 GB+ recommended for Whisper + LLM simultaneously) |
+| GPU | NVIDIA GPU with ≥ 8 GB VRAM (10 GB+ recommended for Whisper + Kokoro + LLM simultaneously) |
 | RAM | 16 GB system RAM |
 | Disk | ~20 GB free (models + venv + logs) |
 | NVIDIA driver | 525+ (supports CUDA 12.x) |
@@ -135,12 +135,31 @@ uv sync
 ## 5. Pull the LLM model
 
 ```bash
-ollama pull llama3.3
+ollama pull aya-expanse
 ```
 
-This downloads approximately 9 GB. Ollama must be running (`systemctl status ollama`)
+This downloads approximately 5 GB. Ollama must be running (`systemctl status ollama`)
 before the server starts — the `install.sh` script above configures it as a systemd
 service automatically.
+
+**Model choice matters more than it looks.** Whisper and Kokoro already occupy several
+GB of VRAM, so the LLM needs to fit in what's left to run fully on GPU:
+
+- **Avoid large (~70B-class) models like `llama3.3`.** On a 24 GB GPU it doesn't fit
+  alongside STT/TTS, so Ollama silently splits it across CPU+GPU — inference becomes
+  several times slower, and the model gets evicted from memory after a few idle minutes,
+  causing a 30s+ "cold load" stall on the next turn (this is exactly what produced
+  apparent silence/no-response on the client during testing).
+- **Avoid reasoning models like `qwen3`.** They emit a `<think>...</think>` block before
+  the actual answer. `think: false` in the Ollama API does not suppress this for
+  thinking-tuned models — the assistant ends up trying to speak its internal reasoning
+  out loud, and latency suffers from the extra reasoning tokens regardless.
+- **`aya-expanse` (~8B) is a good default**: multilingual by design (useful since Memai
+  is language-agnostic), no reasoning overhead, and comfortably fits in VRAM alongside
+  Whisper + Kokoro on an 8-10 GB+ GPU.
+
+A good sanity check after pulling any model: `ollama ps` after a chat call should show
+`100% GPU` in the `PROCESSOR` column, not a CPU/GPU split.
 
 ---
 
@@ -284,7 +303,7 @@ WHISPER_DEVICE=cuda
 WHISPER_COMPUTE_TYPE=float16   # use int8 if VRAM is tight
 
 # ── LLM (Ollama) ───────────────────────────────────────────────────────────
-LLM_MODEL=llama3.3
+LLM_MODEL=aya-expanse
 # OLLAMA_HOST=http://localhost:11434   # uncomment if Ollama runs on another host
 
 # ── Database (PostgreSQL) ──────────────────────────────────────────────────
@@ -358,7 +377,9 @@ rule for port 8765 is needed on the server; SSH (port 22) is sufficient.
 | `manifest unknown` on `docker pull` | Wrong image tag | Use `pgvector/pgvector:pg16` (no `-ubuntu` suffix) |
 | `RuntimeError: No user record found` | User row not inserted | Re-run step 7 seed SQL |
 | `ollama: connection refused` | Ollama not running | `systemctl start ollama` |
-| `CUDA out of memory` | VRAM exhausted | Reduce `WHISPER_COMPUTE_TYPE` to `int8`; or offload LLM with `OLLAMA_NUM_GPU=0` |
+| `CUDA out of memory` | VRAM exhausted | Reduce `WHISPER_COMPUTE_TYPE` to `int8`; or pick a smaller LLM that fits alongside Whisper+Kokoro |
+| No response heard, but no error logged | LLM model too large for VRAM, split across CPU/GPU and evicted when idle — cold reload stalls the next turn | Check `ollama ps` shows `100% GPU`; switch to a smaller model (e.g. `aya-expanse`) |
+| Assistant seems to ramble or speaks oddly before answering | Reasoning model (e.g. `qwen3`) emitting `<think>` blocks that get spoken aloud | Use a non-reasoning model; `think: false` does not suppress this on thinking-tuned models |
 | Kokoro TTS silent / error | `espeak-ng` missing | `sudo apt install espeak-ng` |
 | WebSocket connection refused | Wrong port or server not started | Verify `WS_PORT` matches on both sides |
 | SSH tunnel fails | No key auth | Run `ssh-copy-id` (step 9) |
@@ -369,9 +390,9 @@ rule for port 8765 is needed on the server; SSH (port 22) is sufficient.
 
 | Item | Size (approx.) |
 |---|---|
-| llama3.3 (Ollama) | ~9 GB |
+| aya-expanse (Ollama) | ~5 GB |
 | Whisper medium | ~1.5 GB |
 | multilingual-e5-large | ~2 GB |
 | Kokoro voice model | ~0.4 GB |
 | Python venv + libs | ~2 GB |
-| **Total** | **~15 GB** |
+| **Total** | **~11 GB** |

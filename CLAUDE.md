@@ -9,7 +9,7 @@ AI voice assistant that runs entirely on local, open-source infrastructure — n
 - **`client/`** — runs on the user's machine; captures microphone audio and plays back synthesized speech. Currently developed on Windows; multi-OS support is planned but not yet implemented (approach TBD).
 - **`server/`** — runs on any GPU-equipped machine; handles STT, LLM, and TTS. Currently developed on Ubuntu; other GPU-capable OS are in scope.
 
-The assistant is **language-agnostic**: any primary language is supported as long as it is covered by both faster-whisper (~99 languages) and XTTS v2 (~17 languages). Development is not French-specific.
+The assistant is **language-agnostic**: any primary language is supported as long as it is covered by both faster-whisper (~99 languages) and Kokoro TTS (~9 languages — the limiting factor). Development is not French-specific.
 
 ## Environment Setup
 
@@ -114,8 +114,14 @@ Audio is sent as raw binary WebSocket frames; control messages use JSON text fra
 
 - **STT**: `faster-whisper` — language auto-detected by Whisper (no forced language);
   returns `tuple[str, Language]`
-- **LLM**: `ollama` with `llama3.3`, streamed token by token
-- **TTS**: `XTTS v2` (Coqui) — single multilingual model, CUDA-accelerated (current), ~17 languages
+- **LLM**: `ollama`, streamed token by token. Default model is `aya-expanse` (~8B,
+  multilingual, no reasoning overhead). Avoid large (~70B-class) models like `llama3.3` —
+  they don't fit in VRAM alongside Whisper + Kokoro, so Ollama splits them across CPU/GPU
+  (much slower) and evicts them after a few idle minutes, causing a long cold-reload stall
+  on the next turn. Avoid reasoning models like `qwen3` — their `<think>...</think>` block
+  is not suppressed by `think: false` on thinking-tuned models, so the assistant ends up
+  speaking its internal reasoning out loud.
+- **TTS**: `Kokoro` — single multilingual model, CUDA-accelerated, ~9 languages
 - Session log files written to `logs/sessions/YYYY-MM-DD_<session_id>.jsonl`;
   one JSON line per turn plus inline boundary markers
 
@@ -135,7 +141,7 @@ server/src/memai_server/
 | `SAMPLE_RATE` | 16000 Hz | both |
 | `FRAME_DURATION` | 30 ms | client |
 | WebSocket port | 8765 | both |
-| LLM model | `llama3.3` | server |
+| LLM model | `aya-expanse` | server |
 
 ## Data Model
 

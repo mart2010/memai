@@ -1,7 +1,10 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from uuid import UUID
+
+from num2words import num2words
 
 from ..domain.events import ConversationBoundaryDetected, ConversationBoundaryType, PersonaSwitched
 from ..domain.model import (
@@ -106,6 +109,39 @@ def _strip_conversation_marker(
                 return stripped, None
             return stripped, boundary_type
     return text, None
+
+
+_MARKDOWN_EMPHASIS = re.compile(r"(\*\*\*|\*\*|\*|___|__|_|`)")
+
+
+def _strip_markdown(text: str) -> str:
+    """Drop markdown emphasis/code markers — LLMs emit them despite instructions not to, \
+and TTS reads the literal characters aloud (e.g. "asterisk")."""
+    return _MARKDOWN_EMPHASIS.sub("", text)
+
+
+# Languages num2words can spell out. Others (ja, ko, zh-cn) are left to Kokoro/espeak's
+# own number handling — their number reading is complex enough that a digit-substitution
+# approach would likely do more harm than good.
+_NUM2WORDS_LANGUAGES = {"en", "fr", "es", "it", "pt"}
+_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+
+
+def _spell_out_numbers(text: str, language_code: str | None) -> str:
+    """Convert digit sequences to their spoken form — TTS engines (Kokoro/espeak) read \
+literal digits inconsistently, especially outside English."""
+    if language_code not in _NUM2WORDS_LANGUAGES:
+        return text
+
+    def _replace(match: re.Match[str]) -> str:
+        raw = match.group(0).replace(",", ".")
+        try:
+            value: float | int = float(raw) if "." in raw else int(raw)
+            return num2words(value, lang=language_code)
+        except (ValueError, NotImplementedError):
+            return match.group(0)
+
+    return _NUMBER.sub(_replace, text)
 
 
 def _format_memory_item(item: MemoryItem) -> str:
@@ -261,6 +297,11 @@ class ProcessTurn:
             raw_response += token
         assistant_content, detected_name = _strip_persona_prefix(raw_response.strip())
         assistant_content, boundary_marker = _strip_conversation_marker(assistant_content, is_first_turn)
+        assistant_content = _strip_markdown(assistant_content)
+        response_language = wm.active_persona.response_language
+        assistant_content = _spell_out_numbers(
+            assistant_content, response_language.code if response_language else None
+        )
 
         voice = wm.active_persona.tts_voice
         audio_chunks: list[bytes] = []
