@@ -8,7 +8,7 @@
 ## Starting Point
 
 A working real-time voice pipeline exists in `server/server.py` and `client/client.py`:
-STT (faster-whisper) → LLM (ollama, streamed) → TTS (piper), connected over binary
+STT (faster-whisper) → LLM (ollama, streamed) → TTS (Kokoro), connected over binary
 WebSocket frames. The domain layer, service layer, memory system, and test infrastructure
 are built (Phases 1–2). Existing pipeline logic will be extracted into proper adapters
 during Phase 3.
@@ -47,9 +47,12 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 - [x] `ConversationBoundaryDetected` (boundary_type: ConversationBoundaryType)
 
 ### Domain-owned Protocols
-- [x] `WorthinessEvaluator` Protocol (evaluate(conversation: Conversation) → bool)
-- [x] `RecallIntentDetector` Protocol (detect(text: str) → RecallTriggered | None)
-- [x] `PersonaIntentDetector` Protocol (detect(text: str) → str | None)
+- [x] `RecallIntentDetector` Protocol (detect(text: str) → RecallTriggered | None) —
+      lives in `domain/protocols.py`
+- [~] `WorthinessEvaluator` Protocol (evaluate(conversation: Conversation) → bool) — exists,
+      but lives in `services/ports.py`, not `domain/protocols.py`; not actually domain-owned
+- `PersonaIntentDetector` Protocol — does not exist; removed in favour of LLM self-report
+  (`_strip_persona_prefix` inline in `ProcessTurn`), see Phase 3 LLM section note
 
 ### Unit Tests — Phase 1
 - [x] `Conversation` invariants (add_turn/consolidation guards, eligibility)
@@ -62,7 +65,10 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 Application logic. All infrastructure behind Protocols. Fake* for tests.
 
 ### Infrastructure Ports (defined here, implemented in Phase 3)
-- [x] `STTService` Protocol (transcribe(audio: bytes, language_hint) → tuple[str, Language])
+- [x] `STTService` Protocol — `transcribe(audio: bytes) → tuple[str, Language]`. No
+      `language_hint` param (language is always auto-detected by Whisper); the description
+      here was stale, matching an out-of-sync `FakeSTTService` (see below) rather than the
+      real protocol in `services/ports.py`
 - [x] `LLMService` Protocol (complete(messages, system_prompt) → AsyncIterator[str])
 - [x] `TTSService` Protocol (synthesise(text: str, voice: str) → bytes)
 - [x] `EmbeddingService` Protocol (embed(text: str) → list[float])
@@ -70,13 +76,20 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
 - [x] `SessionLogReader` Protocol (get_previous() → SessionInfo | None; read_tail(session_id, max_turns) → list[Turn])
 - [x] `SessionInfo` value object (session_id, ended_at, clean_exit: bool)
 - [x] `ConversationRepository` Protocol
-- [x] `MemoryRepository` Protocol (upsert + similarity_search per MemoryType)
+- [x] `MemoryRepository` Protocol (upsert + similarity_search per MemoryType; search returns
+      `list[tuple[float, MemoryItem]]` with cosine similarity)
 - [x] `PersonaRepository` Protocol
 - [x] `MemoryBriefRepository` Protocol
 - [x] `TurnLogger` Protocol (append(session_id, turn, marker: ConversationBoundaryType | None), close(session_id, ended_at, clean_exit))
+- [x] `SessionReplayReader` Protocol — not previously listed; backs `TurnLogReplayer`
+      (see Phase 3 note on its actual location)
+- [x] `WorthinessEvaluator`, `DisambiguationEvaluator`, `MemorySynthesizer`,
+      `ConsolidationExtractor` Protocols — not previously listed; all in `services/ports.py`,
+      power the consolidation/merge pipeline (`ConsolidateMemory` in `services/memory.py`)
 
 ### Fake Implementations (in tests/fakes/)
-- [x] `FakeSTTService`
+- [~] `FakeSTTService` — still has a stale `language_hint: Language | None` parameter not
+      present on the real `STTService` protocol; worth removing for consistency
 - [x] `FakeLLMService`
 - [x] `FakeTTSService`
 - [x] `FakeEmbeddingService`
@@ -86,6 +99,8 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
 - [x] `FakeMemoryRepository`
 - [x] `FakePersonaRepository`
 - [x] `FakeMemoryBriefRepository`
+- [x] `FakeSessionReplayReader`, `FakeRecallIntentDetector`, `FakeWorthinessEvaluator`,
+      `FakeConsolidationExtractor` — not previously listed
 - [x] `FakeTurnLogger` (tracks written turns, closed sessions, markers)
 
 ### Services — Interaction Context
@@ -107,9 +122,9 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
 ### Services — Memory Context
 - [x] `TriggerRecall` — embed query → similarity search filtered by memory_types →
       inject top-N results into current turn's LLM context
-- [x] `RunConsolidation` — process all unconsolidated Conversations oldest-first;
-      per conversation: extract Episodes/Concepts/Procedures via upsert pattern; commit
-      all writes + consolidated flag in one DB transaction
+- [x] `ConsolidateMemory` — process all unconsolidated Conversations oldest-first; per conversation: extract
+      Episodes/Concepts/Procedures via upsert pattern; commit all writes + consolidated flag
+      in one DB transaction
 - [x] `GenerateMemoryBrief` — LLM condenses current memory state → overwrite MemoryBrief
 
 ### Services — User Management
@@ -121,7 +136,7 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
 - [x] `ProcessTurn` — recall path (RecallTriggered fired + context injected),
       topic break / continuation markers, rolling window trigger
 - [x] `EndSession` — TurnLogger closed with clean_exit=True
-- [x] `RunConsolidation` — worthy vs. unworthy conversation, concepts always extracted,
+- [x] `ConsolidateMemory` — worthy vs. unworthy conversation, concepts always extracted,
       consolidated flag set, already-consolidated conversations skipped on rerun
 - [x] `UpdatePrimaryLanguage` — event fired, no-op on same language
 - [x] `CreatePersona` / `EditPersona` / `RemovePersona` / `SwitchPersona` — guards, event, session update
@@ -146,10 +161,15 @@ One adapter at a time. Inner layers unchanged.
       — integer PKs (BIGSERIAL/SERIAL) for conversations/episodes/concepts/procedures; UUID for personas/users
       — concepts/procedures carry persona_id FK (ON DELETE CASCADE); episodes use origin_conversation_id
       — turns carry `session_id UUID NOT NULL` (source JSONL file); indexed for TurnLogReplayer idempotency
-- [x] `TurnLogReplayer` — replays unprocessed JSONL session files into the DB (creates
+- [x] `TurnLogReplayer` — lives in `services/replay.py` (a use case, not an infra adapter —
+      misfiled under "Persistence" here; it orchestrates `ConversationRepository`/
+      `PersonaRepository`/`SessionReplayReader` ports). Its JSONL-side counterpart,
+      `JSONLSessionReplayReader` (implements `SessionReplayReader`), lives in
+      `infrastructure/json_file.py` and was previously unmentioned. Replays unprocessed
+      JSONL session files into the DB (creates
       Conversation + Turn records); triggered two ways:
       (1) **Primary** — idle timer after clean session close: if no new session opens within
-          N minutes of the `session_closed` marker, fire TurnLogReplayer → RunConsolidation
+          N minutes of the `session_closed` marker, fire TurnLogReplayer → ConsolidateMemory
           → GenerateMemoryBrief; timer is cancelled if a new session starts first.
       (2) **Recovery** — on server start: catch any sessions not yet in the DB due to a
           crash or power loss (no `session_closed` marker present).
@@ -168,17 +188,28 @@ One adapter at a time. Inner layers unchanged.
 - [x] `PSMemoryBriefRepository` (`infrastructure/postgres.py`)
 
 ### STT
-- [x] `FasterWhisperSTTService` (`infrastructure/stt.py`) — auto-detects language (no forced language);
-      language_hint accepted but unused; CUDA float16
+- [x] `FasterWhisperSTTService` (`infrastructure/stt.py`) — auto-detects language (no forced
+      language); takes only `audio: bytes` — no `language_hint` param exists on the real
+      protocol or this adapter
 
 ### LLM
-- [x] `OllamaLLMService` (`infrastructure/llm.py`) — async streaming via `ollama.AsyncClient`
-- [x] `OllamaWorthinessEvaluator` (`infrastructure/llm.py`) — sync one-shot, YES/NO prompt
-- [x] `OllamaRecallIntentDetector` (`infrastructure/llm.py`) — sync, JSON format mode
-- [x] `OllamaConsolidationExtractor` (`infrastructure/llm.py`) — sync, JSON format mode;
+`infrastructure/llm/` is a package (`__init__.py`, `_common.py`, `ollama.py`,
+`openrouter.py`), not the single `infrastructure/llm.py` file referenced below.
+- [x] `OllamaLLMService` (`infrastructure/llm/ollama.py`) — async streaming via `ollama.AsyncClient`
+- [x] `OllamaWorthinessEvaluator` (`infrastructure/llm/ollama.py`) — sync one-shot, YES/NO prompt
+- [x] `OllamaRecallIntentDetector` (`infrastructure/llm/ollama.py`) — sync, JSON format mode
+- [x] `OllamaConsolidationExtractor` (`infrastructure/llm/ollama.py`) — sync, JSON format mode;
       extracts Episodes/Concepts/Procedures; persona_id from conversation snapshot
       — `OllamaPersonaIntentDetector` removed: persona switching is LLM self-report only
         (`_strip_persona_prefix` inline in `ProcessTurn`); no domain protocol needed
+- [x] `OllamaMemorySynthesizer`, `OllamaDisambiguationEvaluator` (`infrastructure/llm/ollama.py`)
+      — not previously listed; back the merge/synthesis path in `ConsolidateMemory`
+- [x] Full `OpenRouter*` adapter family (`infrastructure/llm/openrouter.py`) — not previously
+      listed at all: `OpenRouterLLMService`, `OpenRouterWorthinessEvaluator`,
+      `OpenRouterRecallIntentDetector`, `OpenRouterConsolidationExtractor`,
+      `OpenRouterMemorySynthesizer`, `OpenRouterDisambiguationEvaluator` — OpenAI-compatible
+      client against openrouter.ai; a less-private, cloud-gateway alternative to the
+      fully-local Ollama family, for users willing to trade privacy for capability/cost
 
 ### TTS
 - [x] `KokoroTTSService` (`infrastructure/tts.py`) — Kokoro (Apache-2.0); lazily initialises
@@ -190,11 +221,16 @@ One adapter at a time. Inner layers unchanged.
       `intfloat/multilingual-e5-large`, 1024-dim, L2-normalised
 
 ### Similarity threshold & merge logic
-- [ ] Replace hardcoded `similarity_threshold=0.85` in `RunConsolidation` with a global
-      config value — this is a critical tuning parameter
-- [ ] Revisit `_cosine_similarity` / `_should_merge` in services layer: once
-      `PostgresMemoryRepository.search()` returns pgvector similarity scores alongside
-      results, the manual cosine check becomes redundant — simplify accordingly
+- [x] Merge logic implemented as `_merge_action`/`_existing_to_merge` in `services/memory.py`
+      (renamed from the `_cosine_similarity`/`_should_merge` this section originally referred
+      to) — consumes the similarity score returned directly by `MemoryRepository.search()`
+      (pgvector `embedding <=> %s AS distance` in `PSMemoryRepository`); no redundant manual
+      cosine computation exists. Two-tier threshold per `CLAUDE.md`'s documented design:
+      `_MERGE_THRESHOLD = 0.93` (auto-merge), `_DISAMBIGUATE_THRESHOLD = 0.75` (LLM
+      disambiguation), below that auto-insert.
+- [ ] Both thresholds are still hardcoded module-level constants in `memory.py` — replace
+      with a global config value once real usage data exists to calibrate against (still the
+      critical open tuning parameter this section originally flagged)
 
 ### Integration Tests — Phase 3
 - [ ] PostgreSQL repositories (real DB, test schema)
@@ -216,18 +252,48 @@ Must run on the GPU server. Do not keep PoC code alongside the real wiring — r
 Goal: validate the full audio loop (mic → WebSocket → STT → LLM → TTS → speaker) on real
 hardware before wiring the DB. Use real services; stub the DB with in-memory repos.
 
-- [ ] Wire `StartSession`, `ProcessTurn`, `EndSession` into a real WebSocket handler
-- [ ] Real services: `FasterWhisperSTTService` (CUDA float16), `OllamaLLMService`, `KokoroTTSService`
-- [ ] In-memory stubs: fixed `User` (primary_language = "en"), fixed `GeneralAssistant` persona
+- [x] Wire `StartSession`, `ProcessTurn`, `EndSession` into a real WebSocket handler
+- [x] Real services: `FasterWhisperSTTService` (CUDA float16), `OllamaLLMService`, `KokoroTTSService`
+- [x] In-memory stubs: fixed `User` (primary_language = "en"), fixed `GeneralAssistant` persona
       (response_language = "en", tts_voice = "af_heart"), no-op `TurnLogger`
-- [ ] Verify GPU is active for STT (nvidia-smi during transcription)
+- [x] Verify GPU is active for STT (nvidia-smi during transcription) — required fixing
+      `LD_LIBRARY_PATH` (see findings below); confirmed via `nvidia-smi` GPU utilization
 - [ ] Benchmark STT latency: time from `end_utterance` to first LLM token; target < ~1s
 - [ ] Benchmark TTS latency: time from first complete LLM sentence to first audio chunk
-- [ ] End-to-end: speak → first audio chunk back; identify dominant bottleneck
-- [ ] Confirm smooth playback, no audio glitches or buffer underruns
-- [ ] Verify Kokoro voice names match the installed version (see `KOKORO_DEFAULT_VOICES` in `infrastructure/tts.py`)
+- [x] End-to-end: speak → first audio chunk back; dominant bottleneck identified as LLM
+      model fit (see findings below) — precise STT/TTS latency numbers still not benchmarked
+- [x] Confirm smooth playback, no audio glitches or buffer underruns
+- [x] Verify Kokoro voice names match the installed version (see `KOKORO_DEFAULT_VOICES` in `infrastructure/tts.py`)
 
-Only proceed to Pass 2 once the audio loop is confirmed responsive on GPU.
+**Findings from first live test on the GPU server (RTX 4090, 24 GB VRAM):**
+- `.env` is never actually loaded by the app (`python-dotenv` is a declared dependency but
+  `load_dotenv()` is never called) — must be sourced manually (`set -a && source .env && set +a`)
+  before starting `memai-server`, otherwise `LD_LIBRARY_PATH` is missing and faster-whisper
+  fails with `libcublas.so.12 not found`. Added `load_dotenv()` to `main()` in `server.py`
+  (uncommitted) — **not yet verified on the GPU server**:
+  - [ ] Confirm `load_dotenv()` inside `main()` actually fixes the `libcublas.so.12` error.
+        Risk: glibc's dynamic linker may cache its `LD_LIBRARY_PATH` search path at process
+        start (before `main()` runs), so setting it via `os.environ` from inside the already-
+        running Python process could be too late for a later `dlopen()` triggered when
+        `ctranslate2` loads. If it doesn't work, fall back to documenting manual sourcing
+        (or wrap the entry point in a small shell script that sources `.env` before exec'ing
+        Python) rather than relying on in-process `load_dotenv()`.
+- `llama3.3` (70B) does not fit in 24 GB VRAM alongside Whisper + Kokoro — Ollama silently
+  splits it 65%/35% CPU/GPU and evicts it after ~5 min idle, causing 30s+ cold-reload stalls
+  with no error logged (looked like total silence on the client). `qwen3:14b` fits VRAM but
+  is a reasoning model — emits `<think>` blocks that get spoken aloud; `think:false` does not
+  suppress this. Settled on `aya-expanse` (~8B, multilingual, no reasoning overhead) as the
+  default `LLM_MODEL` — see `docs/INSTALL_SERVER.md` and `CLAUDE.md`.
+- Added two TTS-side sanitization passes in `ProcessTurn` (`_strip_markdown`,
+  `_spell_out_numbers` in `services/session.py`) — LLMs reliably ignore "don't use markdown"
+  instructions, and Kokoro/espeak's native number-reading is inconsistent outside English.
+  Both are deterministic post-processing, not prompt-reliant.
+- Implemented the onboarding redesign (previously an open issue): `GeneralAssistant` renamed
+  to **Memai**; `ONBOARDING_SCRIPT` + first-launch directive added in `services/session.py`
+  so the assistant introduces itself, explains voice-only configuration, and can replay the
+  intro on request — no separate detector needed, handled by the main LLM call.
+
+Only proceed to Pass 2 once STT/TTS latency is actually benchmarked on GPU.
 
 ### Pass 2 — Full wiring
 
@@ -242,7 +308,7 @@ Swap in real repositories and wire the offline consolidation pipeline.
 - [ ] Stream synthesised audio as binary frames; send `speaking_end` JSON frame after
       final chunk of each response
 - [ ] On disconnect: call `EndSession`; start idle timer — if no new session opens within
-      N minutes, fire `TurnLogReplayer` → `RunConsolidation` → `GenerateMemoryBrief` (all async,
+      N minutes, fire `TurnLogReplayer` → `ConsolidateMemory` → `GenerateMemoryBrief` (all async,
       non-blocking); cancel timer on new connection
 
 #### Real repositories
@@ -250,7 +316,7 @@ Swap in real repositories and wire the offline consolidation pipeline.
       `PSMemoryRepository`, `PSMemoryBriefRepository`
 - [ ] `JSONLTurnLogger` (live path)
 - [ ] `TurnLogReplayer` (crash recovery on startup + idle timer trigger post-disconnect)
-- [ ] `RunConsolidation` + `GenerateMemoryBrief` (triggered by idle timer)
+- [ ] `ConsolidateMemory` + `GenerateMemoryBrief` (triggered by idle timer)
 - [ ] DB pre-requisite: run `001_initial_schema.sql`; insert User record before first connect
 
 #### Client Entrypoint (refactor client.py)
@@ -293,7 +359,7 @@ Implications to resolve before implementing:
 
 Off-session memory consolidation runs reliably after every disconnect.
 
-- [ ] Full offline pipeline wired: TurnLogReplayer → RunConsolidation → GenerateMemoryBrief,
+- [ ] Full offline pipeline wired: TurnLogReplayer → ConsolidateMemory → GenerateMemoryBrief,
       triggered by idle timer after clean disconnect (see Phase 4b)
 - [ ] Oldest-first processing of all unconsolidated Conversations
 - [ ] Per-conversation atomicity: Episodes + Concepts + Procedures + consolidated flag

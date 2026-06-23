@@ -1672,6 +1672,7 @@ source = { editable = "." }
 dependencies = [
     { name = "faster-whisper" },
     { name = "kokoro" },
+    { name = "num2words" },
     { name = "ollama" },
     { name = "openai" },
     { name = "pgvector" },
@@ -1699,6 +1700,7 @@ dev = [
 requires-dist = [
     { name = "faster-whisper", specifier = ">=1.2.1" },
     { name = "kokoro", specifier = ">=0.9.0" },
+    { name = "num2words", specifier = ">=0.5.13" },
     { name = "ollama", specifier = ">=0.6.1" },
     { name = "openai", specifier = ">=1.30" },
     { name = "pgvector", specifier = ">=0.3" },

@@ -8,6 +8,7 @@ from pathlib import Path
 from uuid import UUID
 
 import websockets
+from dotenv import load_dotenv
 
 from .domain.model import (
     GENERAL_ASSISTANT_ID,
@@ -198,11 +199,13 @@ async def _handle(
 
 
 def main() -> None:
+    load_dotenv()
+
     ws_port = int(os.getenv("WS_PORT", "8765"))
     whisper_model_path = str(Path(os.getenv("WHISPER_MODEL_PATH", "~/models/faster-whisper-small")).expanduser())
     whisper_device = os.getenv("WHISPER_DEVICE", "cuda")
     whisper_compute = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
-    llm_model = os.getenv("LLM_MODEL", "llama3.3")
+    llm_model = os.getenv("LLM_MODEL", "aya-expanse")
     ollama_host = os.getenv("OLLAMA_HOST", None)
     log_dir = Path(os.getenv("LOG_DIR", "logs/sessions"))
 

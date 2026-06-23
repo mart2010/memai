@@ -156,9 +156,10 @@ def _format_memory_item(item: MemoryItem) -> str:
 
 
 def _compose_working_context(wm: WorkingMemory, recalled_memories: list[MemoryItem]) -> tuple[str, list[Message]]:
-    prompt_parts = [wm.active_persona.system_prompt, ONBOARDING_SCRIPT]
+    prompt_parts = [wm.active_persona.system_prompt]
     if wm.needs_onboarding:
         prompt_parts.insert(0, _FIRST_LAUNCH_DIRECTIVE)
+        prompt_parts.append(ONBOARDING_SCRIPT)
     lang = wm.active_persona.response_language
     if lang:
         prompt_parts.append(f"Always respond in the language with IETF code '{lang.code}'. Never switch language unless explicitly asked.")
