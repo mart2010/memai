@@ -17,17 +17,8 @@ from .ports import (
     WorthinessEvaluator,
 )
 
-_ENGAGEMENT_ORDER = [
-    EngagementLevel.UNSEEN,
-    EngagementLevel.MENTIONED,
-    EngagementLevel.EXPLORED,
-    EngagementLevel.PRACTICED,
-    EngagementLevel.INTEGRATED,
-]
-
-
 def _max_engagement(a: EngagementLevel, b: EngagementLevel) -> EngagementLevel:
-    return a if _ENGAGEMENT_ORDER.index(a) >= _ENGAGEMENT_ORDER.index(b) else b
+    return a if a >= b else b
 
 _MERGE_THRESHOLD = 0.93
 _DISAMBIGUATE_THRESHOLD = 0.75

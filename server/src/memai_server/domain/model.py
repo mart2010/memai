@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
-from enum import Enum
+from enum import Enum, IntEnum
 from uuid import UUID
 
 
@@ -26,12 +26,11 @@ SUPPORTED_LANGUAGES: list[Language] = [
 ]
 
 
-class EngagementLevel(Enum):
-    UNSEEN = "unseen"
-    MENTIONED = "mentioned"
-    EXPLORED = "explored"
-    PRACTICED = "practiced"
-    INTEGRATED = "integrated"
+class EngagementLevel(IntEnum):
+    UNSEEN = 0
+    MENTIONED = 1
+    EXPLORED = 2
+    INTEGRATED = 3
 
 
 class MemoryType(Enum):

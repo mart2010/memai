@@ -51,9 +51,19 @@ ruff format .
 
 ## Design Constraints
 
-- **Voice-only configuration** — everything is configured by voice; minimal/optinal CLI arguments 
-  or config files for the user to edit. Any new feature or setting must be reachable through
-  conversation, not through flags or environment variables.
+- **Voice-only configuration (GeneralAssistant scope only)** — this constraint applies to the
+  GeneralAssistant's own settings, not to persona creation or extension. The server uses a
+  dedicated config file (not env vars) with a single `voice_configurable` section —
+  e.g. `llm.temperature`, `primary_language`. Each entry declares a type/range/enum for
+  validation. The GA's config port only knows about this section; everything else in the
+  config file (log_dir, database_url, ws_port, ssh_host, etc.) is implicitly fixed simply by
+  not being listed there — no separate `fixed` section is needed.
+  - Anything requiring install/download/restart/swap (adding an STT/TTS engine, changing the
+    main LLM) is explicitly **out of scope** for the GA. That's handled by re-running the
+    `questionary` installation/setup wizard, not by conversation.
+  - Creating a new persona (e.g. a language tutor) is a power-user extension activity, not a
+    voice-driven one. The architecture should expose the necessary hooks (persona definition +
+    its own settings file) so a power user can author a persona outside the conversational loop.
 - **Single user** — no concurrency model, no authentication, no row-level security. All
   design decisions can assume exactly one user.
 - **No barge-in** — mid-stream LLM interruption is out of scope. The TTS response plays

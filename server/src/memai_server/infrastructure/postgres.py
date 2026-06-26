@@ -371,7 +371,7 @@ class PSMemoryRepository:
                         concept.name,
                         concept.description,
                         concept.language.code,
-                        concept.engagement_level.value,
+                        concept.engagement_level.name.lower(),
                         now,
                         now,
                         _vec(concept.embedding),
@@ -384,7 +384,7 @@ class PSMemoryRepository:
                     UPDATE concepts SET description = %s, engagement_level = %s, updated_at = %s, embedding = %s
                     WHERE id = %s
                     """,
-                    (concept.description, concept.engagement_level.value, now, _vec(concept.embedding), concept.id),
+                    (concept.description, concept.engagement_level.name.lower(), now, _vec(concept.embedding), concept.id),
                 )
                 return concept.id
 
@@ -405,7 +405,7 @@ class PSMemoryRepository:
                         procedure.description,
                         procedure.steps,
                         procedure.language.code,
-                        procedure.engagement_level.value,
+                        procedure.engagement_level.name.lower(),
                         now,
                         now,
                         _vec(procedure.embedding),
@@ -422,7 +422,7 @@ class PSMemoryRepository:
                     (
                         procedure.description,
                         procedure.steps,
-                        procedure.engagement_level.value,
+                        procedure.engagement_level.name.lower(),
                         now,
                         _vec(procedure.embedding),
                         procedure.id,
@@ -494,7 +494,7 @@ class PSMemoryRepository:
                         name=name,
                         description=description,
                         language=Language(language),
-                        engagement_level=EngagementLevel(engagement_level),
+                        engagement_level=EngagementLevel[engagement_level.upper()],
                         created_at=created_at,
                         updated_at=updated_at,
                         embedding=_list(emb),
@@ -532,7 +532,7 @@ class PSMemoryRepository:
                         description=description,
                         steps=list(steps) if steps else [],
                         language=Language(language),
-                        engagement_level=EngagementLevel(engagement_level),
+                        engagement_level=EngagementLevel[engagement_level.upper()],
                         created_at=created_at,
                         updated_at=updated_at,
                         embedding=_list(emb),

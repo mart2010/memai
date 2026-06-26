@@ -23,7 +23,7 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 - [x] `Language` value object (IETF language code)
 - [x] `SUPPORTED_LANGUAGES` constant — intersection of faster-whisper and Kokoro (~8 languages; Kokoro is the limiting factor)
 - [x] `Speaker` enum (user, assistant)
-- [x] `EngagementLevel` enum — states: mentioned | explored | practiced | integrated
+- [x] `EngagementLevel` IntEnum — states: unseen | mentioned | explored | integrated (ordered; explored absorbs the former practiced level)
 - [x] `MemoryType` enum (EPISODE, CONCEPT, PROCEDURE)
 - [x] `ConversationBoundaryType` enum (BREAK, CONTINUATION)
 
