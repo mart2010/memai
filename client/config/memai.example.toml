@@ -1,0 +1,6 @@
+# Mémai client configuration — example file (safe to commit)
+# Copy to memai.toml and fill in real values before starting the client.
+
+[server]
+ws_port = 8765
+# ssh_host = "user@your-gpu-hostname"  # omit entirely for single-host (local) deployment

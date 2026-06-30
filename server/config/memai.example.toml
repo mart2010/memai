@@ -1,0 +1,34 @@
+# Mémai server configuration — example file (safe to commit)
+# Copy to memai.toml and fill in real values before starting the server.
+#
+# Fixed sections ([server], [database], [stt], [llm]) require re-running the
+# installation wizard to change.
+#
+# [voice_configurable] is the only section the GeneralAssistant can read and
+# mutate at runtime via voice commands.
+
+[server]
+ws_port = 8765
+log_dir = "logs/sessions"
+
+[database]
+# Standard libpq DSN — adjust host/port/credentials as needed.
+url = "postgresql://memai:changeme@localhost:5432/memai"
+
+[stt]
+# Path to a pre-downloaded faster-whisper model directory, or a model name
+# that faster-whisper will download on first run (e.g. "small", "medium").
+# Avoid large models — they compete for VRAM with the LLM and TTS.
+model_path = "~/models/faster-whisper-small"
+device = "cuda"
+compute_type = "float16"  # use int8 if VRAM is tight
+
+[llm]
+# Avoid large (~70B-class) models — they don't fit in VRAM alongside Whisper +
+# Kokoro and get cold-reloaded between turns. Avoid reasoning models (e.g.
+# qwen3) — their <think> blocks get spoken aloud.
+model = "aya-expanse"
+# ollama_host = "http://localhost:11434"  # uncomment if Ollama is not on localhost
+
+[voice_configurable]
+# primary_language = "fr"  # ISO 639-1; set by onboarding or GA voice command

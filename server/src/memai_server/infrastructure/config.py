@@ -13,6 +13,7 @@ from ..domain.model import Language
 class ServerConfig:
     ws_port: int
     log_dir: Path
+    database_url: str
     stt_model_path: str
     stt_device: str
     stt_compute_type: str
@@ -26,6 +27,7 @@ def load_config(path: Path) -> ServerConfig:
         raw = tomllib.load(f)
 
     server = raw.get("server", {})
+    db = raw.get("database", {})
     stt = raw.get("stt", {})
     llm = raw.get("llm", {})
     vc = raw.get("voice_configurable", {})
@@ -35,6 +37,7 @@ def load_config(path: Path) -> ServerConfig:
     return ServerConfig(
         ws_port=int(server.get("ws_port", 8765)),
         log_dir=Path(server.get("log_dir", "logs/sessions")),
+        database_url=db.get("url", "postgresql://memai:changeme@localhost:5432/memai"),
         stt_model_path=str(Path(stt.get("model_path", "~/models/faster-whisper-small")).expanduser()),
         stt_device=stt.get("device", "cuda"),
         stt_compute_type=stt.get("compute_type", "float16"),

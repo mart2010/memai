@@ -42,8 +42,12 @@ coverage.xml
 # Sphinx documentation
 docs/_build/
 
-# Local environment config (contains secrets / machine-specific paths)
+# Local config files (contain secrets / machine-specific paths — use *.example.toml instead)
+config/memai.toml
+
+# Legacy env files (replaced by config/memai.toml)
 .env
+.env.local
 
 # my exclusion
 xprivate/
