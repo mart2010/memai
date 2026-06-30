@@ -5,21 +5,44 @@ import os
 import subprocess
 import threading
 import time
+import tomllib
+from pathlib import Path
 
 import numpy as np
 import questionary
 import sounddevice as sd
 import websockets
 import webrtcvad
-from dotenv import load_dotenv
+from platformdirs import user_config_dir
 
-load_dotenv()
+# ---------------------------------------------------------------------------
+# Config
+# ---------------------------------------------------------------------------
+
+_CONFIG_PATH = Path(user_config_dir("memai", appauthor=False)) / "memai.toml"
+
+
+def _load_config() -> tuple[int, str | None]:
+    """Returns (ws_port, ssh_host). ssh_host is None for single-host deployments."""
+    if not _CONFIG_PATH.exists():
+        raise FileNotFoundError(
+            f"Client config not found at {_CONFIG_PATH}. "
+            "Copy client/config/memai.example.toml to that location and fill in your values, "
+            "or run memai-setup to generate it automatically."
+        )
+    with open(_CONFIG_PATH, "rb") as f:
+        raw = tomllib.load(f)
+    server = raw.get("server", {})
+    return int(server.get("ws_port", 8765)), server.get("ssh_host") or None
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
 
 SAMPLE_RATE = 16000
 FRAME_DURATION = 30  # ms
 FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION / 1000)
-WS_PORT = int(os.getenv("WS_PORT", "8765"))
-SSH_USER_HOST = os.environ["SSH_USER_HOST"]
 
 # Avoid proxy settings interfering with the SSH tunnel
 os.environ.pop("HTTP_PROXY", None)
@@ -35,8 +58,13 @@ _mic_active = threading.Event()
 _mic_active.set()
 
 
-def _start_ssh_tunnel() -> None:
-    cmd = ["ssh", "-N", "-L", f"{WS_PORT}:localhost:{WS_PORT}", SSH_USER_HOST]
+# ---------------------------------------------------------------------------
+# SSH tunnel (split-host only)
+# ---------------------------------------------------------------------------
+
+
+def _start_ssh_tunnel(ws_port: int, ssh_host: str) -> None:
+    cmd = ["ssh", "-N", "-L", f"{ws_port}:localhost:{ws_port}", ssh_host]
 
     def _run() -> None:
         while True:
@@ -49,6 +77,11 @@ def _start_ssh_tunnel() -> None:
     threading.Thread(target=_run, daemon=True).start()
 
 
+# ---------------------------------------------------------------------------
+# Onboarding
+# ---------------------------------------------------------------------------
+
+
 async def _select_language(supported: list[str]) -> str:
     loop = asyncio.get_running_loop()
     choice = await loop.run_in_executor(
@@ -58,12 +91,21 @@ async def _select_language(supported: list[str]) -> str:
     return choice or supported[0]
 
 
+# ---------------------------------------------------------------------------
+# Main loop
+# ---------------------------------------------------------------------------
+
+
 async def run() -> None:
-    _start_ssh_tunnel()
+    ws_port, ssh_host = _load_config()
+
+    if ssh_host:
+        _start_ssh_tunnel(ws_port, ssh_host)
+        time.sleep(1)  # give the tunnel a moment to establish
 
     loop = asyncio.get_running_loop()
 
-    async with websockets.connect(f"ws://localhost:{WS_PORT}") as ws:
+    async with websockets.connect(f"ws://localhost:{ws_port}") as ws:
         print("Connected")
 
         silence_counter = 0
@@ -102,7 +144,6 @@ async def run() -> None:
         ):
             async for msg in ws:
                 if isinstance(msg, bytes):
-                    # Mute mic for the full duration of playback
                     _mic_active.clear()
                     sd.play(np.frombuffer(msg, dtype=np.float32), SAMPLE_RATE)
                     await loop.run_in_executor(None, sd.wait)
@@ -110,7 +151,6 @@ async def run() -> None:
                     data = json.loads(msg)
                     msg_type = data.get("type")
                     if msg_type == "select_language":
-                        # Mute mic during terminal interaction so VAD prints don't interfere
                         _mic_active.clear()
                         lang = await _select_language(data["supported"])
                         await ws.send(json.dumps({"type": "language_selected", "language": lang}))

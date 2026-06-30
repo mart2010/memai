@@ -1,5 +1,8 @@
 # Mémai client configuration — example file (safe to commit)
-# Copy to memai.toml and fill in real values before starting the client.
+# Copy to your platform config directory and rename to memai.toml:
+#   Linux/macOS : ~/.config/memai/memai.toml
+#   Windows     : %LOCALAPPDATA%\memai\memai.toml
+# Or run `memai-setup --client` to generate it automatically.
 
 [server]
 ws_port = 8765

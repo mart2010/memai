@@ -6,7 +6,11 @@ import tomli_w
 from dataclasses import dataclass
 from pathlib import Path
 
+from platformdirs import user_config_dir
+
 from ..domain.model import Language
+
+CONFIG_PATH = Path(user_config_dir("memai", appauthor=False)) / "memai.toml"
 
 
 @dataclass(frozen=True)
@@ -22,7 +26,13 @@ class ServerConfig:
     primary_language: Language | None
 
 
-def load_config(path: Path) -> ServerConfig:
+def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Server config not found at {path}. "
+            "Copy server/config/memai.example.toml to that location and fill in your values, "
+            "or run memai-setup to generate it automatically."
+        )
     with open(path, "rb") as f:
         raw = tomllib.load(f)
 
@@ -47,7 +57,7 @@ def load_config(path: Path) -> ServerConfig:
     )
 
 
-def update_voice_config(path: Path, key: str, value: str) -> None:
+def update_voice_config(key: str, value: str, path: Path = CONFIG_PATH) -> None:
     """Write a single key into [voice_configurable] and save back to disk."""
     with open(path, "rb") as f:
         raw = tomllib.load(f)

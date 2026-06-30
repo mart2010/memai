@@ -1,5 +1,8 @@
 # Mémai server configuration — example file (safe to commit)
-# Copy to memai.toml and fill in real values before starting the server.
+# Copy to your platform config directory and rename to memai.toml:
+#   Linux/macOS : ~/.config/memai/memai.toml
+#   Windows     : %LOCALAPPDATA%\memai\memai.toml
+# Or run `memai-setup` to generate it automatically.
 #
 # Fixed sections ([server], [database], [stt], [llm]) require re-running the
 # installation wizard to change.

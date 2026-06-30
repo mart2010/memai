@@ -109,7 +109,6 @@ async def _handle(
     llm: OllamaLLMService,
     tts: KokoroTTSService,
     log_dir: Path,
-    config_path: Path,
     primary_language: Language | None,
 ) -> None:
     print("Client connected")
@@ -166,7 +165,7 @@ async def _handle(
                 lang_code = data.get("language", "en")
                 lang = Language(lang_code)
                 voice = KOKORO_DEFAULT_VOICES.get(lang_code, "af_heart")
-                update_voice_config(config_path, "primary_language", lang_code)
+                update_voice_config("primary_language", lang_code)
                 user_repo.save(User(id=session.user.id, primary_language=lang))
                 session.user.primary_language = lang
                 session.active_persona.tts_voice = voice
@@ -199,10 +198,7 @@ async def _handle(
 
 
 def main() -> None:
-    # Resolve relative to the working directory so the server can be launched
-    # from any directory via an absolute path or entry-point script.
-    config_path = Path("config/memai.toml")
-    cfg = load_config(config_path)
+    cfg = load_config()
 
     print("Loading Whisper model…")
     stt = FasterWhisperSTTService(cfg.stt_model_path, device=cfg.stt_device, compute_type=cfg.stt_compute_type)
@@ -212,7 +208,7 @@ def main() -> None:
 
     async def _run() -> None:
         async def handler(ws):
-            await _handle(ws, stt, llm, tts, cfg.log_dir, config_path, cfg.primary_language)
+            await _handle(ws, stt, llm, tts, cfg.log_dir, cfg.primary_language)
 
         async with websockets.serve(handler, "0.0.0.0", cfg.ws_port):
             print(f"Server listening on :{cfg.ws_port}")
