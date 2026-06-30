@@ -1,14 +1,12 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 import asyncio
 import json
-import os
 import uuid
 from datetime import datetime, UTC
 from pathlib import Path
 from uuid import UUID
 
 import websockets
-from dotenv import load_dotenv
 
 from .domain.model import (
     GENERAL_ASSISTANT_ID,
@@ -18,6 +16,7 @@ from .domain.model import (
     SUPPORTED_LANGUAGES,
     User,
 )
+from .infrastructure.config import load_config, update_voice_config
 from .infrastructure.json_file import JSONLSessionLogReader, JSONLTurnLogger
 from .infrastructure.llm import OllamaLLMService
 from .infrastructure.stt import FasterWhisperSTTService
@@ -110,6 +109,7 @@ async def _handle(
     llm: OllamaLLMService,
     tts: KokoroTTSService,
     log_dir: Path,
+    config_path: Path,
     primary_language: Language | None,
 ) -> None:
     print("Client connected")
@@ -166,7 +166,7 @@ async def _handle(
                 lang_code = data.get("language", "en")
                 lang = Language(lang_code)
                 voice = KOKORO_DEFAULT_VOICES.get(lang_code, "af_heart")
-                # Persist into the stubs so the session context is coherent
+                update_voice_config(config_path, "primary_language", lang_code)
                 user_repo.save(User(id=session.user.id, primary_language=lang))
                 session.user.primary_language = lang
                 session.active_persona.tts_voice = voice
@@ -199,31 +199,23 @@ async def _handle(
 
 
 def main() -> None:
-    load_dotenv()
-
-    ws_port = int(os.getenv("WS_PORT", "8765"))
-    whisper_model_path = str(Path(os.getenv("WHISPER_MODEL_PATH", "~/models/faster-whisper-small")).expanduser())
-    whisper_device = os.getenv("WHISPER_DEVICE", "cuda")
-    whisper_compute = os.getenv("WHISPER_COMPUTE_TYPE", "float16")
-    llm_model = os.getenv("LLM_MODEL", "aya-expanse")
-    ollama_host = os.getenv("OLLAMA_HOST", None)
-    log_dir = Path(os.getenv("LOG_DIR", "logs/sessions"))
-
-    raw_lang = os.getenv("PRIMARY_LANGUAGE")
-    primary_language = Language(raw_lang) if raw_lang else None
+    # Resolve relative to the working directory so the server can be launched
+    # from any directory via an absolute path or entry-point script.
+    config_path = Path("config/memai.toml")
+    cfg = load_config(config_path)
 
     print("Loading Whisper model…")
-    stt = FasterWhisperSTTService(whisper_model_path, device=whisper_device, compute_type=whisper_compute)
-    llm = OllamaLLMService(model=llm_model, host=ollama_host)
+    stt = FasterWhisperSTTService(cfg.stt_model_path, device=cfg.stt_device, compute_type=cfg.stt_compute_type)
+    llm = OllamaLLMService(model=cfg.llm_model, host=cfg.llm_ollama_host)
     tts = KokoroTTSService()
     print("Services ready.")
 
     async def _run() -> None:
         async def handler(ws):
-            await _handle(ws, stt, llm, tts, log_dir, primary_language)
+            await _handle(ws, stt, llm, tts, cfg.log_dir, config_path, cfg.primary_language)
 
-        async with websockets.serve(handler, "0.0.0.0", ws_port):
-            print(f"Server listening on :{ws_port}")
+        async with websockets.serve(handler, "0.0.0.0", cfg.ws_port):
+            print(f"Server listening on :{cfg.ws_port}")
             await asyncio.Future()
 
     asyncio.run(_run())

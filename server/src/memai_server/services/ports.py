@@ -147,3 +147,5 @@ class WorthinessEvaluator(Protocol):
 
 class ConsolidationExtractor(Protocol):
     def extract(self, conversation: Conversation) -> ExtractionResult: ...
+
+
