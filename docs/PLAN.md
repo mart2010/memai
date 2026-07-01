@@ -390,23 +390,55 @@ Constraints" for the voice-config scope this wizard sits outside of.
 
 ### Domain (`setup/src/memai_setup/domain/`)
 - [x] Catalogue value objects: `VRAMEstimate`, `LLMCatalogueEntry`, `STTCatalogueEntry`,
-      `WhisperModelEntry`, `TTSCatalogueEntry`, `TTSVoiceEntry`, `FitLevel`, `FitAssessment`
-- [x] `assess_fit()` domain service — pure VRAM-headroom logic, reserves ~3 GB for
-      Whisper + Kokoro alongside the LLM
+      `WhisperModelEntry` (now with `recommended: bool`), `TTSCatalogueEntry` (now with
+      `bundled: bool`), `TTSVoiceEntry`, `FitLevel`, `FitAssessment`
+- [x] `assess_fit(vram, available_vram_gb, reserved_gb)` domain service — refactored
+      2026-07-01 to take a plain `VRAMEstimate` + explicit `reserved_gb` instead of an
+      `LLMCatalogueEntry` and a hardcoded module constant, so the same pure function now
+      backs both `SelectLLM` (reserves `LLM_SELECTION_HEADROOM_GB` for STT+TTS) and
+      `ResolveSTTEngine` (reserves `STT_SELECTION_TTS_HEADROOM_GB` + the already-chosen
+      LLM's own VRAM footprint, looked up by `plan.llm_model_id`, rather than a flat guess)
+- [x] `language_coverage.offered_languages(stt_entries, tts_entries)` — pure domain
+      service: languages covered by at least one installable (`has_adapter`) STT engine
+      AND at least one TTS engine
 - [x] `InstallationPlan` aggregate (`domain/plan.py`) — accumulates wizard decisions;
-      enforces the "topology locked after first install" invariant
+      enforces the "topology locked after first install" invariant. Added
+      `database_url: str` field (defaults to the same connection string shipped in
+      `server/config/memai.example.toml`) since no wizard step collects a real one yet —
+      see "Known gaps" below
 
 ### Use Cases (`setup/src/memai_setup/services/`)
-- [x] Ports: `WizardPrompter`, `CatalogueRepository`, `GPUDetector`,
-      `ExistingInstallDetector`, `ModelInstaller`, `ConfigWriter`, `SchemaRunner`,
-      `HealthCheck` (`services/ports.py`)
+- [x] Ports: `WizardPrompter` (now with `heading(title, lines)` alongside `info()` — a
+      visually distinct section banner, deliberately separate so it can't be confused
+      with a routine status line; `QuestionaryPrompter` renders it as a bordered block,
+      `FakeWizardPrompter` records it separately from `info_messages`), `CatalogueRepository`,
+      `GPUDetector`, `ExistingInstallDetector`, `ModelInstaller`, `ConfigWriter`,
+      `SchemaRunner`, `HealthCheck` (`services/ports.py`)
 - [x] `WizardStep` protocol — each wizard page is an independently unit-testable use case
-- [x] `SelectTopology`, `SelectLLM` — fully implemented
-- [ ] `SelectLanguages`, `ResolveSTTEngine`, `ResolveTTSEngines`, `GenerateConfig`,
-      `SetupSchema`, `RunHealthChecks` — stubbed with `NotImplementedError`, not yet
-      designed. `ResolveSTTEngine`'s docstring now flags that it must filter/badge
-      engines by `STTCatalogueEntry.has_adapter` once implemented (whisper.cpp is
-      catalogued but has no adapter yet)
+- [x] All 10 steps now fully implemented, matching the original flow doc's numbering
+      exactly: `ShowWelcome` (step 1 — rendered as one `heading()` banner, not a run of
+      `info()` lines; briefly explains single-host vs. split-host up front so the SSH
+      prerequisite bullet isn't unexplained jargon, and clarifies that bullet is
+      split-host-only; PortAudio bullet scoped to "macOS/Linux client only — Windows
+      wheels already bundle it"; lists every other prerequisite including ones nothing
+      here can check: CUDA driver, SSH key auth), `SelectTopology` (2), `CheckPrerequisites`
+      (3 — Postgres/pgvector/Ollama; **warn-and-confirm, not hard-block**: on failure, asks
+      the user via `prompter.confirm(..., default=False)` whether to continue anyway,
+      raising `WizardAborted` if they decline; see `services/errors.py` — caught at the CLI
+      boundary for a clean exit instead of a raw traceback), `SelectLLM` (4-5),
+      `SelectLanguages` (6 — offers `offered_languages()`, multi-select; prompt text now
+      explicit that this covers "your main language plus any optional ones" together, and
+      that *which one is primary* is chosen later, live, during the first conversation
+      (onboarding) — not here), `ResolveSTTEngine` (7 — filters by `has_adapter`, Whisper
+      model-size fit check reserving room for the chosen LLM), `ResolveTTSEngines` (8 — per
+      language: single covering engine installs silently, multiple engines prompt for
+      choice since voice variety is a stated goal, not just coverage; `bundled` engines need
+      no download), `GenerateConfig` (9 — single-host also writes client config; split-host
+      defers to a separate `--client` run), `SetupSchema` (10 — delegates to
+      `SchemaRunner`), `RunHealthChecks` (11 — aggregates a list of `HealthCheck` results,
+      post-install verification; deliberately overlaps with `CheckPrerequisites` on
+      Postgres/Ollama — one is pre-flight "don't waste time," the other is post-install
+      "did it actually work")
 - [x] `RunInstallWizard` orchestrator (`services/run_wizard.py`) — runs steps in order,
       pre-fills + locks `InstallationPlan.topology` from `ExistingInstallDetector`
 
@@ -418,9 +450,43 @@ Constraints" for the voice-config scope this wizard sits outside of.
       parsing path (`memory.total` CSV output) is **unverified against an actual GPU**.
       Needs a real run on the Ubuntu GPU server before trusting the fit hints it drives.
 - [x] `QuestionaryPrompter`
-- [ ] `FileExistingInstallDetector` — stubbed, does not yet parse existing `memai.toml`
-- [ ] `ModelInstaller` (ollama pull / whisper download / piper download) — not implemented
-- [ ] `ConfigWriter`, `SchemaRunner`, `HealthCheck` implementations — not implemented
+- [x] `FileExistingInstallDetector` — gracefully falls back to a fresh run (prints a
+      one-line note) when an existing config is found but can't be parsed yet, instead of
+      crashing with `NotImplementedError` (found via real use — this dev workstation has
+      a real client `memai.toml`, and the original stub crashed on it)
+- [x] `TomlConfigWriter` — real implementation. **Found and fixed a real bug while
+      building it**: server and client configs share the exact same `memai.toml` path
+      (`platformdirs.user_config_dir("memai")`), so for single-host topology, writing one
+      after the other would have silently clobbered the first's `[server]` section.
+      Fixed by making both methods read-modify-write (merge) rather than overwrite.
+      Verified against a scratch file — output confirmed both `[server]` (ws_port +
+      log_dir) and the client's own `ws_port` key coexist correctly.
+- [x] `PsycopgSchemaRunner` — real implementation, reads
+      `server/migrations/001_initial_schema.sql` via a relative monorepo-sibling path
+      (cross-package file read, not a Python import — `setup` still has no dependency on
+      `server`'s code). **Found and fixed a real bug in the migration itself**: the SQL
+      had no `IF NOT EXISTS` on any `CREATE TABLE`/`CREATE INDEX`, so it would have failed
+      on any re-run — directly breaking the wizard's "fully re-runnable" goal, and
+      equally broken for anyone re-running `psql -f` by hand. Fixed at the source (all
+      `CREATE TABLE`/`CREATE INDEX` now `IF NOT EXISTS`); the seed `INSERT` was already
+      `ON CONFLICT DO NOTHING`.
+- [x] `OllamaModelInstaller` — `pull_llm` via `ollama pull` subprocess (low-risk,
+      well-documented); `download_whisper_model`/`download_piper_voice` via
+      `huggingface_hub` (`Systran/faster-whisper-{size}`, `rhasspy/piper-voices` — repo
+      structure verified against real HF pages during the TTS/STT catalogue research).
+      Network-dependent; not run for real in this session (no verification needed beyond
+      import-checking — doesn't touch GPU or require this machine's Postgres/Ollama).
+- [x] `health_checks.py` — `PostgresHealthCheck` (psycopg connect), `PgvectorExtensionHealthCheck`
+      (queries `pg_extension` — distinct failure mode from "Postgres reachable": a
+      reachable Postgres does not imply pgvector is installed on that host, and the
+      migration's `CREATE EXTENSION IF NOT EXISTS vector` would otherwise fail confusingly
+      later in `SetupSchema`), `OllamaHealthCheck` (HTTP ping to `/api/tags`),
+      `ServerWebSocketHealthCheck` (TCP connect to the configured port — **not** the
+      originally-envisioned "launch memai-server as a subprocess and verify STT/TTS
+      actually load," which needs the GPU server's own venv and is deferred; this only
+      catches "forgot to start the server"). All four verified on this machine to fail
+      gracefully (no crash) when Postgres/Ollama/server aren't running — real success path
+      still needs the GPU server.
 
 ### Catalogues (`setup/src/memai_setup/catalogues/*.toml`)
 - [x] `stt_catalogue.toml` — expanded 2026-07-01 after surveying alternatives to
@@ -458,23 +524,58 @@ Constraints" for the voice-config scope this wizard sits outside of.
       as plain ISO codes (machine-readable), display formatting is a separate concern
 
 ### CLI (`setup/src/memai_setup/cli.py`)
-- [x] `memai-setup` runs `SelectTopology` → `SelectLLM`, prints selection
-- [ ] Remaining flow steps 6-12 (see `docs/PLAN.md`-adjacent brief in memory:
-      `project_wizard_brainstorm`)
+- [x] `memai-setup` runs the full 10-step flow (`ShowWelcome` through `RunHealthChecks`,
+      matching the original flow doc's numbering exactly) with all real infrastructure
+      wired in; catches `WizardAborted` at the boundary for a clean `sys.exit(1)` instead
+      of a raw traceback, prints the LLM selection at the end
 - [ ] `--client` flow
 - [ ] `--uninstall` flow
 
-### Tests
-- [x] `tests/unit/domain/test_fit_assessment.py`, `test_installation_plan.py`
-- [x] `tests/unit/services/test_select_llm_step.py`
-- [x] `tests/fakes/fakes.py` — `FakeGPUDetector`, `FakeCatalogueRepository`,
-      `FakeWizardPrompter`, `FakeExistingInstallDetector`
+### Known gaps (deliberate, documented — not oversights)
+- No wizard step collects real Postgres connection details (no "collect Postgres
+  connection" step exists) — `InstallationPlan.database_url` always defaults to
+  `postgresql://memai:changeme@localhost:5432/memai`. `GenerateConfig`/`SetupSchema`/the
+  prerequisite and health checks all read this one field, so there's exactly one place
+  to fix once such a step exists.
+- `ServerWebSocketHealthCheck` checks "is something listening on the port," not "did the
+  server actually start successfully" (no subprocess launch — see infrastructure notes
+  above).
+- `--client` and `--uninstall` CLI flags still raise `NotImplementedError`.
 
-**Verified (Windows dev workstation, no GPU):** `uv sync`, `uv run pytest` (10/10 passing),
-`ruff check` clean, catalogue TOML loads correctly from the installed package via
-`importlib.resources`, `NvidiaSmiGPUDetector` correctly returns `None`/degrades to a
-warning when no GPU is present.
+### Tests
+- [x] `tests/unit/domain/` — `test_fit_assessment.py` (now parameterized on
+      `reserved_gb`), `test_installation_plan.py`, `test_languages.py`,
+      `test_language_coverage.py`
+- [x] `tests/unit/services/` — one test module per step: `test_show_welcome_step.py`
+      (asserts it renders as exactly one `heading()` call with zero `info()` lines;
+      single-host/split-host explained before the SSH bullet; SSH bullet is
+      split-host-scoped; PortAudio bullet mentions macOS/Linux + Windows exemption),
+      `test_check_prerequisites_step.py` (all-pass no-prompt / fail-then-confirm-continue
+      / fail-then-decline-raises-`WizardAborted`), `test_select_llm_step.py`,
+      `test_select_languages_step.py` (captures the prompt text and asserts it mentions
+      "main language" and "first conversation" — not just that a selection got stored),
+      `test_resolve_stt_engine_step.py` (including a test that headroom correctly
+      accounts for the already-chosen LLM), `test_resolve_tts_engines_step.py`,
+      `test_generate_config_step.py`, `test_setup_schema_step.py`,
+      `test_run_health_checks_step.py`
+- [x] `tests/integration/test_toml_catalogue.py` — real TOML parsing checks
+- [x] `tests/fakes/fakes.py` — `FakeGPUDetector`, `FakeCatalogueRepository`,
+      `FakeWizardPrompter` (now supports `select_many_answers` as its own queue, fixing a
+      bug where `select_many` incorrectly reused the `select_answers` queue; also now
+      records `heading()` calls separately from `info_messages`),
+      `FakeExistingInstallDetector`, `FakeModelInstaller`, `FakeConfigWriter`,
+      `FakeSchemaRunner`, `FakeHealthCheck`
+
+**Verified (Windows dev workstation, no GPU):** `uv sync`, `uv run pytest` (38/38
+passing), `ruff check` clean, full `cli.py` import/wiring check (all 10 steps construct
+correctly), real terminal rendering of `ShowWelcome`'s heading banner manually inspected,
+`TomlConfigWriter` merge behavior verified against a scratch file, all four
+real `HealthCheck` implementations verified to degrade gracefully (no crash) with nothing
+running locally, schema file path resolution verified to find the real (now-idempotent)
+migration file.
 
 **Not yet verified — requires the GPU server:** `NvidiaSmiGPUDetector`'s actual
-`nvidia-smi` output parsing; the full `SelectLLM` fit-hint output against a real 24 GB
-card (the number this whole flow exists to get right).
+`nvidia-smi` output parsing; the full `SelectLLM`/`ResolveSTTEngine` fit-hint output
+against real VRAM; `OllamaModelInstaller`'s real downloads/pulls; any `HealthCheck`'s
+actual *success* path (only the failure/degradation path was verified here); the full
+wizard run end-to-end.

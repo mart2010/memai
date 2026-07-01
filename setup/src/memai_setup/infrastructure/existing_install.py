@@ -12,7 +12,11 @@ CONFIG_PATH = Path(user_config_dir("memai", appauthor=False)) / "memai.toml"
 
 class FileExistingInstallDetector:
     """TODO: parse CONFIG_PATH (server or client memai.toml, if present) and
-    pre-fill an InstallationPlan for re-runs. Returns None on a fresh install."""
+    pre-fill an InstallationPlan for re-runs — the field-by-field mapping isn't
+    designed yet. Until then, an existing config is acknowledged but treated as
+    unparseable: fall back to a fresh run rather than crashing, same as every
+    other "not yet implemented" piece in this package degrades gracefully
+    (NvidiaSmiGPUDetector returns None on failure, never raises)."""
 
     def __init__(self, path: Path = CONFIG_PATH) -> None:
         self._path = path
@@ -20,4 +24,8 @@ class FileExistingInstallDetector:
     def load_existing_plan(self) -> InstallationPlan | None:
         if not self._path.exists():
             return None
-        raise NotImplementedError("TODO: parse existing memai.toml into an InstallationPlan")
+        print(
+            f"Found an existing config at {self._path}, but re-run pre-fill isn't "
+            "implemented yet — starting a fresh wizard run instead."
+        )
+        return None

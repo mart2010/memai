@@ -27,6 +27,12 @@ class InstallationPlan:
     languages: list[LanguageCode] = field(default_factory=list)
     whisper_model: str | None = None
     tts_engine_by_language: dict[LanguageCode, str] = field(default_factory=dict)
+    # No wizard step collects Postgres connection details yet (the original
+    # flow's "3. Prerequisites check" step isn't implemented) — defaults to
+    # the same local connection string shipped in
+    # server/config/memai.example.toml. GenerateConfig and SetupSchema both
+    # read this field rather than duplicating the literal.
+    database_url: str = "postgresql://memai:changeme@localhost:5432/memai"
 
     _topology_locked: bool = field(default=False, repr=False, compare=False)
 

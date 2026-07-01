@@ -9,7 +9,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- Users (singleton — one record only)
 -- ─────────────────────────────────────────────────────────────────────────────
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
     id                  UUID        PRIMARY KEY,
     primary_language    TEXT,                           -- NULL until onboarding
     secondary_languages TEXT[]      NOT NULL DEFAULT '{}'
@@ -19,7 +19,7 @@ CREATE TABLE users (
 -- Personas (Persona bounded context)
 -- ─────────────────────────────────────────────────────────────────────────────
 
-CREATE TABLE personas (
+CREATE TABLE IF NOT EXISTS personas (
     id                UUID        PRIMARY KEY,
     name              TEXT        NOT NULL,
     system_prompt     TEXT        NOT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE personas (
 -- Conversations and turns (Memory bounded context — offline only)
 -- ─────────────────────────────────────────────────────────────────────────────
 
-CREATE TABLE conversations (
+CREATE TABLE IF NOT EXISTS conversations (
     id               BIGSERIAL   PRIMARY KEY,
     started_at       TIMESTAMPTZ NOT NULL,
     ended_at         TIMESTAMPTZ,                      -- NULL while grouping is incomplete
@@ -45,7 +45,7 @@ CREATE TABLE conversations (
     consolidated     BOOLEAN     NOT NULL DEFAULT FALSE
 );
 
-CREATE TABLE turns (
+CREATE TABLE IF NOT EXISTS turns (
     conversation_id BIGINT      NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     session_id      UUID        NOT NULL,              -- source JSONL file; used by TurnLogReplayer for idempotency
     timestamp       TIMESTAMPTZ NOT NULL,
@@ -59,7 +59,7 @@ CREATE TABLE turns (
 -- Memory items (Memory bounded context)
 -- ─────────────────────────────────────────────────────────────────────────────
 
-CREATE TABLE episodes (
+CREATE TABLE IF NOT EXISTS episodes (
     id                     BIGSERIAL   PRIMARY KEY,
     summary                TEXT        NOT NULL,
     happened_at            TIMESTAMPTZ NOT NULL,
@@ -69,7 +69,7 @@ CREATE TABLE episodes (
     embedding              vector(1024)
 );
 
-CREATE TABLE concepts (
+CREATE TABLE IF NOT EXISTS concepts (
     id               SERIAL      PRIMARY KEY,
     persona_id       UUID        NOT NULL REFERENCES personas(id) ON DELETE CASCADE,  -- see CLAUDE.md §Data Model
     name             TEXT        NOT NULL,
@@ -81,7 +81,7 @@ CREATE TABLE concepts (
     embedding        vector(1024)
 );
 
-CREATE TABLE procedures (
+CREATE TABLE IF NOT EXISTS procedures (
     id               SERIAL      PRIMARY KEY,
     persona_id       UUID        NOT NULL REFERENCES personas(id) ON DELETE CASCADE,  -- see CLAUDE.md §Data Model
     name             TEXT        NOT NULL,
@@ -94,7 +94,7 @@ CREATE TABLE procedures (
     embedding        vector(1024)
 );
 
-CREATE TABLE memory_brief (
+CREATE TABLE IF NOT EXISTS memory_brief (
     id         INTEGER     PRIMARY KEY DEFAULT 1 CHECK (id = 1),  -- singleton
     content    TEXT        NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
@@ -107,22 +107,22 @@ CREATE TABLE memory_brief (
 
 -- Partial index — the only query pattern on conversations is "give me all
 -- unconsolidated ones ordered by started_at".
-CREATE INDEX conversations_unconsolidated
+CREATE INDEX IF NOT EXISTS conversations_unconsolidated
     ON conversations (started_at)
     WHERE NOT consolidated;
 
 -- Turn retrieval always scoped to a conversation, ordered by timestamp.
 -- The composite PK (conversation_id, timestamp) already covers this pattern.
 -- session_id index used by TurnLogReplayer for idempotency check (EXISTS by session).
-CREATE INDEX turns_session_id ON turns (session_id);
+CREATE INDEX IF NOT EXISTS turns_session_id ON turns (session_id);
 
 -- HNSW indexes for vector similarity search (cosine distance).
 -- m=16 and ef_construction=64 are pgvector defaults; tune after calibration.
-CREATE INDEX episodes_embedding_hnsw
+CREATE INDEX IF NOT EXISTS episodes_embedding_hnsw
     ON episodes   USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX concepts_embedding_hnsw
+CREATE INDEX IF NOT EXISTS concepts_embedding_hnsw
     ON concepts   USING hnsw (embedding vector_cosine_ops);
-CREATE INDEX procedures_embedding_hnsw
+CREATE INDEX IF NOT EXISTS procedures_embedding_hnsw
     ON procedures USING hnsw (embedding vector_cosine_ops);
 
 -- ─────────────────────────────────────────────────────────────────────────────

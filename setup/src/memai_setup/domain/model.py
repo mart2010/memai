@@ -47,6 +47,7 @@ class LLMCatalogueEntry:
 class WhisperModelEntry:
     name: str  # faster-whisper model size, e.g. "small", "medium"
     vram: VRAMEstimate
+    recommended: bool
 
 
 @dataclass(frozen=True)
@@ -75,4 +76,9 @@ class TTSCatalogueEntry:
     licence: str
     languages: frozenset[LanguageCode]
     voices: tuple[TTSVoiceEntry, ...]
+    # True = ships with the server package already, nothing to download
+    # (Kokoro). False = needs a per-voice download (Piper). Explicit field
+    # rather than special-casing `engine == "kokoro"` by name — same
+    # "make it explicit" rationale as LLMCatalogueEntry.reasoning.
+    bundled: bool
     description: str

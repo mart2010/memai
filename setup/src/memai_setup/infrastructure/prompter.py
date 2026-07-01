@@ -25,3 +25,13 @@ class QuestionaryPrompter:
 
     def info(self, message: str) -> None:
         print(message)
+
+    def heading(self, title: str, lines: list[str] | None = None) -> None:
+        border = "=" * max(60, len(title) + 4)
+        print(f"\n{border}")
+        print(f"  {title}")
+        if lines:
+            print()
+            for line in lines:
+                print(f"  {line}" if line else "")
+        print(f"{border}\n")

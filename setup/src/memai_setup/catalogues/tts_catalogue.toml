@@ -15,6 +15,7 @@ licence = "Apache-2.0"
 # English (en), Japanese (ja), Mandarin Chinese (zh), Spanish (es), French (fr),
 # Hindi (hi), Italian (it), Brazilian Portuguese (pt)
 languages = ["en", "ja", "zh", "es", "fr", "hi", "it", "pt"]
+bundled = true
 description = "Single multilingual model, CUDA-accelerated. Bundled by default."
 
 [[engines]]
@@ -33,6 +34,7 @@ languages = [
     "hi", "hu", "is", "it", "ka", "kk", "lb", "lv", "ml", "ne", "nl", "no",
     "pl", "pt", "ro", "ru", "sk", "sl", "sr", "sv", "sw", "tr", "uk", "vi", "zh",
 ]
+bundled = false
 description = "Per-language voice models, CPU-friendly. Downloaded on demand for languages Kokoro doesn't cover."
 
 [[voices]]

@@ -41,7 +41,11 @@ class TomlCatalogueRepository:
     def load_stt_catalogue(self) -> tuple[STTCatalogueEntry, ...]:
         raw = _load("stt_catalogue.toml")
         models = tuple(
-            WhisperModelEntry(m["name"], VRAMEstimate(m["min_vram_gb"], m["recommended_vram_gb"]))
+            WhisperModelEntry(
+                m["name"],
+                VRAMEstimate(m["min_vram_gb"], m["recommended_vram_gb"]),
+                recommended=m["recommended"],
+            )
             for m in raw["whisper_models"]
         )
         return tuple(
@@ -68,6 +72,7 @@ class TomlCatalogueRepository:
                 licence=e["licence"],
                 languages=frozenset(e["languages"]),
                 voices=tuple(voices_by_engine.get(e["name"], [])),
+                bundled=e["bundled"],
                 description=e["description"],
             )
             for e in raw["engines"]

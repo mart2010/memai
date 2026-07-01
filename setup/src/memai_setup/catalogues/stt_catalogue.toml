@@ -40,16 +40,19 @@ description = "MIT licence, same Whisper checkpoints as faster-whisper but broad
 name = "small"
 min_vram_gb = 1.0
 recommended_vram_gb = 2.0
+recommended = false
 
 [[whisper_models]]
 name = "medium"
 min_vram_gb = 2.0
 recommended_vram_gb = 5.0
+recommended = false
 
 [[whisper_models]]
 name = "large-v3-turbo"
 min_vram_gb = 3.0
 recommended_vram_gb = 6.0
+recommended = true
 # 809M params vs large-v3's 1550M (pruned 32->4 decoder layers). "Way faster,
 # minor quality degradation" per OpenAI — a good pick when STT latency matters
 # more than best-possible accuracy (see docs/PLAN.md Phase 4 latency goal).
@@ -58,3 +61,4 @@ recommended_vram_gb = 6.0
 name = "large-v3"
 min_vram_gb = 5.0
 recommended_vram_gb = 10.0
+recommended = false
