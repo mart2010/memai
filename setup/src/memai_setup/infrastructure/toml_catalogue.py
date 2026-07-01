@@ -45,7 +45,13 @@ class TomlCatalogueRepository:
             for m in raw["whisper_models"]
         )
         return tuple(
-            STTCatalogueEntry(engine=e["name"], models=models, languages=frozenset(e["languages"]))
+            STTCatalogueEntry(
+                engine=e["name"],
+                models=models,
+                languages=frozenset(e["languages"]),
+                has_adapter=e["has_adapter"],
+                description=e["description"],
+            )
             for e in raw["engines"]
         )
 

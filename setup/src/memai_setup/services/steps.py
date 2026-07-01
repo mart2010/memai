@@ -87,9 +87,12 @@ class SelectLanguages:
 
 
 class ResolveSTTEngine:
-    """Flow step 7. TODO: faster-whisper covers ~99 languages unconditionally
-    today — mainly a Whisper model-size choice (VRAM tradeoff), not an engine
-    choice. Revisit if a second STT engine is ever added."""
+    """Flow step 7. TODO: mainly a Whisper model-size choice today (VRAM vs.
+    accuracy/latency tradeoff — see large-v3-turbo in stt_catalogue.toml), not
+    an engine choice, since faster-whisper covers ~99 languages unconditionally.
+    A second engine (whisper.cpp) is now catalogued but must be filtered out —
+    or shown as "coming soon" — via `STTCatalogueEntry.has_adapter`, since no
+    infrastructure adapter exists for it yet (see catalogue comment)."""
 
     def __init__(self, catalogues: CatalogueRepository, installer: ModelInstaller) -> None:
         self._catalogues = catalogues

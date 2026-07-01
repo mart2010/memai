@@ -1,9 +1,40 @@
-# STT catalogue. faster-whisper is the only engine today; "*" marks
-# effectively unrestricted language coverage (~99 languages).
+# STT catalogue. Both engines below run the same underlying Whisper
+# checkpoints (small/medium/large-v3-turbo/large-v3), so they share one
+# whisper_models list. "*" marks effectively unrestricted language coverage
+# (~99 languages, same weights for both engines).
+#
+# Landscape surveyed 2026-07-01: faster-whisper remains the right primary
+# choice — MIT licence, CUDA-accelerated via CTranslate2, ~99 languages,
+# proven in this project's own testing, and its own benchmarks show it's even
+# slightly faster than whisper.cpp on GPU. whisper.cpp is catalogued as a real
+# future option: it's the natural swap-in once the server targets a non-NVIDIA
+# GPU backend (ROCm, Metal — CLAUDE.md's stated long-term goal), since
+# CTranslate2 (faster-whisper's backend) is CUDA-only, whereas whisper.cpp
+# also supports Vulkan/ROCm/Metal/CoreML/OpenVINO with the same ~99-language
+# coverage. It is NOT yet backed by an infrastructure adapter
+# (`has_adapter = false`) — only FasterWhisperSTTService exists today; a
+# WhisperCppSTTService would be Phase 3 work before this is actually
+# installable, see docs/PLAN.md.
+#
+# NVIDIA Parakeet/Canary (NeMo) and Vosk were also surveyed and excluded:
+# Parakeet/Canary are extremely fast but cover only 1-25 languages (Canary is
+# additionally CC-BY-NC-4.0, non-commercial-only, incompatible with this
+# project's needs); Vosk covers 20+ languages but is CPU-first with generally
+# lower conversational accuracy than Whisper-family models. None fit the
+# ~99-language, GPU-accelerated, permissively-licensed combination this
+# project needs.
 
 [[engines]]
 name = "faster-whisper"
 languages = ["*"]
+has_adapter = true
+description = "MIT licence, CUDA-accelerated via CTranslate2. Current default — proven in this project's own testing."
+
+[[engines]]
+name = "whisper.cpp"
+languages = ["*"]
+has_adapter = false
+description = "MIT licence, same Whisper checkpoints as faster-whisper but broader hardware backends (CUDA, Vulkan, ROCm, Metal, CoreML, OpenVINO). Not yet installable — no WhisperCppSTTService adapter exists (Phase 3 work)."
 
 [[whisper_models]]
 name = "small"
@@ -14,6 +45,14 @@ recommended_vram_gb = 2.0
 name = "medium"
 min_vram_gb = 2.0
 recommended_vram_gb = 5.0
+
+[[whisper_models]]
+name = "large-v3-turbo"
+min_vram_gb = 3.0
+recommended_vram_gb = 6.0
+# 809M params vs large-v3's 1550M (pruned 32->4 decoder layers). "Way faster,
+# minor quality degradation" per OpenAI — a good pick when STT latency matters
+# more than best-possible accuracy (see docs/PLAN.md Phase 4 latency goal).
 
 [[whisper_models]]
 name = "large-v3"

@@ -403,7 +403,10 @@ Constraints" for the voice-config scope this wizard sits outside of.
 - [x] `WizardStep` protocol — each wizard page is an independently unit-testable use case
 - [x] `SelectTopology`, `SelectLLM` — fully implemented
 - [ ] `SelectLanguages`, `ResolveSTTEngine`, `ResolveTTSEngines`, `GenerateConfig`,
-      `SetupSchema`, `RunHealthChecks` — stubbed with `NotImplementedError`, not yet designed
+      `SetupSchema`, `RunHealthChecks` — stubbed with `NotImplementedError`, not yet
+      designed. `ResolveSTTEngine`'s docstring now flags that it must filter/badge
+      engines by `STTCatalogueEntry.has_adapter` once implemented (whisper.cpp is
+      catalogued but has no adapter yet)
 - [x] `RunInstallWizard` orchestrator (`services/run_wizard.py`) — runs steps in order,
       pre-fills + locks `InstallationPlan.topology` from `ExistingInstallDetector`
 
@@ -420,7 +423,17 @@ Constraints" for the voice-config scope this wizard sits outside of.
 - [ ] `ConfigWriter`, `SchemaRunner`, `HealthCheck` implementations — not implemented
 
 ### Catalogues (`setup/src/memai_setup/catalogues/*.toml`)
-- [x] `stt_catalogue.toml` — seeded with real entries (faster-whisper sizes)
+- [x] `stt_catalogue.toml` — expanded 2026-07-01 after surveying alternatives to
+      faster-whisper (NVIDIA Parakeet/Canary: too narrow, 1-25 languages, Canary also
+      CC-BY-NC-4.0; Vosk: CPU-first, lower accuracy — both excluded). Added
+      `whisper-large-v3-turbo` as a `whisper_models` size (809M params, "way faster,
+      minor quality degradation" vs large-v3's 1550M — zero new code, works with the
+      existing `FasterWhisperSTTService` today) and `whisper.cpp` as a second `[[engines]]`
+      entry — same ~99-language Whisper coverage as faster-whisper but broader hardware
+      backends (CUDA/Vulkan/ROCm/Metal/CoreML/OpenVINO), relevant to CLAUDE.md's stated
+      long-term ROCm/Metal goal. `STTCatalogueEntry.has_adapter: bool` added as a new
+      domain field (whisper.cpp = `false`, no `WhisperCppSTTService` exists yet) — same
+      "make it explicit, not prose" rationale as `LLMCatalogueEntry.reasoning`.
 - [x] `llm_catalogue.toml` — expanded 2026-07-01 from 3 entries (all pulled ad hoc on the
       GPU workstation) to an 11-entry surveyed landscape spanning ~4-27 GB VRAM: Aya
       Expanse (recommended default), Llama 3.1 8B, Command R7B, Qwen2.5 7B/14B, Gemma 3

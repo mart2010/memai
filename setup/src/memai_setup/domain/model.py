@@ -54,6 +54,12 @@ class STTCatalogueEntry:
     engine: str  # e.g. "faster-whisper"
     models: tuple[WhisperModelEntry, ...]
     languages: frozenset[LanguageCode]  # {"*"} = effectively unrestricted
+    # False = catalogued as a real option but no infrastructure adapter exists
+    # yet (e.g. whisper.cpp) — ResolveSTTEngine must not let a user install an
+    # engine it can't actually wire up. Same "make it explicit, not prose"
+    # rationale as LLMCatalogueEntry.reasoning.
+    has_adapter: bool
+    description: str
 
 
 @dataclass(frozen=True)
