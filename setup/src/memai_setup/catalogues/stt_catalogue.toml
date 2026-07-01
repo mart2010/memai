@@ -1,0 +1,21 @@
+# STT catalogue. faster-whisper is the only engine today; "*" marks
+# effectively unrestricted language coverage (~99 languages).
+
+[[engines]]
+name = "faster-whisper"
+languages = ["*"]
+
+[[whisper_models]]
+name = "small"
+min_vram_gb = 1.0
+recommended_vram_gb = 2.0
+
+[[whisper_models]]
+name = "medium"
+min_vram_gb = 2.0
+recommended_vram_gb = 5.0
+
+[[whisper_models]]
+name = "large-v3"
+min_vram_gb = 5.0
+recommended_vram_gb = 10.0

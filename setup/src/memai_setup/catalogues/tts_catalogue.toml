@@ -1,0 +1,48 @@
+# TTS catalogue. Kokoro is bundled by default; Piper is installed on demand
+# for languages Kokoro doesn't cover. Both licences are AGPL-3.0-compatible —
+# see CLAUDE.md ("Coqui TTS ✗"), memory: project_tts_license_conflict.
+#
+# Coqui XTTS v2 stays out for licensing reasons (MPL-2.0 + Exhibit B is
+# AGPL-incompatible) — not ruled out permanently, see project_tts_license_conflict.
+# Verified 2026-07-01: Kokoro+Piper together already cover 16 of XTTS v2's 17
+# languages (everything except Korean), plus ~20 languages XTTS doesn't have at
+# all. XTTS's remaining edge is voice cloning + a single multilingual model, not
+# raw language coverage.
+
+[[engines]]
+name = "kokoro"
+licence = "Apache-2.0"
+# English (en), Japanese (ja), Mandarin Chinese (zh), Spanish (es), French (fr),
+# Hindi (hi), Italian (it), Brazilian Portuguese (pt)
+languages = ["en", "ja", "zh", "es", "fr", "hi", "it", "pt"]
+description = "Single multilingual model, CUDA-accelerated. Bundled by default."
+
+[[engines]]
+name = "piper"
+licence = "MIT"
+# Arabic (ar), Catalan (ca), Czech (cs), Welsh (cy), Danish (da), German (de),
+# Greek (el), English (en), Spanish (es), Persian (fa), Finnish (fi), French (fr),
+# Hindi (hi), Hungarian (hu), Icelandic (is), Italian (it), Georgian (ka),
+# Kazakh (kk), Luxembourgish (lb), Latvian (lv), Malayalam (ml), Nepali (ne),
+# Dutch (nl), Norwegian (no), Polish (pl), Portuguese (pt), Romanian (ro),
+# Russian (ru), Slovak (sk), Slovenian (sl), Serbian (sr), Swedish (sv),
+# Swahili (sw), Turkish (tr), Ukrainian (uk), Vietnamese (vi), Mandarin Chinese (zh)
+# No Japanese, no Korean — Kokoro's "ja" is the only source of Japanese coverage.
+languages = [
+    "ar", "ca", "cs", "cy", "da", "de", "el", "en", "es", "fa", "fi", "fr",
+    "hi", "hu", "is", "it", "ka", "kk", "lb", "lv", "ml", "ne", "nl", "no",
+    "pl", "pt", "ro", "ru", "sk", "sl", "sr", "sv", "sw", "tr", "uk", "vi", "zh",
+]
+description = "Per-language voice models, CPU-friendly. Downloaded on demand for languages Kokoro doesn't cover."
+
+[[voices]]
+engine = "kokoro"
+voice_id = "af_heart"
+language = "en"
+display_name = "Heart (US English, female)"
+
+[[voices]]
+engine = "piper"
+voice_id = "de_DE-thorsten-medium"
+language = "de"
+display_name = "Thorsten (German, male)"

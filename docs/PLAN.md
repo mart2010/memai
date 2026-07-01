@@ -379,3 +379,89 @@ The assistant has meaningful context from past conversations at every session st
 - [ ] MemoryBrief overwritten (single record, always current)
 - [ ] StartSession injects MemoryBrief content as static system-level block
 - [ ] End-to-end test: two sessions; second session's LLM context contains summary of first
+
+---
+
+## Phase 7 — Installation Wizard (`setup/` package)
+
+Third independent package (own venv, own `pyproject.toml`), same layout convention as
+`client/`/`server/`. Guides a fresh install end-to-end; see `CLAUDE.md` "Design
+Constraints" for the voice-config scope this wizard sits outside of.
+
+### Domain (`setup/src/memai_setup/domain/`)
+- [x] Catalogue value objects: `VRAMEstimate`, `LLMCatalogueEntry`, `STTCatalogueEntry`,
+      `WhisperModelEntry`, `TTSCatalogueEntry`, `TTSVoiceEntry`, `FitLevel`, `FitAssessment`
+- [x] `assess_fit()` domain service — pure VRAM-headroom logic, reserves ~3 GB for
+      Whisper + Kokoro alongside the LLM
+- [x] `InstallationPlan` aggregate (`domain/plan.py`) — accumulates wizard decisions;
+      enforces the "topology locked after first install" invariant
+
+### Use Cases (`setup/src/memai_setup/services/`)
+- [x] Ports: `WizardPrompter`, `CatalogueRepository`, `GPUDetector`,
+      `ExistingInstallDetector`, `ModelInstaller`, `ConfigWriter`, `SchemaRunner`,
+      `HealthCheck` (`services/ports.py`)
+- [x] `WizardStep` protocol — each wizard page is an independently unit-testable use case
+- [x] `SelectTopology`, `SelectLLM` — fully implemented
+- [ ] `SelectLanguages`, `ResolveSTTEngine`, `ResolveTTSEngines`, `GenerateConfig`,
+      `SetupSchema`, `RunHealthChecks` — stubbed with `NotImplementedError`, not yet designed
+- [x] `RunInstallWizard` orchestrator (`services/run_wizard.py`) — runs steps in order,
+      pre-fills + locks `InstallationPlan.topology` from `ExistingInstallDetector`
+
+### Infrastructure (`setup/src/memai_setup/infrastructure/`)
+- [x] `TomlCatalogueRepository` — parses packaged `catalogues/*.toml`
+- [~] `NvidiaSmiGPUDetector` — implemented (CUDA only, returns `None` on failure, never
+      raises); only exercised so far on the Windows dev workstation, which has no
+      `nvidia-smi` — confirmed the `None` fallback path works, but the real `nvidia-smi`
+      parsing path (`memory.total` CSV output) is **unverified against an actual GPU**.
+      Needs a real run on the Ubuntu GPU server before trusting the fit hints it drives.
+- [x] `QuestionaryPrompter`
+- [ ] `FileExistingInstallDetector` — stubbed, does not yet parse existing `memai.toml`
+- [ ] `ModelInstaller` (ollama pull / whisper download / piper download) — not implemented
+- [ ] `ConfigWriter`, `SchemaRunner`, `HealthCheck` implementations — not implemented
+
+### Catalogues (`setup/src/memai_setup/catalogues/*.toml`)
+- [x] `stt_catalogue.toml` — seeded with real entries (faster-whisper sizes)
+- [x] `llm_catalogue.toml` — expanded 2026-07-01 from 3 entries (all pulled ad hoc on the
+      GPU workstation) to an 11-entry surveyed landscape spanning ~4-27 GB VRAM: Aya
+      Expanse (recommended default), Llama 3.1 8B, Command R7B, Qwen2.5 7B/14B, Gemma 3
+      4B/12B/27B, Mistral NeMo 12B, plus the two originals kept as cautionary examples
+      (qwen3:14b reasoning-model, llama3.3 70B too-large — llama3.3's VRAM figure
+      corrected to the empirical ~57 GB loaded footprint from project_known_issues,
+      not just its ~43 GB download size). Language lists verified against each vendor's
+      own docs where an explicit list exists; Gemma 3's 140+ languages represented via
+      the `{"*"}` wildcard (same convention as STT's faster-whisper entry).
+- [x] `LLMCatalogueEntry.reasoning: bool` — new domain field (was previously only prose
+      in `description`); `SelectLLM` now structurally appends a "<think> block is spoken
+      aloud" warning to every `reasoning=true` entry's choice label instead of relying on
+      each catalogue entry's author to remember to write it in by hand.
+- [x] `tts_catalogue.toml` — full real language lists verified 2026-07-01 (web search
+      against Piper's `VOICES.md` and Kokoro's `VOICES.md`): Kokoro 8 languages, Piper 37
+      languages. Together they cover 16/17 of Coqui XTTS v2's languages (only Korean
+      missing) — see in-file comment and [[project_tts_license_conflict]] memory (kept as
+      "deferred", not "resolved" — licensing may change, and multiple TTS engines is a
+      stated goal for voice variety, not just coverage)
+- [x] `domain/languages.py` — `LANGUAGE_NAMES` lookup + `format_language()` ("German
+      (de)") for plain-language wizard prompts; catalogue TOML `languages` arrays stay
+      as plain ISO codes (machine-readable), display formatting is a separate concern
+
+### CLI (`setup/src/memai_setup/cli.py`)
+- [x] `memai-setup` runs `SelectTopology` → `SelectLLM`, prints selection
+- [ ] Remaining flow steps 6-12 (see `docs/PLAN.md`-adjacent brief in memory:
+      `project_wizard_brainstorm`)
+- [ ] `--client` flow
+- [ ] `--uninstall` flow
+
+### Tests
+- [x] `tests/unit/domain/test_fit_assessment.py`, `test_installation_plan.py`
+- [x] `tests/unit/services/test_select_llm_step.py`
+- [x] `tests/fakes/fakes.py` — `FakeGPUDetector`, `FakeCatalogueRepository`,
+      `FakeWizardPrompter`, `FakeExistingInstallDetector`
+
+**Verified (Windows dev workstation, no GPU):** `uv sync`, `uv run pytest` (10/10 passing),
+`ruff check` clean, catalogue TOML loads correctly from the installed package via
+`importlib.resources`, `NvidiaSmiGPUDetector` correctly returns `None`/degrades to a
+warning when no GPU is present.
+
+**Not yet verified — requires the GPU server:** `NvidiaSmiGPUDetector`'s actual
+`nvidia-smi` output parsing; the full `SelectLLM` fit-hint output against a real 24 GB
+card (the number this whole flow exists to get right).

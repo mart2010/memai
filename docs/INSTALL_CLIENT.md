@@ -79,17 +79,15 @@ source ~/.local/bin/env   # or restart your shell
 
 ## 3. Install the client package
 
-No need to clone the full repository. Create a working directory, then install directly
-from the Git repo:
+No need to clone the full repository. Install directly from the Git repo as an isolated
+tool:
 
 ```bash
-mkdir memai-client && cd memai-client
-uv venv
-uv pip install "git+<repo-url>#subdirectory=client"
+uv tool install "git+<repo-url>#subdirectory=client"
 ```
 
-This installs the `memai-client` command into `.venv/` with all its dependencies.
-The working directory is also where your `.env` file will live (step 5).
+This puts the `memai-client` command on your PATH in its own managed environment —
+no manual venv, no working directory to keep track of.
 
 ---
 
@@ -140,18 +138,8 @@ SSH_USER_HOST=<user>@<server-address>
 
 ## 6. Start the client
 
-### Windows
-
-```powershell
-cd memai-client
-.venv\Scripts\memai-client
-```
-
-### macOS / Linux
-
 ```bash
-cd memai-client
-.venv/bin/memai-client
+memai-client
 ```
 
 Expected output:

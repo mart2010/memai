@@ -99,11 +99,9 @@ cd server && uv sync
 .venv/bin/memai-server
 
 # Client (your machine — Windows, macOS, or Linux)
-mkdir memai-client && cd memai-client
-uv venv && uv pip install "git+<repo-url>#subdirectory=client"
-# Set SSH_USER_HOST=user@your-gpu-machine in a .env file
-.venv/bin/memai-client   # Linux/macOS
-# .venv\Scripts\memai-client  # Windows
+uv tool install "git+<repo-url>#subdirectory=client"
+# Copy client/config/memai.example.toml to your platform config dir (see docs/INSTALL_CLIENT.md) and set ssh_host
+memai-client
 ```
 
 On first launch, Memai guides you through language selection. After that, everything is configured by voice — no CLI arguments, no config files to edit.

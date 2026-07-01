@@ -18,12 +18,12 @@ Each package has its own virtual environment. Python 3.13+ required.
 ```bash
 # Server (GPU machine)
 cd server
-uv venv && uv pip install -e .
+uv sync
 # Then replace CPU torch with CUDA build — CUDA (NVIDIA) is the current GPU backend; broader GPU support (ROCm, Metal) is a long-term goal
 
 # Client
 cd client
-uv venv && uv pip install -e .
+uv sync
 ```
 
 ## Running the Components

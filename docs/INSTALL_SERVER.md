@@ -171,10 +171,10 @@ Whisper, Kokoro, and the embedding model are downloaded automatically on first s
 All commands run from `memai/server/` after `uv sync`.
 
 The `hf` CLI is installed automatically as part of `uv sync`. If for any reason it is
-missing, install it manually:
+missing, add it explicitly and re-sync:
 
 ```bash
-uv pip install huggingface_hub[cli]
+uv add huggingface_hub[cli]
 ```
 
 If downloads fail with an SSL certificate error, prefix commands with `SSL_CERT_FILE`:

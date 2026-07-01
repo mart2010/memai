@@ -1,0 +1,127 @@
+# LLM catalogue — manually maintained. Every model here must be an Ollama pull
+# target. Keep min_vram_gb conservative: assessed fit reserves an extra
+# ~3 GB headroom on top of this for Whisper + Kokoro (see domain/services.py).
+# `reasoning = true` means the model emits a <think>...</think> block that
+# gets spoken aloud by TTS — think:false does not suppress it for
+# thinking-tuned models (see project_known_issues memory). Never set this
+# blindly; verify against the model's own docs.
+#
+# VRAM figures are estimated from each model's Ollama/Q4 quantized download
+# size plus headroom for KV-cache/context, except llama3.3 which uses the
+# empirical figure from real testing (see project_known_issues memory: ~57 GB
+# loaded at Q4_K_M on an RTX 4090, not just its ~43 GB download size).
+#
+# Landscape surveyed 2026-07-01 (Ollama library + vendor docs) to broaden
+# beyond "whatever happened to be pulled on the GPU workstation already" —
+# spans small (~4-8 GB), mid (~8-14 GB), and high-VRAM (~20-24 GB+) tiers,
+# multiple vendors, all non-reasoning except the qwen3:14b cautionary entry.
+
+[[models]]
+model_id = "aya-expanse"
+display_name = "Aya Expanse (8B)"
+min_vram_gb = 5.0
+recommended_vram_gb = 8.0
+languages = ["en", "fr", "es", "de", "it", "pt", "ja", "ko", "zh", "ar", "hi", "ru"]
+recommended = true
+reasoning = false
+description = "Multilingual, no reasoning overhead. Current default — fast and reliable for voice conversation, proven on the GPU server."
+
+[[models]]
+model_id = "llama3.1:8b"
+display_name = "Llama 3.1 (8B)"
+min_vram_gb = 5.0
+recommended_vram_gb = 8.0
+languages = ["en", "de", "fr", "it", "pt", "hi", "es", "th"]
+recommended = false
+reasoning = false
+description = "Meta's ecosystem alternative to Aya Expanse at the same VRAM tier. Officially supports 8 languages (narrower than Aya Expanse's 12)."
+
+[[models]]
+model_id = "command-r7b"
+display_name = "Command R7B (7B)"
+min_vram_gb = 6.0
+recommended_vram_gb = 9.0
+languages = ["en", "fr", "es", "it", "de", "pt", "ja", "ko", "ar", "zh", "ru", "pl", "tr", "vi", "nl", "cs", "id", "uk", "ro", "el", "hi", "he", "fa"]
+recommended = false
+reasoning = false
+description = "Cohere's smallest R-series model, tuned for conversational use. 23 official languages — includes Hebrew, Persian, Ukrainian, none of which appear elsewhere in this catalogue."
+
+[[models]]
+model_id = "qwen2.5:7b"
+display_name = "Qwen2.5 (7B)"
+min_vram_gb = 5.0
+recommended_vram_gb = 8.0
+languages = ["zh", "en", "fr", "es", "pt", "de", "it", "ru", "ja", "ko", "vi", "th", "ar"]
+recommended = false
+reasoning = false
+description = "Same VRAM tier as Aya Expanse. Alibaba states 29+ languages officially; only the 13 explicitly named ones are listed here — treat as a floor, not the full set. Non-reasoning by default, unlike Qwen3."
+
+[[models]]
+model_id = "gemma3:4b"
+display_name = "Gemma 3 (4B)"
+min_vram_gb = 4.0
+recommended_vram_gb = 6.0
+languages = ["*"]
+recommended = false
+reasoning = false
+description = "Google's smallest Gemma 3 size. Broadest language claim in this catalogue (140+ languages) in a small footprint — good fit for modest GPUs."
+
+[[models]]
+model_id = "mistral-nemo"
+display_name = "Mistral NeMo (12B)"
+min_vram_gb = 8.0
+recommended_vram_gb = 12.0
+languages = ["en", "fr", "de", "es", "it", "pt", "zh", "ja", "ko", "ar", "hi"]
+recommended = false
+reasoning = false
+description = "Mid-tier step up from the 7-8B models. Mistral highlights 11 languages as particularly strong; tokenizer is trained on 100+ so real coverage may be broader."
+
+[[models]]
+model_id = "gemma3:12b"
+display_name = "Gemma 3 (12B)"
+min_vram_gb = 9.0
+recommended_vram_gb = 12.0
+languages = ["*"]
+recommended = false
+reasoning = false
+description = "Same 140+ language claim as gemma3:4b, more headroom for response quality on a mid-range GPU."
+
+[[models]]
+model_id = "qwen2.5:14b"
+display_name = "Qwen2.5 (14B)"
+min_vram_gb = 10.0
+recommended_vram_gb = 14.0
+languages = ["zh", "en", "fr", "es", "pt", "de", "it", "ru", "ja", "ko", "vi", "th", "ar"]
+recommended = false
+reasoning = false
+description = "Same size/VRAM tier as qwen3:14b below, without the <think>-block problem — the direct non-reasoning alternative at this tier."
+
+[[models]]
+model_id = "qwen3:14b"
+display_name = "Qwen3 (14B)"
+min_vram_gb = 10.0
+recommended_vram_gb = 14.0
+languages = ["en", "zh", "fr", "es", "de", "ja", "ko"]
+recommended = false
+reasoning = true
+description = "Reasoning model — NOT recommended. Its <think> block is spoken aloud by TTS; think:false does not suppress it. See qwen2.5:14b for a same-size non-reasoning alternative."
+
+[[models]]
+model_id = "gemma3:27b"
+display_name = "Gemma 3 (27B)"
+min_vram_gb = 19.0
+recommended_vram_gb = 24.0
+languages = ["*"]
+recommended = false
+reasoning = false
+description = "Google's largest open Gemma 3 model — best quality in this catalogue. Needs a high-VRAM GPU (24 GB+) to run comfortably alongside Whisper + Kokoro."
+
+[[models]]
+model_id = "llama3.3"
+display_name = "Llama 3.3 (70B)"
+min_vram_gb = 52.0
+recommended_vram_gb = 60.0
+languages = ["en", "fr", "es", "de", "it", "pt", "hi", "th"]
+recommended = false
+reasoning = false
+description = "Too large for essentially all single-GPU setups — will not fit alongside Whisper + Kokoro even on a 24 GB card; Ollama silently splits it CPU/GPU instead of refusing (see project_known_issues memory)."

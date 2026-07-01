@@ -42,11 +42,11 @@ coverage.xml
 # Sphinx documentation
 docs/_build/
 
-# Local config files
-server/config/memai.toml
-client/config/memai.toml
 
-# Legacy env files (replaced by config/memai.toml)
+# safety nets since the real config live in %LOCALAPPDATA%\memai (or ~/.config/memai on Linux)
+server/config/
+client/config/
+
 .env
 .env.local
 
