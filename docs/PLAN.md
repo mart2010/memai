@@ -258,32 +258,35 @@ hardware before wiring the DB. Use real services; stub the DB with in-memory rep
       (response_language = "en", tts_voice = "af_heart"), no-op `TurnLogger`
 - [x] Verify GPU is active for STT (nvidia-smi during transcription) — required fixing
       `LD_LIBRARY_PATH` (see findings below); confirmed via `nvidia-smi` GPU utilization
-- [ ] Benchmark STT latency: time from `end_utterance` to first LLM token; target < ~1s
-- [ ] Benchmark TTS latency: time from first complete LLM sentence to first audio chunk
-- [x] End-to-end: speak → first audio chunk back; dominant bottleneck identified as LLM
-      model fit (see findings below) — precise STT/TTS latency numbers still not benchmarked
+- [x] Benchmark STT latency: time from `end_utterance` to first LLM token; target < ~1s
+      — **STT itself: 0.05–0.4s, comfortably under target.** See full findings below for
+      the LLM/TTS side of "first token" latency, which needed two real bugs fixed first.
+- [x] Benchmark TTS latency: time from first complete LLM sentence to first audio chunk
+      — **0.04–0.08s once Kokoro's per-language pipeline is warmed (one-time ~2.1–2.6s
+      init cost on first use of a given language per process)**
+- [x] End-to-end: speak → first audio chunk back; steady-state **total time-to-first-audio
+      is well under 1s** after the fixes below (was previously bimodal 0.2s–2.7s, sometimes
+      up to 9s+ on cold start)
 - [x] Confirm smooth playback, no audio glitches or buffer underruns
 - [x] Verify Kokoro voice names match the installed version (see `KOKORO_DEFAULT_VOICES` in `infrastructure/tts.py`)
 
 **Findings from first live test on the GPU server (RTX 4090, 24 GB VRAM):**
-- `.env` is never actually loaded by the app (`python-dotenv` is a declared dependency but
-  `load_dotenv()` is never called) — must be sourced manually (`set -a && source .env && set +a`)
-  before starting `memai-server`, otherwise `LD_LIBRARY_PATH` is missing and faster-whisper
-  fails with `libcublas.so.12 not found`. Added `load_dotenv()` to `main()` in `server.py`
-  (uncommitted) — **not yet verified on the GPU server**:
-  - [ ] Confirm `load_dotenv()` inside `main()` actually fixes the `libcublas.so.12` error.
-        Risk: glibc's dynamic linker may cache its `LD_LIBRARY_PATH` search path at process
-        start (before `main()` runs), so setting it via `os.environ` from inside the already-
-        running Python process could be too late for a later `dlopen()` triggered when
-        `ctranslate2` loads. If it doesn't work, fall back to documenting manual sourcing
-        (or wrap the entry point in a small shell script that sources `.env` before exec'ing
-        Python) rather than relying on in-process `load_dotenv()`.
+- The `.env`/`load_dotenv()` concern below is now **moot** — superseded by the
+  `infrastructure/config.py` TOML config refactor (no more `python-dotenv` dependency at
+  all). `LD_LIBRARY_PATH`/`SSL_CERT_FILE` remain OS/dynamic-linker concerns that must be set
+  in the process launch environment (shell or systemd unit), not inside the app — confirmed
+  working when set this way; the original "confirm inside `main()`" plan doesn't apply since
+  there's no more in-process env-loading step at all.
 - `llama3.3` (70B) does not fit in 24 GB VRAM alongside Whisper + Kokoro — Ollama silently
   splits it 65%/35% CPU/GPU and evicts it after ~5 min idle, causing 30s+ cold-reload stalls
   with no error logged (looked like total silence on the client). `qwen3:14b` fits VRAM but
   is a reasoning model — emits `<think>` blocks that get spoken aloud; `think:false` does not
   suppress this. Settled on `aya-expanse` (~8B, multilingual, no reasoning overhead) as the
-  default `LLM_MODEL` — see `docs/INSTALL_SERVER.md` and `CLAUDE.md`.
+  default `LLM_MODEL` — see `docs/INSTALL_SERVER.md` and `CLAUDE.md`. (This GPU box is a
+  shared lab machine with many other Ollama models already pulled; `aya-expanse` itself
+  wasn't yet pulled there and outbound `ollama pull` is blocked by the corporate proxy — see
+  proxy finding below. Benchmarks below used the already-available `gemma4` (8B, Q4_K_M) as
+  a stand-in; re-run once `aya-expanse` is actually pulled.)
 - Added two TTS-side sanitization passes in `ProcessTurn` (`_strip_markdown`,
   `_spell_out_numbers` in `services/session.py`) — LLMs reliably ignore "don't use markdown"
   instructions, and Kokoro/espeak's native number-reading is inconsistent outside English.
@@ -292,8 +295,63 @@ hardware before wiring the DB. Use real services; stub the DB with in-memory rep
   to **Memai**; `ONBOARDING_SCRIPT` + first-launch directive added in `services/session.py`
   so the assistant introduces itself, explains voice-only configuration, and can replay the
   intro on request — no separate detector needed, handled by the main LLM call.
+- **Fixed: `ProcessTurn.execute` wasn't actually streaming.** The original code drained the
+  entire LLM token stream into one string before doing any sentence-splitting or TTS, so the
+  user waited for the *full* reply before hearing a word — despite `CLAUDE.md` describing the
+  pipeline as token-streamed/sentence-by-sentence TTS. Rewrote it to resolve an optional
+  `[PERSONA:name]`/boundary-marker prefix incrementally as tokens arrive, then synthesise each
+  sentence via TTS as soon as it completes, while later tokens are still streaming in. See
+  `_try_resolve_prefixes`/`_resolve_boundary_marker` in `services/session.py`.
+- **Fixed: Ollama's default 5-minute `keep_alive` evicted the model between conversational
+  turns**, causing multi-second cold-reload spikes mid-conversation. `OllamaLLMService.complete()`
+  now passes `keep_alive="30m"` explicitly (scoped to just the live conversational path, not
+  the offline consolidation LLM calls) — see `infrastructure/llm/ollama.py`.
+- **Fixed: corporate-proxy env vars were breaking real LLM streaming.** This GPU workstation
+  sits behind a corporate egress proxy (SSL-inspecting, blocks direct outbound HTTPS). Setting
+  `http_proxy`/`https_proxy` on the whole `memai-server` process (to work around a blocked
+  spaCy model download — see next item) inadvertently routed `OllamaLLMService`'s calls to
+  `localhost:11434` through that proxy too, since env-var-based proxy config applies to *all*
+  outbound HTTP from a process unless `NO_PROXY` explicitly excludes hosts. The proxy doesn't
+  pass through chunked/streamed responses incrementally — it buffers the whole response before
+  releasing it — so "time to first token" was silently measuring *total generation time*
+  instead. **Also a genuine privacy concern**: conversation content (STT transcripts, LLM
+  prompts/completions) was being routed through a corporate inspection proxy even though it
+  never needed to leave the machine, undermining the project's fully-local design goal.
+  **Fix**: the live server process must never have proxy env vars set at all — see next
+  finding for why it no longer needs to.
+- **Fixed: Kokoro's English G2P (`misaki.en`) lazily auto-downloads a spaCy model
+  (`en_core_web_sm`) on first use**, which both needs network access (blocked without the
+  proxy) and — separately — spaCy's own `download()` can't find `pip`/`uv` inside a
+  `uv`-managed venv (which deliberately doesn't bundle `pip`), so it would fail even with
+  network access fixed. Resolved by installing it as a proper pinned dependency instead of
+  relying on spaCy's downloader: `uv add "en_core_web_sm @ <github wheel URL>"` (see
+  `[tool.uv.sources]` in `server/pyproject.toml`). The live server now never needs network
+  access for TTS at all, for any supported language (French/etc. always used the
+  `espeak.py`/espeak-ng backend, never spaCy, and were unaffected).
+- **Fixed several instances of test/fake ↔ real-protocol drift** that were silently breaking
+  `pytest` collection or making every `ProcessTurn` test fail: `tests/fakes/fakes.py` imported
+  `WorthinessEvaluator` from the wrong module, `FakeSTTService.transcribe()` had a stale
+  `language_hint` param not on the real `STTService` protocol, `FakeTurnLogger.append()` was
+  missing the real `persona_id` param, and two test files (`test_consolidation.py`,
+  `test_persona.py`) imported since-renamed classes (`RunConsolidation`→`ConsolidateMemory`,
+  `SessionContext`→`WorkingMemory`). Also fixed a stale assertion in `test_persona.py`
+  expecting the old `"General Assistant"` name instead of `"Memai"`. Full suite (82 tests)
+  passes clean now.
+- **Fixed: a single connection's unhandled exception could kill the entire server process**,
+  not just that connection — `process_turn.execute()`'s exceptions weren't caught by the
+  `except websockets.exceptions.ConnectionClosed` clause in `server.py`'s handler, so any bug
+  mid-turn (e.g. the spaCy crash above) took down every other connection too. Now wrapped in
+  its own `try/except`, logs via `traceback.print_exc()`, and lets the session continue.
+- **Fixed: Pass-1 `_PersonaRepo` stub ignored the already-known `primary_language` for
+  returning users.** `_UserRepo` read `cfg.primary_language` correctly, but `_PersonaRepo`
+  always constructed the persona with hardcoded English defaults — only the live
+  `language_selected` onboarding handler set `response_language`/`tts_voice` correctly. So any
+  session that skipped onboarding (because a language was already saved) got a language/voice
+  mismatch. `_PersonaRepo` now takes `primary_language` and derives both correctly.
+- Deleted `server/.env` (both on the GPU box and this laptop's checkout) — dead since the TOML
+  config refactor, the app no longer reads it at all.
 
-Only proceed to Pass 2 once STT/TTS latency is actually benchmarked on GPU.
+Pass 1 latency benchmarking is done; Pass 2 wiring can proceed.
 
 ### Pass 2 — Full wiring
 

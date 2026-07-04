@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 import asyncio
 import json
+import traceback
 import uuid
 from datetime import datetime, UTC
 from pathlib import Path
@@ -41,7 +42,11 @@ class _UserRepo:
 
 
 class _PersonaRepo:
-    def __init__(self) -> None:
+    def __init__(self, primary_language: Language | None = None) -> None:
+        kwargs = {}
+        if primary_language is not None:
+            kwargs["response_language"] = primary_language
+            kwargs["tts_voice"] = KOKORO_DEFAULT_VOICES.get(primary_language.code, "af_heart")
         self._persona = AssistantPersona.general_assistant(
             system_prompt=(
                 "You are a helpful voice assistant. "
@@ -51,6 +56,7 @@ class _PersonaRepo:
                 "If the user asks what you can do, how to configure you, or asks to hear your "
                 "introduction again, deliver the onboarding introduction."
             ),
+            **kwargs,
         )
 
     def get(self, persona_id: UUID) -> AssistantPersona | None:
@@ -117,7 +123,7 @@ async def _handle(
     started_at = datetime.now(UTC)
 
     user_repo = _UserRepo(primary_language)
-    persona_repo = _PersonaRepo()
+    persona_repo = _PersonaRepo(primary_language)
 
     start_session = StartSession(
         user_repo=user_repo,
@@ -179,7 +185,13 @@ async def _handle(
                     continue
                 audio = audio_buffer
                 audio_buffer = b""
-                result = await process_turn.execute(session, audio, datetime.now(UTC))
+                try:
+                    result = await process_turn.execute(session, audio, datetime.now(UTC))
+                except Exception:
+                    # A single turn failing (e.g. TTS error) must not take down the
+                    # whole connection/server — log it and let the session continue.
+                    traceback.print_exc()
+                    result = None
                 if result is not None:
                     for chunk in result.audio_chunks:
                         await ws.send(chunk)

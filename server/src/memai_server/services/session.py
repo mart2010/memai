@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, UTC
 from uuid import UUID
@@ -82,33 +83,63 @@ def _is_sentence_end(text: str) -> bool:
     return bool(text) and text[-1] in _SENTENCE_ENDINGS
 
 
-def _strip_persona_prefix(text: str) -> tuple[str, str | None]:
-    """Returns (stripped_text, persona_name_or_None)."""
-    if text.startswith("[PERSONA:"):
-        end = text.find("]")
-        if end != -1:
-            name = text[9:end].strip()
-            return text[end + 1:].lstrip(), name
-    return text, None
+_BOUNDARY_MARKERS = (
+    ("[TOPIC_CONTINUATION]", ConversationBoundaryType.CONTINUATION),
+    ("[TOPIC_BREAK]", ConversationBoundaryType.BREAK),
+)
 
 
-def _strip_conversation_marker(
-    text: str, is_first_turn: bool
-) -> tuple[str, ConversationBoundaryType | None]:
-    """Strip an optional LLM boundary prefix and return the boundary type.
+def _resolve_boundary_marker(
+    buffer: str, is_first_turn: bool
+) -> tuple[str, ConversationBoundaryType | None] | None:
+    """Resolve an optional boundary marker from the start of `buffer`.
 
-    [TOPIC_CONTINUATION] is only valid on the first turn of a session.
+    Returns None while `buffer` is still a proper prefix of a candidate marker (i.e. more
+    tokens are needed to disambiguate). [TOPIC_CONTINUATION] is only valid on the first
+    turn of a session.
     """
-    for prefix, boundary_type in (
-        ("[TOPIC_CONTINUATION]", ConversationBoundaryType.CONTINUATION),
-        ("[TOPIC_BREAK]", ConversationBoundaryType.BREAK),
-    ):
-        if text.startswith(prefix):
-            stripped = text[len(prefix):].lstrip()
+    for marker, boundary_type in _BOUNDARY_MARKERS:
+        if buffer.startswith(marker):
+            remaining = buffer[len(marker):].lstrip()
             if boundary_type == ConversationBoundaryType.CONTINUATION and not is_first_turn:
-                return stripped, None
-            return stripped, boundary_type
-    return text, None
+                return remaining, None
+            return remaining, boundary_type
+        if marker.startswith(buffer):
+            return None
+    return buffer, None
+
+
+def _try_resolve_prefixes(
+    buffer: str, is_first_turn: bool
+) -> tuple[str, str | None, ConversationBoundaryType | None] | None:
+    """Incrementally resolve an optional [PERSONA:name] prefix followed by an optional
+    boundary marker from a streaming LLM response.
+
+    Returns None while more tokens are needed to disambiguate a partial prefix;
+    otherwise (remaining_text, persona_name_or_None, boundary_type_or_None).
+    """
+    if not buffer.startswith("["):
+        return buffer, None, None
+
+    if buffer.startswith("[PERSONA:"):
+        end = buffer.find("]")
+        if end == -1:
+            return None
+        name = buffer[9:end].strip()
+        boundary_result = _resolve_boundary_marker(buffer[end + 1:].lstrip(), is_first_turn)
+        if boundary_result is None:
+            return None
+        remaining, boundary = boundary_result
+        return remaining, name, boundary
+
+    if "[PERSONA:".startswith(buffer):
+        return None  # still disambiguating "[PERSONA:" itself
+
+    boundary_result = _resolve_boundary_marker(buffer, is_first_turn)
+    if boundary_result is None:
+        return None
+    remaining, boundary = boundary_result
+    return remaining, None, boundary
 
 
 _MARKDOWN_EMPHASIS = re.compile(r"(\*\*\*|\*\*|\*|___|__|_|`)")
@@ -261,12 +292,19 @@ class ProcessTurn:
         self._persona_repo = persona_repo
         self._turn_logger = turn_logger
         self._rolling_window_size = rolling_window_size
+        self._last_turn_end: float | None = None
 
     async def execute(self, wm: WorkingMemory, audio: bytes, now: datetime) -> TurnResult | None:
+        t_start = time.monotonic()
+        if self._last_turn_end is not None:
+            print(f"[latency] Gap since last turn: {t_start - self._last_turn_end:.1f}s")
+
         # 1. STT
         text, detected_language = self._stt.transcribe(audio)
         if not text.strip():
             return None
+        t_stt_done = time.monotonic()
+        print(f"[latency] STT: {t_stt_done - t_start:.2f}s")
 
         # 2. User turn
         user_turn = Turn(timestamp=now, speaker=Speaker.USER, content=text)
@@ -290,30 +328,64 @@ class ProcessTurn:
                 )
             ]
 
-        # 5. Collect LLM response, strip markers, synthesise sentence-by-sentence
+        # 5. Stream the LLM response; resolve any leading [PERSONA:name]/boundary marker
+        # as soon as enough tokens arrive, then synthesise each sentence via TTS as it
+        # completes — instead of waiting for the entire reply before speaking a word.
         system_prompt, messages = _compose_working_context(wm, recalled_memories)
         wm.needs_onboarding = False
-        raw_response = ""
-        async for token in self._llm.complete(messages, system_prompt):
-            raw_response += token
-        assistant_content, detected_name = _strip_persona_prefix(raw_response.strip())
-        assistant_content, boundary_marker = _strip_conversation_marker(assistant_content, is_first_turn)
-        assistant_content = _strip_markdown(assistant_content)
         response_language = wm.active_persona.response_language
-        assistant_content = _spell_out_numbers(
-            assistant_content, response_language.code if response_language else None
-        )
-
+        lang_code = response_language.code if response_language else None
         voice = wm.active_persona.tts_voice
+
         audio_chunks: list[bytes] = []
+        content_parts: list[str] = []
         sentence_buffer = ""
-        for ch in assistant_content:
-            sentence_buffer += ch
+        prefix_buffer = ""
+        prefix_resolved = False
+        detected_name: str | None = None
+        boundary_marker: ConversationBoundaryType | None = None
+        t_first_token: float | None = None
+        t_first_audio: float | None = None
+
+        async for token in self._llm.complete(messages, system_prompt):
+            if t_first_token is None:
+                t_first_token = time.monotonic()
+                print(f"[latency] LLM first token: {t_first_token - t_stt_done:.2f}s")
+
+            if not prefix_resolved:
+                prefix_buffer += token
+                resolved = _try_resolve_prefixes(prefix_buffer, is_first_turn)
+                if resolved is None:
+                    continue
+                token, detected_name, boundary_marker = resolved
+                prefix_resolved = True
+
+            sentence_buffer += token
             if _is_sentence_end(sentence_buffer.rstrip()):
-                audio_chunks.append(self._tts.synthesise(sentence_buffer, voice))
+                processed = _spell_out_numbers(_strip_markdown(sentence_buffer), lang_code)
+                content_parts.append(processed)
+                t_sentence_ready = time.monotonic()
+                audio_chunks.append(self._tts.synthesise(processed, voice))
+                if t_first_audio is None:
+                    t_first_audio = time.monotonic()
+                    print(f"[latency] TTS first chunk: {t_first_audio - t_sentence_ready:.2f}s")
+                    print(f"[latency] Total to first audio: {t_first_audio - t_start:.2f}s")
                 sentence_buffer = ""
+
+        if not prefix_resolved:
+            # Response ended mid-prefix (e.g. a stray "[" with no closing marker) —
+            # treat whatever was buffered as plain content rather than dropping it.
+            sentence_buffer = prefix_buffer
         if sentence_buffer.strip():
-            audio_chunks.append(self._tts.synthesise(sentence_buffer, voice))
+            processed = _spell_out_numbers(_strip_markdown(sentence_buffer), lang_code)
+            content_parts.append(processed)
+            audio_chunks.append(self._tts.synthesise(processed, voice))
+            if t_first_audio is None:
+                t_first_audio = time.monotonic()
+                print(f"[latency] Total to first audio: {t_first_audio - t_start:.2f}s")
+
+        assistant_content = "".join(content_parts).strip()
+        print(f"[latency] Total turn: {time.monotonic() - t_start:.2f}s")
 
         # 6. Conversation boundary event — marker embedded in assistant turn below
         boundary = ConversationBoundaryDetected(boundary_type=boundary_marker) if boundary_marker else None
@@ -344,6 +416,7 @@ class ProcessTurn:
                 and wm.total_turn_count % self._rolling_window_size == 0):
             await self._summarise_window(wm)
 
+        self._last_turn_end = time.monotonic()
         return TurnResult(
             audio_chunks=audio_chunks,
             assistant_content=assistant_content,

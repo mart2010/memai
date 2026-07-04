@@ -12,14 +12,16 @@ from memai_server.domain.model import (
     Speaker,
     Turn,
 )
-from memai_server.services.memory import RunConsolidation
+from memai_server.services.memory import ConsolidateMemory
 from memai_server.services.ports import ExtractionResult
 
 from tests.fakes.fakes import (
     FakeConsolidationExtractor,
     FakeConversationRepository,
+    FakeDisambiguationEvaluator,
     FakeEmbeddingService,
     FakeMemoryRepository,
+    FakeMemorySynthesizer,
     FakeWorthinessEvaluator,
 )
 
@@ -35,15 +37,17 @@ def _general_assistant() -> AssistantPersona:
 def _make_consolidation(
     worthy: bool = True,
     extraction: ExtractionResult | None = None,
-) -> tuple[RunConsolidation, FakeConversationRepository, FakeMemoryRepository]:
+) -> tuple[ConsolidateMemory, FakeConversationRepository, FakeMemoryRepository]:
     conversation_repo = FakeConversationRepository()
     memory_repo = FakeMemoryRepository()
-    use_case = RunConsolidation(
+    use_case = ConsolidateMemory(
         conversation_repo=conversation_repo,
         memory_repo=memory_repo,
         embedding_service=FakeEmbeddingService(),
         extractor=FakeConsolidationExtractor(result=extraction),
         worthiness_evaluator=FakeWorthinessEvaluator(worthy=worthy),
+        disambiguator=FakeDisambiguationEvaluator(),
+        synthesizer=FakeMemorySynthesizer(),
     )
     return use_case, conversation_repo, memory_repo
 

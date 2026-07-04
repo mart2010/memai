@@ -15,7 +15,6 @@ from memai_server.domain.model import (
     Turn,
     User,
 )
-from memai_server.domain.protocols import WorthinessEvaluator
 from memai_server.services.ports import (
     ConsolidationExtractor,
     ExtractionResult,
@@ -23,6 +22,7 @@ from memai_server.services.ports import (
     Message,
     SessionInfo,
     SessionLine,
+    WorthinessEvaluator,
 )
 
 
@@ -34,10 +34,10 @@ class FakeSTTService:
     def __init__(self, transcript: str = "hello", language: Language = Language("en")) -> None:
         self.transcript = transcript
         self.language = language
-        self.calls: list[tuple[bytes, Language]] = []
+        self.calls: list[bytes] = []
 
-    def transcribe(self, audio: bytes, language_hint: Language | None) -> tuple[str, Language]:
-        self.calls.append((audio, language_hint))
+    def transcribe(self, audio: bytes) -> tuple[str, Language]:
+        self.calls.append(audio)
         return self.transcript, self.language
 
 
@@ -232,7 +232,13 @@ class FakeTurnLogger:
         self.clean_exits: dict[UUID, bool] = {}
         self.markers: list[tuple[UUID, ConversationBoundaryType]] = []
 
-    def append(self, session_id: UUID, turn: Turn, marker: ConversationBoundaryType | None = None) -> None:
+    def append(
+        self,
+        session_id: UUID,
+        turn: Turn,
+        marker: ConversationBoundaryType | None = None,
+        persona_id: UUID | None = None,
+    ) -> None:
         self.written.append((session_id, turn))
         if marker is not None:
             self.markers.append((session_id, marker))
@@ -268,3 +274,24 @@ class FakeConsolidationExtractor:
 
     def extract(self, conversation: Conversation) -> ExtractionResult:
         return self.result
+
+
+class FakeDisambiguationEvaluator:
+    def __init__(self, same: bool = False) -> None:
+        self.same = same
+
+    def is_same(self, existing: MemoryItem, candidate: MemoryItem) -> bool:
+        return self.same
+
+
+class FakeMemorySynthesizer:
+    def synthesize_episode(self, existing_summary: str, new_summary: str) -> str:
+        return new_summary
+
+    def synthesize_concept(self, existing: Concept, new_description: str) -> str:
+        return new_description
+
+    def synthesize_procedure(
+        self, existing: Procedure, new_description: str, new_steps: list[str]
+    ) -> tuple[str, list[str]]:
+        return new_description, new_steps

@@ -4,7 +4,7 @@ from uuid import uuid4
 
 from memai_server.domain.model import AssistantPersona, GENERAL_ASSISTANT_ID, Language, User
 from memai_server.services.persona import CreatePersona, EditPersona, ListPersonas, RemovePersona, SwitchPersona
-from memai_server.services.session import SessionContext
+from memai_server.services.session import WorkingMemory
 
 from tests.fakes.fakes import FakePersonaRepository
 
@@ -31,8 +31,8 @@ def _other_persona(name: str = "Coach") -> AssistantPersona:
     )
 
 
-def _session(active_persona: AssistantPersona) -> SessionContext:
-    return SessionContext(
+def _session(active_persona: AssistantPersona) -> WorkingMemory:
+    return WorkingMemory(
         session_id=uuid4(),
         started_at=_now(),
         user=User(id=uuid4(), primary_language=Language("en")),

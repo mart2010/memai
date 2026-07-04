@@ -26,6 +26,7 @@ class OllamaLLMService:
             model=self._model,
             messages=ollama_messages,
             stream=True,
+            keep_alive="30m",
         ):
             if part.message.content:
                 yield part.message.content
