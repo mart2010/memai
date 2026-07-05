@@ -142,6 +142,12 @@ The fully local setup is the recommended default. Everything else is an explicit
 
 ---
 
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, architecture conventions, and PR guidelines.
+
+---
+
 ## License
 
 This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See the [LICENSE](LICENSE) file for details.

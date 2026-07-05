@@ -1,0 +1,88 @@
+# Contributing to Memai
+
+Thanks for helping out. Memai is a personal project, so this is intentionally
+light — no CLA, no bureaucracy — just a few conventions to keep things
+consistent.
+
+## Getting set up
+
+See the [README](README.md#getting-started) for the two-component layout
+(`client/`, `server/`) and prerequisites (Python 3.13+, CUDA GPU for the
+server, PostgreSQL + pgvector).
+
+```bash
+# Server (GPU machine)
+cd server && uv sync
+
+# Client
+cd client && uv sync
+```
+
+**Only `uv` is used to manage dependencies** — `uv sync`, `uv add`, `uv remove`,
+`uv tool install`, `uv run`. Never `pip` or `uv pip`, even for editable
+installs.
+
+## Before you start
+
+For anything beyond a small fix, skim [CLAUDE.md](CLAUDE.md) first — it
+documents the architecture, design constraints, and a few hard invariants
+(e.g. the live/offline boundary: live conversation only ever writes flat
+JSONL files, never the database). If your change would cross one of those
+lines, raise it in the PR description before writing code, not after.
+
+If a `docs/PLAN.md` exists, check it for where the project currently stands.
+
+## Architecture conventions
+
+The codebase follows **Clean Architecture** with **tactical DDD** patterns:
+
+- **Entities** — domain objects, no external imports
+- **Use Cases** — application logic, defines abstract ports/interfaces
+- **Infrastructure / Interface Adapters** — concrete implementations
+- **External World / Frameworks & Drivers** — DB, HTTP, CLI, external APIs
+
+The dependency rule is strict: inner layers never import from outer ones.
+Use the established vocabulary (Aggregate, Value Object, Repository, Domain
+Event, etc.) rather than introducing new terms for existing concepts — if
+you think a term in the domain model is imprecise, raise it in the PR rather
+than working around it silently.
+
+## Code style
+
+```bash
+ruff check .
+ruff format .
+```
+
+Line length is 120. Test files are excluded from linting.
+
+## Testing
+
+- **pytest**, following the test pyramid: mostly unit tests, fewer
+  integration tests, very few end-to-end.
+- New infrastructure dependencies (DB, queue, HTTP client, clock,
+  filesystem, …) should get a `Fake*` in-memory implementation of their
+  port rather than a mock — this keeps unit tests fast and dependency-free.
+  Only reach for `unittest.mock` when a Fake genuinely doesn't fit, and say
+  why in the PR.
+- Unit tests exercise domain logic and use cases against Fakes; integration
+  tests wire real adapters. Keep the two separate.
+
+Run the relevant package's tests before opening a PR:
+
+```bash
+cd server && uv run pytest
+cd client && uv run pytest
+```
+
+## Submitting a PR
+
+1. Branch off `master`.
+2. Keep the PR scoped to one change — no drive-by refactors bundled in.
+3. Make sure `ruff check .` and the test suite pass.
+4. Describe *why*, not just *what* — especially for anything touching the
+   memory model, the live/offline boundary, or persona scoping, since those
+   have non-obvious invariants documented in `CLAUDE.md`.
+
+By submitting a PR, you agree your contribution is licensed under this
+project's [AGPL-3.0 license](LICENSE).
