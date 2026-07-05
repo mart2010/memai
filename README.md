@@ -82,8 +82,8 @@ Microphone → [VAD] → WebSocket → [STT] → [LLM stream] → [TTS] → WebS
 | Task | Model |
 |---|---|
 | Speech-to-text | `faster-whisper` |
-| Language model | `llama3.3` via `ollama` (streamed) |
-| Text-to-speech | `XTTS v2` (Coqui), CUDA-accelerated |
+| Language model | `aya-expanse` via `ollama` (streamed) |
+| Text-to-speech | `Kokoro`, CUDA-accelerated |
 | Embeddings | `multilingual-e5-large` (1024-dim) |
 | Vector search | PostgreSQL + `pgvector` (HNSW index) |
 
@@ -124,7 +124,7 @@ The default setup above is fully local and air-gapped. But every inference servi
 | Component | Local (default) | Cloud alternative |
 |---|---|---|
 | Speech-to-text | `faster-whisper` on GPU | Whisper API, Deepgram, AssemblyAI |
-| Language model | `llama3.3` via `ollama` | OpenRouter, OpenAI, Anthropic, … |
+| Language model | `aya-expanse` via `ollama` | OpenRouter, OpenAI, Anthropic, … |
 | Text-to-speech | Kokoro on GPU | ElevenLabs, Azure TTS, … |
 | Embeddings | `multilingual-e5-large` on CPU/GPU | OpenAI Embeddings API |
 | Memory store | PostgreSQL on your machine | Managed cloud PostgreSQL + pgvector |
