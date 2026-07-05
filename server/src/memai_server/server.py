@@ -222,7 +222,7 @@ def main() -> None:
         async def handler(ws):
             await _handle(ws, stt, llm, tts, cfg.log_dir, cfg.primary_language)
 
-        async with websockets.serve(handler, "0.0.0.0", cfg.ws_port):
+        async with websockets.serve(handler, "0.0.0.0", cfg.ws_port, max_size=None):
             print(f"Server listening on :{cfg.ws_port}")
             await asyncio.Future()
 

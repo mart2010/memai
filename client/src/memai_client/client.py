@@ -105,7 +105,7 @@ async def run() -> None:
 
     loop = asyncio.get_running_loop()
 
-    async with websockets.connect(f"ws://localhost:{ws_port}") as ws:
+    async with websockets.connect(f"ws://localhost:{ws_port}", max_size=None) as ws:
         print("Connected")
 
         silence_counter = 0
