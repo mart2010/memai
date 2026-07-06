@@ -66,37 +66,64 @@ class ServerContext:
     disambiguator: OllamaDisambiguationEvaluator
     synthesizer: OllamaMemorySynthesizer
     extractor: OllamaConsolidationExtractor
+    # Dedicated connection + repos for the background offline pipeline (TurnLogReplayer ->
+    # ConsolidateMemory), run via asyncio.to_thread. Kept separate from `conn` above: a
+    # Postgres connection is a single logical session, so a live per-connection query
+    # (StartSession etc., run directly on the event loop thread) racing against the
+    # background thread's open per-conversation transaction on the *same* connection
+    # could execute as part of that transaction, or block the event loop waiting on it.
+    # Two independent connections sidestep this entirely.
+    offline_conn: psycopg.Connection
+    offline_persona_repo: PSPersonaRepository
+    offline_memory_brief_repo: PSMemoryBriefRepository
+    offline_memory_repo: PSMemoryRepository
+    offline_conversation_repo: PSConversationRepository
+    offline_unit_of_work: PSUnitOfWork
     idle_timer_task: asyncio.Task | None = None
 
 
-def _replay_unprocessed_sessions(ctx: ServerContext) -> int:
+def _replay_sessions(
+    log_dir: Path,
+    conversation_repo: PSConversationRepository,
+    persona_repo: PSPersonaRepository,
+) -> int:
     replayer = TurnLogReplayer(
-        session_reader=JSONLSessionReplayReader(ctx.log_dir),
-        conversation_repo=ctx.conversation_repo,
-        persona_repo=ctx.persona_repo,
+        session_reader=JSONLSessionReplayReader(log_dir),
+        conversation_repo=conversation_repo,
+        persona_repo=persona_repo,
     )
     return replayer.execute()
 
 
 async def _run_offline_pipeline(ctx: ServerContext) -> None:
     """TurnLogReplayer -> ConsolidateMemory -> GenerateMemoryBrief. Triggered by the
-    idle timer below; also doubles as crash recovery since replay runs on every connect."""
-    replayed = _replay_unprocessed_sessions(ctx)
+    idle timer below; also doubles as crash recovery since replay runs on every connect.
+
+    TurnLogReplayer and ConsolidateMemory are both fully synchronous (file/DB/LLM calls
+    with no real await point) — dispatched via asyncio.to_thread so a long consolidation
+    run doesn't block the event loop and delay an incoming reconnect. Both use the
+    dedicated `offline_*` repos/connection, never the live `ctx.conn`. GenerateMemoryBrief
+    stays awaited directly: it streams via ollama.AsyncClient and genuinely cooperates
+    with the event loop (and only touches the DB via `offline_memory_brief_repo`, cheap
+    enough not to need its own thread hop)."""
+    replayed = await asyncio.to_thread(
+        _replay_sessions, ctx.log_dir, ctx.offline_conversation_repo, ctx.offline_persona_repo,
+    )
     consolidate = ConsolidateMemory(
-        conversation_repo=ctx.conversation_repo,
-        memory_repo=ctx.memory_repo,
+        conversation_repo=ctx.offline_conversation_repo,
+        memory_repo=ctx.offline_memory_repo,
         embedding_service=ctx.embedding_service,
         extractor=ctx.extractor,
         worthiness_evaluator=ctx.worthiness_evaluator,
         disambiguator=ctx.disambiguator,
         synthesizer=ctx.synthesizer,
-        unit_of_work=PSUnitOfWork(ctx.conn),
+        unit_of_work=ctx.offline_unit_of_work,
         merge_threshold=ctx.memory_merge_threshold,
         disambiguate_threshold=ctx.memory_disambiguate_threshold,
     )
-    processed = await consolidate.execute()
+    processed = await asyncio.to_thread(consolidate.execute)
     if processed:
-        brief_gen = GenerateMemoryBrief(llm=ctx.llm, memory_brief_repo=ctx.memory_brief_repo)
+        brief_gen = GenerateMemoryBrief(llm=ctx.llm, memory_brief_repo=ctx.offline_memory_brief_repo)
         await brief_gen.execute(datetime.now(UTC))
     print(f"[offline] replayed={replayed} consolidated={processed}")
 
@@ -125,7 +152,7 @@ async def _handle(ws, ctx: ServerContext) -> None:
         ctx.idle_timer_task.cancel()
         ctx.idle_timer_task = None
 
-    replayed = _replay_unprocessed_sessions(ctx)
+    replayed = _replay_sessions(ctx.log_dir, ctx.conversation_repo, ctx.persona_repo)
     if replayed:
         print(f"Replayed {replayed} unprocessed session(s) into the database")
 
@@ -231,6 +258,9 @@ def main() -> None:
     conn = postgres.connect(cfg.database_url)
     user_repo = PSUserRepository(conn)
     _ensure_user_exists(user_repo)
+    # Separate connection for the background offline pipeline — see ServerContext's
+    # offline_* fields docstring for why this can't share `conn`.
+    offline_conn = postgres.connect(cfg.database_url)
 
     print("Loading Whisper model…")
     stt = FasterWhisperSTTService(cfg.stt_model_path, device=cfg.stt_device, compute_type=cfg.stt_compute_type)
@@ -260,6 +290,12 @@ def main() -> None:
         disambiguator=OllamaDisambiguationEvaluator(model=cfg.llm_model, host=cfg.llm_ollama_host),
         synthesizer=OllamaMemorySynthesizer(model=cfg.llm_model, host=cfg.llm_ollama_host),
         extractor=OllamaConsolidationExtractor(model=cfg.llm_model, host=cfg.llm_ollama_host),
+        offline_conn=offline_conn,
+        offline_persona_repo=PSPersonaRepository(offline_conn),
+        offline_memory_brief_repo=PSMemoryBriefRepository(offline_conn),
+        offline_memory_repo=PSMemoryRepository(offline_conn),
+        offline_conversation_repo=PSConversationRepository(offline_conn),
+        offline_unit_of_work=PSUnitOfWork(offline_conn),
     )
 
     async def _run() -> None:

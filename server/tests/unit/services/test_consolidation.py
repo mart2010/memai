@@ -1,4 +1,3 @@
-import pytest
 from datetime import datetime, UTC
 from uuid import UUID
 
@@ -69,55 +68,50 @@ def _seed_ended_conversation(conversation_repo: FakeConversationRepository) -> N
 
 
 class TestRunConsolidation:
-    @pytest.mark.asyncio
-    async def test_worthy_conversation_produces_episode(self):
+    def test_worthy_conversation_produces_episode(self):
         episode = Episode(id=None, summary="Discussed Python.", happened_at=_now(), origin_conversation_id=1)
         extraction = ExtractionResult(episodes=[episode], concepts=[], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=True, extraction=extraction)
         _seed_ended_conversation(conversation_repo)
 
-        count = await use_case.execute()
+        count = use_case.execute()
 
         assert count == 1
         assert len(memory_repo.episodes) == 1
 
-    @pytest.mark.asyncio
-    async def test_unworthy_conversation_skips_episodes(self):
+    def test_unworthy_conversation_skips_episodes(self):
         episode = Episode(id=None, summary="Short chat.", happened_at=_now(), origin_conversation_id=1)
         extraction = ExtractionResult(episodes=[episode], concepts=[], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=False, extraction=extraction)
         _seed_ended_conversation(conversation_repo)
 
-        await use_case.execute()
+        use_case.execute()
 
         assert len(memory_repo.episodes) == 0
 
-    @pytest.mark.asyncio
-    async def test_concepts_extracted_regardless_of_worthiness(self):
+    def test_concepts_extracted_regardless_of_worthiness(self):
         concept = Concept(id=None, persona_id=GENERAL_ASSISTANT_ID, name="Recursion", description="A function calling itself.", language=Language("en"))
         extraction = ExtractionResult(episodes=[], concepts=[concept], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=False, extraction=extraction)
         _seed_ended_conversation(conversation_repo)
 
-        await use_case.execute()
+        use_case.execute()
 
         assert len(memory_repo.concepts) == 1
 
-    @pytest.mark.asyncio
-    async def test_conversation_marked_consolidated(self):
+    def test_conversation_marked_consolidated(self):
         use_case, conversation_repo, _ = _make_consolidation()
         _seed_ended_conversation(conversation_repo)
 
-        await use_case.execute()
+        use_case.execute()
 
         assert all(r.consolidated for r in conversation_repo._records.values())
 
-    @pytest.mark.asyncio
-    async def test_already_consolidated_conversations_skipped_on_rerun(self):
+    def test_already_consolidated_conversations_skipped_on_rerun(self):
         use_case, conversation_repo, _ = _make_consolidation()
         _seed_ended_conversation(conversation_repo)
 
-        await use_case.execute()
-        count2 = await use_case.execute()
+        use_case.execute()
+        count2 = use_case.execute()
 
         assert count2 == 0

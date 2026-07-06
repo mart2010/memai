@@ -96,7 +96,11 @@ class ConsolidateMemory:
         self._merge_threshold = merge_threshold
         self._disambiguate_threshold = disambiguate_threshold
 
-    async def execute(self) -> int:
+    def execute(self) -> int:
+        """Synchronous by design: every step here (LLM extraction/evaluation/synthesis,
+        embedding, DB upserts) is a blocking call with no real `await` point. Callers that
+        run this from an asyncio event loop (see `server.py`) must dispatch it via
+        `asyncio.to_thread` so it doesn't block other connections for the run's duration."""
         conversations = self._conversation_repo.get_unconsolidated()
         processed = 0
         for conversation in conversations:

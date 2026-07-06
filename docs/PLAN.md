@@ -543,10 +543,31 @@ Off-session memory consolidation runs reliably after every disconnect.
 - [x] Crash recovery: unconsolidated Conversations reprocessed safely on next run — guaranteed
       now by the atomicity fix above (a failed conversation commits nothing, so it's retried in
       full) plus `TurnLogReplayer`'s existing idempotency
-- [ ] Reconnect during active consolidation: new session starts immediately with last
-      committed MemoryBrief (stale is acceptable) — still genuinely open: `ConsolidateMemory`'s
-      extraction/embedding/synthesis calls are synchronous and block the event loop for their
-      duration (flagged in Phase 4 Pass 2 findings); needs `asyncio.to_thread` or similar
+- [x] Reconnect during active consolidation: new session starts immediately with last
+      committed MemoryBrief (stale is acceptable) — fixed: `TurnLogReplayer` and
+      `ConsolidateMemory.execute` (now plain `def`, no real `await` inside — see
+      `services/memory.py`) are dispatched via `asyncio.to_thread` from
+      `_run_offline_pipeline` in `server.py`, so a long consolidation run no longer blocks
+      the event loop. `GenerateMemoryBrief` stays directly `await`ed — it genuinely
+      cooperates via `ollama.AsyncClient`.
+      Also fixed along the way: the offline pipeline now uses a **second, dedicated
+      Postgres connection** (`ServerContext.offline_conn` + `offline_*` repos/`PSUnitOfWork`,
+      wired in `main()`), separate from the live per-connection `conn`. A single shared
+      connection would have let the background thread's open per-conversation transaction
+      race against a live `StartSession` query on the same logical Postgres session —
+      either executing as part of that transaction or blocking the event loop waiting on
+      the connection, defeating the fix. Two independent connections avoid this entirely.
+      **Known residual limitation (documented, not fixed)**: `TurnLogReplayer`'s
+      idempotency check (`is_persisted(session_id)` then insert) is not atomic across the
+      two connections, and `turns.session_id` has only a plain index, no uniqueness
+      constraint. If a client reconnects in the narrow window while the background thread
+      is mid-replay of that exact not-yet-committed session, both connections could decide
+      "not yet persisted" and each insert a duplicate Conversation+Turn set for it. Judged
+      very unlikely in practice (requires a reconnect landing in a sub-second-to-low-
+      single-digit-second window right as the idle timer fires) and not a crash/corruption
+      risk, just duplicate data for that one session — deferred rather than adding a claim
+      table (e.g. `replayed_sessions(session_id UUID PRIMARY KEY)` with
+      `INSERT ... ON CONFLICT DO NOTHING RETURNING session_id`) right now.
 - [ ] End-to-end test: disconnect → verify Conversations consolidated + DB state correct —
       manually verified live 2026-07-06 (Phase 4 Pass 2), but no automated integration test yet;
       blocked on the same real-Postgres test setup as Phase 3's integration tests
