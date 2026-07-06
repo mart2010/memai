@@ -6,6 +6,12 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "faster-whisper>=1.2.1",
+    # ctranslate2 (faster-whisper's backend) needs libcublas.so.12 at runtime but declares
+    # no CUDA dependency of its own (expects the system to provide it). sentence-transformers'
+    # torch pulls in the newer, differently-named "nvidia-cublas" (CUDA 13) package instead,
+    # which doesn't satisfy this — so without this explicit pin, nothing in the resolved
+    # tree ships libcublas.so.12 at all. See CLAUDE.md / docs/PLAN.md Phase 4 Pass 2 findings.
+    "nvidia-cublas-cu12",
     "ollama>=0.6.1",
     "platformdirs>=4.0",
     "tomli-w>=1.2",

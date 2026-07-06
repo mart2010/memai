@@ -448,11 +448,17 @@ changed files.
   (via `torch`) as a live dependency pulled in `nvidia-cublas` 13.x, but `ctranslate2`
   (faster-whisper) needs `libcublas.so.12` specifically, and no CUDA-12 cublas package ended up
   installed anywhere in the venv — STT crashed with `Library libcublas.so.12 is not found`.
-  Pass 1 never hit this since it had no `torch` dependency at all. Worked around for now via
-  `LD_LIBRARY_PATH` pointing at Ollama's bundled CUDA-12 libs
-  (`/usr/local/lib/ollama/cuda_v12`) — **not a durable fix**, depends on Ollama's install being
-  present; pinning `nvidia-cublas-cu12` explicitly as a `server` dependency would be the robust
-  fix (adds venv size; not done here, needs a decision).
+  Pass 1 never hit this since it had no `torch` dependency at all. Worked around at the time via
+  `LD_LIBRARY_PATH` pointing at Ollama's bundled CUDA-12 libs (`/usr/local/lib/ollama/cuda_v12`)
+  — not durable, depended on Ollama's install being present.
+  **Fixed properly**: `nvidia-cublas-cu12` pinned explicitly in `server/pyproject.toml`.
+  Confirmed via `uv.lock` inspection that this is a real gap, not a resolver conflict —
+  `ctranslate2` declares zero CUDA dependency of its own (`numpy`, `pyyaml`, `setuptools`
+  only) and `torch` pulls the differently-named, CUDA-13-generation `nvidia-cublas` package
+  on Linux, so nothing in the tree provided `libcublas.so.12` without this pin. Not yet
+  verified: needs `uv sync` + a real STT run on the GPU workstation (this laptop has no GPU
+  and can't fully build/sync torch locally — see Phase 7 TODO below, tracked as part of the
+  wizard's dependency-installation scope going forward).
 - **Fixed: `SentenceTransformerEmbeddingService` needed network on every load, even
   fully-cached.** `SentenceTransformer(...)` does a HEAD request to Hugging Face Hub to check
   for updates regardless of local cache state — same "live server must never need network"
@@ -737,17 +743,19 @@ none of this should require hand debugging on a real install:
   [[project-gpu-workstation-environment]] for why that error is misleading — the real cause
   is `CERTIFICATE_VERIFY_FAILED` on the *first* retry attempt, masked by a
   retry-logic bug that surfaces a different error on the second attempt).
-- **CUDA major-version conflicts (e.g. `nvidia-cublas` cu12 vs cu13) should be caught and
-  resolved at install time, not discovered as a runtime crash.** Adding `torch` as a live
-  dependency (for the embedding service) pulled a newer `nvidia-cublas` than
-  `ctranslate2`/faster-whisper needs, and nothing in the venv provided the older one. The
-  wizard's prerequisite/health-check steps should verify all CUDA-dependent packages
-  (`ctranslate2`, `torch`, anything else GPU-bound) actually resolve to *compatible* CUDA
-  library versions — or the `server` package should just pin `nvidia-cublas-cu12` explicitly
-  as its own dependency so this can't happen regardless of what the wizard does (the more
-  robust fix; not done yet — currently worked around via `LD_LIBRARY_PATH` pointing at
-  Ollama's bundled CUDA-12 libs, which isn't durable/portable to a fresh box that has no
-  Ollama installed at all).
+- **CUDA major-version conflicts (e.g. `nvidia-cublas-cu12` vs the newer, differently-named
+  `nvidia-cublas`) should be caught and resolved at install time, not discovered as a runtime
+  crash.** Adding `torch` as a live dependency (for the embedding service) pulled in the
+  CUDA-13-generation `nvidia-cublas` package, while `ctranslate2`/faster-whisper needs
+  `libcublas.so.12` and declares no CUDA dependency of its own to provide it — so nothing in
+  the resolved tree shipped it. **The `server`-side fix landed**: `nvidia-cublas-cu12` is now
+  pinned explicitly in `server/pyproject.toml` (not yet verified — needs a real `uv sync` +
+  STT run on the GPU workstation). What's still open is the *wizard's* half of this: per-item
+  #6 above (dependency installation is squarely the installation wizard's job, distinct from
+  the GA's voice-config scope — see CLAUDE.md), `CheckPrerequisites`/`RunHealthChecks` should
+  still verify all CUDA-dependent packages actually resolve to compatible library versions on
+  a fresh install, so this class of bug is caught before first run rather than relying on this
+  one pin never drifting.
 
 ### Known gaps (deliberate, documented — not oversights)
 - No wizard step collects real Postgres connection details (no "collect Postgres
