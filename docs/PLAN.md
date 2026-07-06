@@ -291,10 +291,17 @@ hardware before wiring the DB. Use real services; stub the DB with in-memory rep
   `_spell_out_numbers` in `services/session.py`) — LLMs reliably ignore "don't use markdown"
   instructions, and Kokoro/espeak's native number-reading is inconsistent outside English.
   Both are deterministic post-processing, not prompt-reliant.
-- Implemented the onboarding redesign (previously an open issue): `GeneralAssistant` renamed
-  to **Memai**; `ONBOARDING_SCRIPT` + first-launch directive added in `services/session.py`
-  so the assistant introduces itself, explains voice-only configuration, and can replay the
-  intro on request — no separate detector needed, handled by the main LLM call.
+- Implemented the onboarding redesign (previously an open issue): `ONBOARDING_SCRIPT` +
+  first-launch directive added in `services/session.py` so the assistant introduces itself,
+  explains voice-only configuration, and can replay the intro on request — no separate
+  detector needed, handled by the main LLM call. Pass 1 had also renamed `GeneralAssistant`'s
+  spoken name to **Memai** — **reverted 2026-07-06**: Memai is the product/project name, not
+  the assistant's own spoken identity, and conflating the two was a mistake. The persona's
+  default name is now the generic placeholder **"Vocal Assistant"** (see `domain/model.py`'s
+  `general_assistant()` factory and the migration seed in `001_initial_schema.sql`). Ideally
+  this name becomes voice-configurable later, same as `primary_language` — deferred for now
+  since `AssistantPersona.update()` currently blocks any name/system_prompt change on
+  `is_system` personas, which would need relaxing (name only) to support it.
 - **Fixed: `ProcessTurn.execute` wasn't actually streaming.** The original code drained the
   entire LLM token stream into one string before doing any sentence-splitting or TTS, so the
   user waited for the *full* reply before hearing a word — despite `CLAUDE.md` describing the
@@ -415,12 +422,56 @@ Swap in real repositories and wire the offline consolidation pipeline.
       implemented via `_mic_active` threading.Event, no changes needed
 - [x] Existing: sounddevice capture, webrtcvad, binary frames, SSH tunnel — kept as-is
 
-**Not yet verified — requires the GPU workstation** (this laptop has no GPU and no network
-access to rebuild/sync the `server` venv's heavier deps right now): real Postgres connectivity,
-`_ensure_user_exists` bootstrap against a fresh DB, idle-timer-triggered
-`TurnLogReplayer`/`ConsolidateMemory`/`GenerateMemoryBrief` end-to-end, crash-recovery replay on
-restart. `ruff check` is clean on the changed files (`server.py`, `infrastructure/config.py`;
-`infrastructure/postgres.py` has 3 pre-existing `E741` warnings on lines untouched by this pass).
+**Verified live on the GPU workstation (2026-07-06)** — real Postgres (Docker), real
+STT/LLM/TTS/embedding models, full WebSocket round-trip: connect → onboarding skip (user
+already had `primary_language` set) → audio → STT → LLM (`gemma4`) → TTS (Kokoro) → 11 audio
+chunks streamed back → `speaking_end` → disconnect → idle timer → `TurnLogReplayer` →
+`ConsolidateMemory` (extracted a real `Concept`) → `GenerateMemoryBrief`, all confirmed by
+querying the DB directly afterward. `_ensure_user_exists` bootstrap and crash-recovery replay
+(`TurnLogReplayer` running on every connect) both confirmed working. `ruff check` clean on all
+changed files.
+
+**Real bugs found and fixed along the way** (environment/infra, not Pass 2 logic bugs):
+- **`nvidia-cublas` CUDA major-version conflict**: adding `SentenceTransformerEmbeddingService`
+  (via `torch`) as a live dependency pulled in `nvidia-cublas` 13.x, but `ctranslate2`
+  (faster-whisper) needs `libcublas.so.12` specifically, and no CUDA-12 cublas package ended up
+  installed anywhere in the venv — STT crashed with `Library libcublas.so.12 is not found`.
+  Pass 1 never hit this since it had no `torch` dependency at all. Worked around for now via
+  `LD_LIBRARY_PATH` pointing at Ollama's bundled CUDA-12 libs
+  (`/usr/local/lib/ollama/cuda_v12`) — **not a durable fix**, depends on Ollama's install being
+  present; pinning `nvidia-cublas-cu12` explicitly as a `server` dependency would be the robust
+  fix (adds venv size; not done here, needs a decision).
+- **Fixed: `SentenceTransformerEmbeddingService` needed network on every load, even
+  fully-cached.** `SentenceTransformer(...)` does a HEAD request to Hugging Face Hub to check
+  for updates regardless of local cache state — same "live server must never need network"
+  violation as the old spaCy/en_core_web_sm issue. Fixed by setting `HF_HUB_OFFLINE=1` at
+  import time in `infrastructure/embedding.py` (before `sentence_transformers` is imported) —
+  same principle applies to Kokoro's voice-pack loading (`hf_hub_download` in
+  `kokoro/pipeline.py`), which inherits the same env var from the same process.
+  `intfloat/multilingual-e5-large` and Kokoro's `af_heart`/`ff_siwis` voice packs must be
+  pre-downloaded into the HF cache before first live run (same pattern as Whisper models).
+- **Found: one-off/manual DB scripts using plain `psycopg.connect()` (not `postgres.connect()`)
+  default to `autocommit=False`** — an `UPDATE` run this way without an explicit `.commit()`
+  leaves an uncommitted transaction. Didn't actually block anything here (Postgres rolls back
+  on connection close), but worth remembering when poking at the DB by hand outside the app.
+- **Self-inflicted test artifact, not a real bug, but a real design risk it exposed**: testing
+  with an aggressively short `idle_consolidation_minutes` (0.05) caused new connections to hang
+  indefinitely waiting for `select_language`/audio responses, because `ConsolidateMemory`'s
+  extraction/embedding/synthesis calls are fully synchronous (no `await`, no
+  `asyncio.to_thread`) and block the single-threaded asyncio event loop for their entire
+  duration. Pass 2's wiring makes the offline pipeline a genuine background
+  `asyncio.create_task` that can now overlap in wall-clock time with a live connection for the
+  first time (Pass 1 had no such background task) — with the default 5-minute delay this is
+  unlikely to bite in practice, but Phase 5's stated goal ("reconnect during active
+  consolidation: new session starts immediately") is not actually true yet with synchronous
+  blocking calls. Flagged for Phase 5, not fixed here.
+- **Found (separate from Pass 2 wiring, but surfaced by this real test): `_strip_markdown` in
+  `services/session.py` only strips emphasis markers (`**bold**`, `_italic_`, `` ` ``) — not
+  headers (`#`), horizontal rules, or emoji.** A real `gemma4` response came back with
+  `### 💾 Updated Profile Brief` — despite the system prompt explicitly forbidding markdown —
+  and that would be read aloud by Kokoro largely unfiltered. Not fixed here; needs its own pass
+  (broader stripping regex, or emoji removal) since it's Pass 1 TTS-sanitization scope, not
+  Pass 2 DB wiring.
 
 #### ⚠ Revisit: Client-side first-launch onboarding flow
 Current design: server detects missing `primary_language` → pushes `select_language` to
@@ -446,9 +497,14 @@ Implications to resolve before implementing:
 - Define "first launch" on client: absence of `SSH_USER_HOST` in `.env` (or config file)
 
 ### End-to-End Smoke Test
-- [ ] Client connects, speaks a sentence, receives synthesised audio response
-- [ ] First launch triggers language selection prompt; onboarding conversation starts in
-      selected language
+- [x] Client connects, speaks a sentence, receives synthesised audio response — verified
+      2026-07-06 via a scripted WebSocket test client (synthetic espeak-ng audio, not the real
+      mic/`sounddevice` hardware client) against the real GPU-workstation server; 11 audio
+      chunks received back
+- [x] First launch triggers language selection prompt; onboarding conversation starts in
+      selected language — verified in an earlier run this session (`select_language` sent,
+      `language_selected` handled, `CompleteOnboarding` persisted to DB); not re-verified
+      end-to-end with the real client hardware
 
 ---
 
@@ -627,6 +683,43 @@ Constraints" for the voice-config scope this wizard sits outside of.
       of a raw traceback, prints the LLM selection at the end
 - [ ] `--client` flow
 - [ ] `--uninstall` flow
+
+### TODO — model download/caching + CUDA compatibility (from Phase 4 Pass 2 live test, 2026-07-06)
+
+The live smoke test on the GPU workstation (see Phase 4 Pass 2 findings above) surfaced
+exactly the class of problems a proper installation wizard should prevent on a fresh box —
+none of this should require hand debugging on a real install:
+
+- **Model download/caching should be a wizard responsibility, driven by the user's primary +
+  secondary language selection.** Right now, `SentenceTransformerEmbeddingService`
+  (`multilingual-e5-large`) and Kokoro voice packs (e.g. `af_heart.pt`, `ff_siwis.pt`) are
+  lazily downloaded on first *live* use — which fails outright on a locked-down/offline
+  server (no proxy allowed on the live process, see `HF_HUB_OFFLINE=1` fix in
+  `infrastructure/embedding.py`) unless someone manually pre-downloads them first. The
+  wizard should download every asset actually needed for the languages selected in step 6
+  (`SelectLanguages`) — the embedding model (always, single shared model) plus only the
+  Kokoro/Piper voice packs for the chosen languages — during `ResolveTTSEngines`/a new step,
+  not leave it to chance at first conversation.
+- **`SSL_CERT_FILE`/corporate-proxy handling for one-time downloads should be automatic, not
+  a manual env var the developer has to remember.** `docs/INSTALL_SERVER.md` documents the
+  `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` workaround, but nothing in the wizard
+  applies it. `ModelInstaller` implementations should either detect/pass this automatically
+  or the wizard should surface a clear, actionable error pointing at the doc instead of a
+  cryptic `httpx` "client has been closed" traceback (see
+  [[project-gpu-workstation-environment]] for why that error is misleading — the real cause
+  is `CERTIFICATE_VERIFY_FAILED` on the *first* retry attempt, masked by a
+  retry-logic bug that surfaces a different error on the second attempt).
+- **CUDA major-version conflicts (e.g. `nvidia-cublas` cu12 vs cu13) should be caught and
+  resolved at install time, not discovered as a runtime crash.** Adding `torch` as a live
+  dependency (for the embedding service) pulled a newer `nvidia-cublas` than
+  `ctranslate2`/faster-whisper needs, and nothing in the venv provided the older one. The
+  wizard's prerequisite/health-check steps should verify all CUDA-dependent packages
+  (`ctranslate2`, `torch`, anything else GPU-bound) actually resolve to *compatible* CUDA
+  library versions — or the `server` package should just pin `nvidia-cublas-cu12` explicitly
+  as its own dependency so this can't happen regardless of what the wizard does (the more
+  robust fix; not done yet — currently worked around via `LD_LIBRARY_PATH` pointing at
+  Ollama's bundled CUDA-12 libs, which isn't durable/portable to a fresh box that has no
+  Ollama installed at all).
 
 ### Known gaps (deliberate, documented — not oversights)
 - No wizard step collects real Postgres connection details (no "collect Postgres

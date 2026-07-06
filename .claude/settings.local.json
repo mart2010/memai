@@ -2,7 +2,10 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:pypi.org)",
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "Bash(ssh tx940094.open.etat-de-vaud.ch \"tail -60 /tmp/mst2.log\")",
+      "Bash(ssh tx940094.open.etat-de-vaud.ch \"find ~/.cache/huggingface/hub/models--hexgrad--Kokoro-82M -iname '*.pt' 2>/dev/null | head -20\")",
+      "Bash(ssh tx940094.open.etat-de-vaud.ch \"grep -n 'Language selected\\\\|\\\\[latency\\\\]\\\\|Client connected\\\\|Client disconnected\\\\|Replayed\\\\|offline' /tmp/mst4.log\")"
     ]
   }
 }

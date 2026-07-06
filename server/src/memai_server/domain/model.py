@@ -83,7 +83,7 @@ class AssistantPersona:
         now = datetime.now(UTC)
         return cls(
             id=GENERAL_ASSISTANT_ID,
-            name="Memai",
+            name="Vocal Assistant",  # generic placeholder — Memai is the product, not the persona's name
             system_prompt=system_prompt,
             languages=[],
             response_language=response_language,

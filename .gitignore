@@ -50,5 +50,10 @@ client/config/
 .env
 .env.local
 
+# Raw session logs (server/logs/sessions/*.jsonl) — full conversation transcripts,
+# kept forever per CLAUDE.md, must never be committed.
+server/logs/
+*.jsonl
+
 # my exclusion
 xprivate/

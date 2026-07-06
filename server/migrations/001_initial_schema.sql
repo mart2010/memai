@@ -133,10 +133,12 @@ CREATE INDEX IF NOT EXISTS procedures_embedding_hnsw
 -- always present regardless of application state. The system_prompt can be
 -- updated after first launch via voice; the id is fixed and must match
 -- GENERAL_ASSISTANT_ID in domain/model.py.
+-- name is a generic placeholder — Memai is the product name, not the persona's
+-- spoken identity; this should become voice-configurable in a future phase.
 INSERT INTO personas (id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at)
 VALUES (
     '00000000-0000-0000-0000-000000000001',
-    'Memai',
+    'Vocal Assistant',
     'You are a helpful, honest voice assistant. Your text is spoken aloud verbatim — never use markdown formatting 
     (no **bold**, no _italics_, no bullet points, no headers, no code blocks). 
     If the user asks what you can do, how to configure you, or asks to hear your introduction again, deliver the onboarding introduction.',

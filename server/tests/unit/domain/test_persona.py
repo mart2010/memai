@@ -42,6 +42,6 @@ class TestAssistantPersonaGuards:
     def test_general_assistant_factory(self):
         persona = AssistantPersona.general_assistant("You are a helpful assistant.")
         assert persona.id == GENERAL_ASSISTANT_ID
-        assert persona.name == "Memai"
+        assert persona.name == "Vocal Assistant"
         assert persona.is_system is True
         assert persona.system_prompt == "You are a helpful assistant."
