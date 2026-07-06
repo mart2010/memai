@@ -358,30 +358,69 @@ Pass 1 latency benchmarking is done; Pass 2 wiring can proceed.
 Swap in real repositories and wire the offline consolidation pipeline.
 
 #### Server Entrypoint
-- [ ] On connect: run `TurnLogReplayer` if unwritten entries exist; check `User.primary_language`
-- [ ] If `primary_language` is None: send `select_language` with `SUPPORTED_LANGUAGES` list;
-      await `language_selected` frame; call `UpdatePrimaryLanguage`; then start onboarding session
-- [ ] Normal session: call `StartSession` (injects MemoryBrief + session tail if applicable)
-- [ ] Binary frames (audio) → buffer; `end_utterance` → `ProcessTurn`
-- [ ] Stream synthesised audio as binary frames; send `speaking_end` JSON frame after
+- [x] On connect: run `TurnLogReplayer` if unwritten entries exist; check `User.primary_language`
+      — replay runs unconditionally at the top of every connection (`_replay_unprocessed_sessions`
+      in `server.py`); idempotent (no-op when nothing unprocessed), so this single call also
+      covers crash recovery on server restart without a separate startup-only code path
+- [x] If `primary_language` is None: send `select_language` with `SUPPORTED_LANGUAGES` list;
+      await `language_selected` frame; then start onboarding session — uses `CompleteOnboarding`
+      (`services/user.py`) rather than hand-rolling a new `User`/persona mutation inline, as
+      Pass 1's stub did
+- [x] Normal session: call `StartSession` (injects MemoryBrief + session tail if applicable)
+- [x] Binary frames (audio) → buffer; `end_utterance` → `ProcessTurn`
+- [x] Stream synthesised audio as binary frames; send `speaking_end` JSON frame after
       final chunk of each response
-- [ ] On disconnect: call `EndSession`; start idle timer — if no new session opens within
+- [x] On disconnect: call `EndSession`; start idle timer — if no new session opens within
       N minutes, fire `TurnLogReplayer` → `ConsolidateMemory` → `GenerateMemoryBrief` (all async,
-      non-blocking); cancel timer on new connection
+      non-blocking); cancel timer on new connection — `idle_consolidation_minutes` (new
+      `[server]` config field, default 5.0) controls N; timer tracked on `ServerContext.idle_timer_task`
 
 #### Real repositories
-- [ ] `PSUserRepository`, `PSPersonaRepository`, `PSConversationRepository`,
-      `PSMemoryRepository`, `PSMemoryBriefRepository`
-- [ ] `JSONLTurnLogger` (live path)
-- [ ] `TurnLogReplayer` (crash recovery on startup + idle timer trigger post-disconnect)
-- [ ] `ConsolidateMemory` + `GenerateMemoryBrief` (triggered by idle timer)
-- [ ] DB pre-requisite: run `001_initial_schema.sql`; insert User record before first connect
+- [x] `PSUserRepository`, `PSPersonaRepository`, `PSConversationRepository`,
+      `PSMemoryRepository`, `PSMemoryBriefRepository` — all wired into `server.py`'s
+      `ServerContext`, replacing every Pass 1 in-memory stub
+- [x] `JSONLTurnLogger` (live path) — unchanged from Pass 1, still the only write path during
+      a live conversation (see Live/Offline boundary in `CLAUDE.md`)
+- [x] `TurnLogReplayer` (crash recovery on startup + idle timer trigger post-disconnect) —
+      both triggers now call the same `_replay_unprocessed_sessions` helper
+- [x] `ConsolidateMemory` + `GenerateMemoryBrief` (triggered by idle timer) — offline LLM
+      adapters (`OllamaWorthinessEvaluator`, `OllamaDisambiguationEvaluator`,
+      `OllamaMemorySynthesizer`, `OllamaConsolidationExtractor`) and
+      `SentenceTransformerEmbeddingService` instantiated once at server startup, reused for
+      both consolidation and live `TriggerRecall`-style embedding
+- [x] DB pre-requisite: run `001_initial_schema.sql` (still a manual/wizard step — unchanged).
+      Inserting the User record is **no longer a manual step**: `_ensure_user_exists()` in
+      `server.py` bootstraps the singleton `User` row automatically on first startup if
+      missing, since this is a single-user system with no auth — simpler and less error-prone
+      than requiring a hand-run `INSERT` before first connect
+- [x] `postgres.connect()` now opens with `autocommit=True` (previously unset — every write
+      was silently left in an uncommitted transaction). Simple and correct for this
+      single-connection, single-user process; Phase 5's "per-conversation atomicity"
+      requirement for `ConsolidateMemory` should wrap that call in an explicit
+      `with conn.transaction():` block later, which composes fine on top of autocommit
+- [x] **Design decision**: `User.primary_language` is now DB-only (via `UserRepository`),
+      dropping the Pass 1 TOML `voice_configurable.primary_language` mirror
+      (`ServerConfig.primary_language` field and the `update_voice_config()` call removed).
+      It remains conceptually voice-configurable (set during onboarding, changeable later by
+      voice) — only the persistence mechanism moved from config-file to Postgres, avoiding a
+      dual-write/drift risk now that the DB is wired for real. `memai.example.toml`'s
+      `[voice_configurable]` section has a comment noting this and reserving the section for
+      future settings without their own domain entity (e.g. `llm_temperature`)
 
 #### Client Entrypoint (refactor client.py)
-- [ ] On connect: if server sends `select_language`, render `questionary` terminal dropdown
-      with the supported language list; send `language_selected` result
-- [ ] Suppress VAD from playback start until `speaking_end` received (mic muting)
-- [ ] Existing: sounddevice capture, webrtcvad, binary frames, SSH tunnel — keep as-is
+- [x] On connect: if server sends `select_language`, render `questionary` terminal dropdown
+      with the supported language list; send `language_selected` result — already implemented,
+      no changes needed
+- [x] Suppress VAD from playback start until `speaking_end` received (mic muting) — already
+      implemented via `_mic_active` threading.Event, no changes needed
+- [x] Existing: sounddevice capture, webrtcvad, binary frames, SSH tunnel — kept as-is
+
+**Not yet verified — requires the GPU workstation** (this laptop has no GPU and no network
+access to rebuild/sync the `server` venv's heavier deps right now): real Postgres connectivity,
+`_ensure_user_exists` bootstrap against a fresh DB, idle-timer-triggered
+`TurnLogReplayer`/`ConsolidateMemory`/`GenerateMemoryBrief` end-to-end, crash-recovery replay on
+restart. `ruff check` is clean on the changed files (`server.py`, `infrastructure/config.py`;
+`infrastructure/postgres.py` has 3 pre-existing `E741` warnings on lines untouched by this pass).
 
 #### ⚠ Revisit: Client-side first-launch onboarding flow
 Current design: server detects missing `primary_language` → pushes `select_language` to

@@ -3,105 +3,107 @@ import asyncio
 import json
 import traceback
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, UTC
 from pathlib import Path
-from uuid import UUID
+from uuid import uuid4
 
+import psycopg
 import websockets
 
-from .domain.model import (
-    GENERAL_ASSISTANT_ID,
-    AssistantPersona,
-    Language,
-    MemoryBrief,
-    SUPPORTED_LANGUAGES,
-    User,
+from .domain.model import Language, SUPPORTED_LANGUAGES, User
+from .infrastructure import postgres
+from .infrastructure.config import load_config
+from .infrastructure.embedding import SentenceTransformerEmbeddingService
+from .infrastructure.json_file import JSONLSessionLogReader, JSONLSessionReplayReader, JSONLTurnLogger
+from .infrastructure.llm import (
+    OllamaConsolidationExtractor,
+    OllamaDisambiguationEvaluator,
+    OllamaLLMService,
+    OllamaMemorySynthesizer,
+    OllamaRecallIntentDetector,
+    OllamaWorthinessEvaluator,
 )
-from .infrastructure.config import load_config, update_voice_config
-from .infrastructure.json_file import JSONLSessionLogReader, JSONLTurnLogger
-from .infrastructure.llm import OllamaLLMService
+from .infrastructure.postgres import (
+    PSConversationRepository,
+    PSMemoryBriefRepository,
+    PSMemoryRepository,
+    PSPersonaRepository,
+    PSUserRepository,
+)
 from .infrastructure.stt import FasterWhisperSTTService
 from .infrastructure.tts import KOKORO_DEFAULT_VOICES, KokoroTTSService
-from .services.ports import MemoryItem
+from .services.memory import ConsolidateMemory, GenerateMemoryBrief
+from .services.replay import TurnLogReplayer
 from .services.session import EndSession, ProcessTurn, StartSession
+from .services.user import CompleteOnboarding
 
 # ---------------------------------------------------------------------------
-# In-memory stubs (Pass 1 — no DB)
+# Long-lived server context — one DB connection and one set of real adapters
+# shared across connections (single-user, no concurrency model; see CLAUDE.md)
 # ---------------------------------------------------------------------------
 
 
-class _UserRepo:
-    def __init__(self, language: Language | None) -> None:
-        self._user = User(id=UUID("00000000-0000-0000-0000-000000000010"), primary_language=language)
-
-    def get(self) -> User | None:
-        return self._user
-
-    def save(self, user: User) -> None:
-        self._user = user
-
-
-class _PersonaRepo:
-    def __init__(self, primary_language: Language | None = None) -> None:
-        kwargs = {}
-        if primary_language is not None:
-            kwargs["response_language"] = primary_language
-            kwargs["tts_voice"] = KOKORO_DEFAULT_VOICES.get(primary_language.code, "af_heart")
-        self._persona = AssistantPersona.general_assistant(
-            system_prompt=(
-                "You are a helpful voice assistant. "
-                "Keep responses concise and natural — one or two sentences. "
-                "Your text is spoken aloud verbatim — never use markdown formatting "
-                "(no **bold**, no _italics_, no bullet points, no headers, no code blocks). "
-                "If the user asks what you can do, how to configure you, or asks to hear your "
-                "introduction again, deliver the onboarding introduction."
-            ),
-            **kwargs,
-        )
-
-    def get(self, persona_id: UUID) -> AssistantPersona | None:
-        return self._persona if persona_id == GENERAL_ASSISTANT_ID else None
-
-    def list_all(self) -> list[AssistantPersona]:
-        return [self._persona]
-
-    def save(self, persona: AssistantPersona) -> None:
-        self._persona = persona
-
-    def delete(self, persona_id: UUID) -> None:
-        pass
+@dataclass
+class ServerContext:
+    conn: psycopg.Connection
+    stt: FasterWhisperSTTService
+    llm: OllamaLLMService
+    tts: KokoroTTSService
+    embedding_service: SentenceTransformerEmbeddingService
+    log_dir: Path
+    idle_consolidation_minutes: float
+    user_repo: PSUserRepository
+    persona_repo: PSPersonaRepository
+    memory_brief_repo: PSMemoryBriefRepository
+    memory_repo: PSMemoryRepository
+    conversation_repo: PSConversationRepository
+    recall_detector: OllamaRecallIntentDetector
+    worthiness_evaluator: OllamaWorthinessEvaluator
+    disambiguator: OllamaDisambiguationEvaluator
+    synthesizer: OllamaMemorySynthesizer
+    extractor: OllamaConsolidationExtractor
+    idle_timer_task: asyncio.Task | None = None
 
 
-class _MemoryBriefRepo:
-    def get(self) -> MemoryBrief | None:
-        return None
-
-    def save(self, brief: MemoryBrief) -> None:
-        pass
-
-
-class _MemoryRepo:
-    def upsert_episode(self, episode) -> int:
-        return 0
-
-    def upsert_concept(self, concept) -> int:
-        return 0
-
-    def upsert_procedure(self, procedure) -> int:
-        return 0
-
-    def search(self, embedding, memory_types, top_n, persona_id=None) -> list[tuple[float, MemoryItem]]:
-        return []
+def _replay_unprocessed_sessions(ctx: ServerContext) -> int:
+    replayer = TurnLogReplayer(
+        session_reader=JSONLSessionReplayReader(ctx.log_dir),
+        conversation_repo=ctx.conversation_repo,
+        persona_repo=ctx.persona_repo,
+    )
+    return replayer.execute()
 
 
-class _NullRecallDetector:
-    def detect(self, text: str):
-        return None
+async def _run_offline_pipeline(ctx: ServerContext) -> None:
+    """TurnLogReplayer -> ConsolidateMemory -> GenerateMemoryBrief. Triggered by the
+    idle timer below; also doubles as crash recovery since replay runs on every connect."""
+    replayed = _replay_unprocessed_sessions(ctx)
+    consolidate = ConsolidateMemory(
+        conversation_repo=ctx.conversation_repo,
+        memory_repo=ctx.memory_repo,
+        embedding_service=ctx.embedding_service,
+        extractor=ctx.extractor,
+        worthiness_evaluator=ctx.worthiness_evaluator,
+        disambiguator=ctx.disambiguator,
+        synthesizer=ctx.synthesizer,
+    )
+    processed = await consolidate.execute()
+    if processed:
+        brief_gen = GenerateMemoryBrief(llm=ctx.llm, memory_brief_repo=ctx.memory_brief_repo)
+        await brief_gen.execute(datetime.now(UTC))
+    print(f"[offline] replayed={replayed} consolidated={processed}")
 
 
-class _NullEmbeddingService:
-    def embed(self, text: str) -> list[float]:
-        return []
+async def _run_offline_pipeline_after_idle(ctx: ServerContext) -> None:
+    try:
+        await asyncio.sleep(ctx.idle_consolidation_minutes * 60)
+    except asyncio.CancelledError:
+        return
+    try:
+        await _run_offline_pipeline(ctx)
+    except Exception:
+        traceback.print_exc()
 
 
 # ---------------------------------------------------------------------------
@@ -109,43 +111,43 @@ class _NullEmbeddingService:
 # ---------------------------------------------------------------------------
 
 
-async def _handle(
-    ws,
-    stt: FasterWhisperSTTService,
-    llm: OllamaLLMService,
-    tts: KokoroTTSService,
-    log_dir: Path,
-    primary_language: Language | None,
-) -> None:
+async def _handle(ws, ctx: ServerContext) -> None:
     print("Client connected")
+
+    # A new connection means the previous disconnect's idle window is moot.
+    if ctx.idle_timer_task is not None:
+        ctx.idle_timer_task.cancel()
+        ctx.idle_timer_task = None
+
+    replayed = _replay_unprocessed_sessions(ctx)
+    if replayed:
+        print(f"Replayed {replayed} unprocessed session(s) into the database")
 
     session_id = uuid.uuid4()
     started_at = datetime.now(UTC)
 
-    user_repo = _UserRepo(primary_language)
-    persona_repo = _PersonaRepo(primary_language)
-
     start_session = StartSession(
-        user_repo=user_repo,
-        persona_repo=persona_repo,
-        memory_brief_repo=_MemoryBriefRepo(),
-        session_log_reader=JSONLSessionLogReader(log_dir),
+        user_repo=ctx.user_repo,
+        persona_repo=ctx.persona_repo,
+        memory_brief_repo=ctx.memory_brief_repo,
+        session_log_reader=JSONLSessionLogReader(ctx.log_dir),
     )
-    turn_logger = JSONLTurnLogger(log_dir)
+    turn_logger = JSONLTurnLogger(ctx.log_dir)
 
     session = start_session.execute(session_id, started_at)
 
     process_turn = ProcessTurn(
-        stt=stt,
-        llm=llm,
-        tts=tts,
-        embedding_service=_NullEmbeddingService(),
-        memory_repo=_MemoryRepo(),
-        recall_detector=_NullRecallDetector(),
-        persona_repo=persona_repo,
+        stt=ctx.stt,
+        llm=ctx.llm,
+        tts=ctx.tts,
+        embedding_service=ctx.embedding_service,
+        memory_repo=ctx.memory_repo,
+        recall_detector=ctx.recall_detector,
+        persona_repo=ctx.persona_repo,
         turn_logger=turn_logger,
     )
     end_session = EndSession(turn_logger=turn_logger)
+    complete_onboarding = CompleteOnboarding(user_repo=ctx.user_repo)
 
     if session.needs_onboarding:
         supported = [lang.code for lang in SUPPORTED_LANGUAGES]
@@ -171,11 +173,10 @@ async def _handle(
                 lang_code = data.get("language", "en")
                 lang = Language(lang_code)
                 voice = KOKORO_DEFAULT_VOICES.get(lang_code, "af_heart")
-                update_voice_config("primary_language", lang_code)
-                user_repo.save(User(id=session.user.id, primary_language=lang))
-                session.user.primary_language = lang
+                complete_onboarding.execute(session.user, lang)
                 session.active_persona.tts_voice = voice
                 session.active_persona.response_language = lang
+                ctx.persona_repo.save(session.active_persona)
                 onboarding_done = True
                 print(f"Language selected: {lang_code}, voice: {voice}")
                 continue
@@ -201,6 +202,7 @@ async def _handle(
         pass
     finally:
         end_session.execute(session, datetime.now(UTC))
+        ctx.idle_timer_task = asyncio.create_task(_run_offline_pipeline_after_idle(ctx))
         print("Client disconnected")
 
 
@@ -209,18 +211,52 @@ async def _handle(
 # ---------------------------------------------------------------------------
 
 
+def _ensure_user_exists(user_repo: PSUserRepository) -> None:
+    """Single-user system with no auth — bootstrap the one User row on first run
+    instead of requiring a manual SQL insert before first connect."""
+    if user_repo.get() is None:
+        user_repo.save(User(id=uuid4()))
+
+
 def main() -> None:
     cfg = load_config()
+
+    print("Connecting to database…")
+    conn = postgres.connect(cfg.database_url)
+    user_repo = PSUserRepository(conn)
+    _ensure_user_exists(user_repo)
 
     print("Loading Whisper model…")
     stt = FasterWhisperSTTService(cfg.stt_model_path, device=cfg.stt_device, compute_type=cfg.stt_compute_type)
     llm = OllamaLLMService(model=cfg.llm_model, host=cfg.llm_ollama_host)
     tts = KokoroTTSService()
+    print("Loading embedding model…")
+    embedding_service = SentenceTransformerEmbeddingService()
     print("Services ready.")
+
+    ctx = ServerContext(
+        conn=conn,
+        stt=stt,
+        llm=llm,
+        tts=tts,
+        embedding_service=embedding_service,
+        log_dir=cfg.log_dir,
+        idle_consolidation_minutes=cfg.idle_consolidation_minutes,
+        user_repo=user_repo,
+        persona_repo=PSPersonaRepository(conn),
+        memory_brief_repo=PSMemoryBriefRepository(conn),
+        memory_repo=PSMemoryRepository(conn),
+        conversation_repo=PSConversationRepository(conn),
+        recall_detector=OllamaRecallIntentDetector(model=cfg.llm_model, host=cfg.llm_ollama_host),
+        worthiness_evaluator=OllamaWorthinessEvaluator(model=cfg.llm_model, host=cfg.llm_ollama_host),
+        disambiguator=OllamaDisambiguationEvaluator(model=cfg.llm_model, host=cfg.llm_ollama_host),
+        synthesizer=OllamaMemorySynthesizer(model=cfg.llm_model, host=cfg.llm_ollama_host),
+        extractor=OllamaConsolidationExtractor(model=cfg.llm_model, host=cfg.llm_ollama_host),
+    )
 
     async def _run() -> None:
         async def handler(ws):
-            await _handle(ws, stt, llm, tts, cfg.log_dir, cfg.primary_language)
+            await _handle(ws, ctx)
 
         async with websockets.serve(handler, "0.0.0.0", cfg.ws_port, max_size=None):
             print(f"Server listening on :{cfg.ws_port}")

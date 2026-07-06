@@ -13,6 +13,9 @@
 [server]
 ws_port = 8765
 log_dir = "logs/sessions"
+# Minutes of no new session after a clean disconnect before the offline pipeline
+# (TurnLogReplayer -> ConsolidateMemory -> GenerateMemoryBrief) fires.
+idle_consolidation_minutes = 5.0
 
 [database]
 # Standard libpq DSN — adjust host/port/credentials as needed.
@@ -34,4 +37,9 @@ model = "aya-expanse"
 # ollama_host = "http://localhost:11434"  # uncomment if Ollama is not on localhost
 
 [voice_configurable]
-# primary_language = "fr"  # ISO 639-1; set by onboarding or GA voice command
+# primary_language is voice-configurable (set once during onboarding, changeable
+# later by talking to the GA) but is NOT stored here — it lives in the `users`
+# table in Postgres (see User.primary_language / UserRepository). This section
+# is reserved for future voice-configurable settings that don't already have a
+# domain entity of their own, e.g.:
+# llm_temperature = 0.7

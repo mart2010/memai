@@ -32,7 +32,11 @@ from ..services.ports import MemoryItem
 
 
 def connect(dsn: str) -> psycopg.Connection:
-    conn = psycopg.connect(dsn)
+    """Autocommit — single-user, single-connection process (see CLAUDE.md); no
+    cross-statement transaction boundaries needed yet. Phase 5's "per-conversation
+    atomicity" requirement for ConsolidateMemory should wrap that call in an explicit
+    `with conn.transaction():` block, which works fine on top of autocommit."""
+    conn = psycopg.connect(dsn, autocommit=True)
     register_vector(conn)
     return conn
 
