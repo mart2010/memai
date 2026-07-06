@@ -141,11 +141,14 @@ class TurnLogger(Protocol):
     def close(self, session_id: UUID, ended_at: datetime, clean_exit: bool) -> None: ...
 
 
-class WorthinessEvaluator(Protocol):
-    def evaluate(self, conversation: Conversation) -> bool: ...
-
-
 class ConsolidationExtractor(Protocol):
     def extract(self, conversation: Conversation) -> ExtractionResult: ...
+
+
+class UnitOfWork(Protocol):
+    """Demarcates a transaction boundary around a group of repository writes, so a use
+    case can commit or roll them back atomically without depending on infrastructure."""
+    def __enter__(self) -> "UnitOfWork": ...
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None: ...
 
 

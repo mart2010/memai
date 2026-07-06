@@ -4,8 +4,8 @@
 #   Windows     : %LOCALAPPDATA%\memai\memai.toml
 # Or run `memai-setup` to generate it automatically.
 #
-# Fixed sections ([server], [database], [stt], [llm]) require re-running the
-# installation wizard to change.
+# Fixed sections ([server], [database], [stt], [llm], [memory]) require re-running
+# the installation wizard to change.
 #
 # [voice_configurable] is the only section the GeneralAssistant can read and
 # mutate at runtime via voice commands.
@@ -35,6 +35,15 @@ compute_type = "float16"  # use int8 if VRAM is tight
 # qwen3) — their <think> blocks get spoken aloud.
 model = "aya-expanse"
 # ollama_host = "http://localhost:11434"  # uncomment if Ollama is not on localhost
+
+[memory]
+# Cosine similarity thresholds for the consolidation upsert decision (see CLAUDE.md's
+# "Upsert similarity threshold" section). Above merge_threshold: auto-merge into the
+# existing record. Between disambiguate_threshold and merge_threshold: ask the LLM
+# disambiguator. Below disambiguate_threshold: insert as a new record.
+# Defaults are placeholders pending calibration against real usage data.
+merge_threshold = 0.93
+disambiguate_threshold = 0.75
 
 [voice_configurable]
 # primary_language is voice-configurable (set once during onboarding, changeable

@@ -49,8 +49,9 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 ### Domain-owned Protocols
 - [x] `RecallIntentDetector` Protocol (detect(text: str) → RecallTriggered | None) —
       lives in `domain/protocols.py`
-- [~] `WorthinessEvaluator` Protocol (evaluate(conversation: Conversation) → bool) — exists,
-      but lives in `services/ports.py`, not `domain/protocols.py`; not actually domain-owned
+- [x] `WorthinessEvaluator` Protocol (evaluate(conversation: Conversation) → bool) — moved
+      from `services/ports.py` to `domain/protocols.py`; `ConsolidateMemory` now imports it
+      from there
 - `PersonaIntentDetector` Protocol — does not exist; removed in favour of LLM self-report
   (`_strip_persona_prefix` inline in `ProcessTurn`), see Phase 3 LLM section note
 
@@ -88,8 +89,10 @@ Application logic. All infrastructure behind Protocols. Fake* for tests.
       power the consolidation/merge pipeline (`ConsolidateMemory` in `services/memory.py`)
 
 ### Fake Implementations (in tests/fakes/)
-- [~] `FakeSTTService` — still has a stale `language_hint: Language | None` parameter not
-      present on the real `STTService` protocol; worth removing for consistency
+- [x] `FakeSTTService` — matches the real `STTService` protocol (`transcribe(audio: bytes)`
+      only); the stale `language_hint` param this item used to flag was removed during
+      Phase 4 Pass 1's test/fake-drift cleanup (see that section's findings) — this
+      checkbox was just never updated to reflect it
 - [x] `FakeLLMService`
 - [x] `FakeTTSService`
 - [x] `FakeEmbeddingService`
@@ -186,6 +189,10 @@ One adapter at a time. Inner layers unchanged.
 - [x] `PSMemoryRepository` (`infrastructure/postgres.py`) — pgvector similarity search, persona-scoped for concepts/procedures
 - [x] `PSPersonaRepository` (`infrastructure/postgres.py`)
 - [x] `PSMemoryBriefRepository` (`infrastructure/postgres.py`)
+- [x] `PSUnitOfWork` (`infrastructure/postgres.py`) — wraps the shared autocommit
+      connection in `conn.transaction()` for a block; backs `ConsolidateMemory`'s
+      per-conversation atomicity (see Phase 5). `UnitOfWork` Protocol lives in
+      `services/ports.py`; `FakeUnitOfWork` (no-op context manager) in `tests/fakes/`
 
 ### STT
 - [x] `FasterWhisperSTTService` (`infrastructure/stt.py`) — auto-detects language (no forced
@@ -226,11 +233,16 @@ One adapter at a time. Inner layers unchanged.
       to) — consumes the similarity score returned directly by `MemoryRepository.search()`
       (pgvector `embedding <=> %s AS distance` in `PSMemoryRepository`); no redundant manual
       cosine computation exists. Two-tier threshold per `CLAUDE.md`'s documented design:
-      `_MERGE_THRESHOLD = 0.93` (auto-merge), `_DISAMBIGUATE_THRESHOLD = 0.75` (LLM
+      merge_threshold = 0.93 (auto-merge), disambiguate_threshold = 0.75 (LLM
       disambiguation), below that auto-insert.
-- [ ] Both thresholds are still hardcoded module-level constants in `memory.py` — replace
-      with a global config value once real usage data exists to calibrate against (still the
-      critical open tuning parameter this section originally flagged)
+- [x] Thresholds externalised to config: new `[memory]` section in `memai.toml`
+      (`merge_threshold`, `disambiguate_threshold`, `infrastructure/config.py`'s
+      `ServerConfig`), passed into `ConsolidateMemory.__init__` and threaded through
+      `_merge_action`/`_existing_to_merge` as explicit params instead of module constants
+      (`DEFAULT_MERGE_THRESHOLD`/`DEFAULT_DISAMBIGUATE_THRESHOLD` remain as constructor
+      defaults for callers/tests that don't care). Values themselves (0.93/0.75) are still
+      placeholders pending calibration against real usage data — that calibration is the
+      Phase 3 Integration Test below, still blocked on real DB/embedding access.
 
 ### Integration Tests — Phase 3
 - [ ] PostgreSQL repositories (real DB, test schema)
@@ -465,13 +477,12 @@ changed files.
   unlikely to bite in practice, but Phase 5's stated goal ("reconnect during active
   consolidation: new session starts immediately") is not actually true yet with synchronous
   blocking calls. Flagged for Phase 5, not fixed here.
-- **Found (separate from Pass 2 wiring, but surfaced by this real test): `_strip_markdown` in
-  `services/session.py` only strips emphasis markers (`**bold**`, `_italic_`, `` ` ``) — not
-  headers (`#`), horizontal rules, or emoji.** A real `gemma4` response came back with
-  `### 💾 Updated Profile Brief` — despite the system prompt explicitly forbidding markdown —
-  and that would be read aloud by Kokoro largely unfiltered. Not fixed here; needs its own pass
-  (broader stripping regex, or emoji removal) since it's Pass 1 TTS-sanitization scope, not
-  Pass 2 DB wiring.
+- **Fixed: `_strip_markdown` in `services/session.py` only stripped emphasis markers
+  (`**bold**`, `_italic_`, `` ` ``) — not headers (`#`), horizontal rules, or emoji.** A real
+  `gemma4` response came back with `### 💾 Updated Profile Brief` — despite the system prompt
+  explicitly forbidding markdown — and would have been read aloud by Kokoro largely
+  unfiltered. Added `_MARKDOWN_HEADER`, `_MARKDOWN_HRULE`, and `_EMOJI` regexes alongside the
+  existing `_MARKDOWN_EMPHASIS` one; covered by `tests/unit/services/test_markdown_stripping.py`.
 
 #### ⚠ Revisit: Client-side first-launch onboarding flow
 Current design: server detects missing `primary_language` → pushes `select_language` to
@@ -512,15 +523,27 @@ Implications to resolve before implementing:
 
 Off-session memory consolidation runs reliably after every disconnect.
 
-- [ ] Full offline pipeline wired: TurnLogReplayer → ConsolidateMemory → GenerateMemoryBrief,
-      triggered by idle timer after clean disconnect (see Phase 4b)
-- [ ] Oldest-first processing of all unconsolidated Conversations
-- [ ] Per-conversation atomicity: Episodes + Concepts + Procedures + consolidated flag
-      in one DB transaction
-- [ ] Crash recovery: unconsolidated Conversations reprocessed safely on next run
+- [x] Full offline pipeline wired: TurnLogReplayer → ConsolidateMemory → GenerateMemoryBrief,
+      triggered by idle timer after clean disconnect — `_run_offline_pipeline`/
+      `_run_offline_pipeline_after_idle` in `server.py` (Phase 4 Pass 2); live-verified
+      2026-07-06
+- [x] Oldest-first processing of all unconsolidated Conversations — `get_unconsolidated()`'s
+      `ORDER BY c.started_at, t.timestamp` in `PSConversationRepository`
+- [x] Per-conversation atomicity: Episodes + Concepts + Procedures + consolidated flag
+      in one DB transaction — added `UnitOfWork` port (`services/ports.py`) + `PSUnitOfWork`
+      (`infrastructure/postgres.py`), wraps each conversation's body in `ConsolidateMemory.execute`
+      in a `conn.transaction()` block; `FakeUnitOfWork` (no-op) for unit tests. Closes the gap
+      `postgres.connect()`'s docstring used to flag
+- [x] Crash recovery: unconsolidated Conversations reprocessed safely on next run — guaranteed
+      now by the atomicity fix above (a failed conversation commits nothing, so it's retried in
+      full) plus `TurnLogReplayer`'s existing idempotency
 - [ ] Reconnect during active consolidation: new session starts immediately with last
-      committed MemoryBrief (stale is acceptable)
-- [ ] End-to-end test: disconnect → verify Conversations consolidated + DB state correct
+      committed MemoryBrief (stale is acceptable) — still genuinely open: `ConsolidateMemory`'s
+      extraction/embedding/synthesis calls are synchronous and block the event loop for their
+      duration (flagged in Phase 4 Pass 2 findings); needs `asyncio.to_thread` or similar
+- [ ] End-to-end test: disconnect → verify Conversations consolidated + DB state correct —
+      manually verified live 2026-07-06 (Phase 4 Pass 2), but no automated integration test yet;
+      blocked on the same real-Postgres test setup as Phase 3's integration tests
 
 ---
 
@@ -528,10 +551,15 @@ Off-session memory consolidation runs reliably after every disconnect.
 
 The assistant has meaningful context from past conversations at every session start.
 
-- [ ] GenerateMemoryBrief service wired at end of each full consolidation run
-- [ ] MemoryBrief overwritten (single record, always current)
-- [ ] StartSession injects MemoryBrief content as static system-level block
-- [ ] End-to-end test: two sessions; second session's LLM context contains summary of first
+- [x] GenerateMemoryBrief service wired at end of each full consolidation run —
+      `_run_offline_pipeline` in `server.py` (Phase 4 Pass 2), only runs if `processed > 0`
+- [x] MemoryBrief overwritten (single record, always current) — `PSMemoryBriefRepository.save()`
+      does `INSERT ... VALUES (1, ...) ON CONFLICT (id) DO UPDATE`, fixed `id=1` singleton
+- [x] StartSession injects MemoryBrief content as static system-level block —
+      `_compose_working_context` in `services/session.py` appends `wm.memory_brief.content`
+      to the system prompt; unit-tested by `test_injects_memory_brief` (Phase 2)
+- [ ] End-to-end test: two sessions; second session's LLM context contains summary of first —
+      not yet an automated test; same real-Postgres blocker as Phase 3/5's end-to-end tests
 
 ---
 

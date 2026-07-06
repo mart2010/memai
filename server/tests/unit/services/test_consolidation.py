@@ -22,6 +22,7 @@ from tests.fakes.fakes import (
     FakeEmbeddingService,
     FakeMemoryRepository,
     FakeMemorySynthesizer,
+    FakeUnitOfWork,
     FakeWorthinessEvaluator,
 )
 
@@ -48,6 +49,7 @@ def _make_consolidation(
         worthiness_evaluator=FakeWorthinessEvaluator(worthy=worthy),
         disambiguator=FakeDisambiguationEvaluator(),
         synthesizer=FakeMemorySynthesizer(),
+        unit_of_work=FakeUnitOfWork(),
     )
     return use_case, conversation_repo, memory_repo
 

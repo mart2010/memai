@@ -22,6 +22,8 @@ class ServerConfig:
     llm_model: str
     llm_ollama_host: str | None
     idle_consolidation_minutes: float
+    memory_merge_threshold: float
+    memory_disambiguate_threshold: float
 
 
 def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
@@ -38,6 +40,7 @@ def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
     db = raw.get("database", {})
     stt = raw.get("stt", {})
     llm = raw.get("llm", {})
+    memory = raw.get("memory", {})
 
     return ServerConfig(
         ws_port=int(server.get("ws_port", 8765)),
@@ -49,6 +52,8 @@ def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
         llm_model=llm.get("model", "aya-expanse"),
         llm_ollama_host=llm.get("ollama_host") or None,
         idle_consolidation_minutes=float(server.get("idle_consolidation_minutes", 5.0)),
+        memory_merge_threshold=float(memory.get("merge_threshold", 0.93)),
+        memory_disambiguate_threshold=float(memory.get("disambiguate_threshold", 0.75)),
     )
 
 

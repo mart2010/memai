@@ -143,12 +143,28 @@ def _try_resolve_prefixes(
 
 
 _MARKDOWN_EMPHASIS = re.compile(r"(\*\*\*|\*\*|\*|___|__|_|`)")
+_MARKDOWN_HEADER = re.compile(r"^#{1,6}\s*", re.MULTILINE)
+_MARKDOWN_HRULE = re.compile(r"^\s*([-*_])(?:\s*\1){2,}\s*$\n?", re.MULTILINE)
+_EMOJI = re.compile(
+    "["
+    "\U0001F300-\U0001FAFF"  # pictographs, emoticons, transport, supplemental symbols
+    "\U00002600-\U000027BF"  # misc symbols, dingbats
+    "\U0001F1E6-\U0001F1FF"  # regional indicator symbols (flags)
+    "\U0000FE0F"  # variation selector-16
+    "\U0000200D"  # zero-width joiner (multi-codepoint emoji sequences)
+    "]+"
+)
 
 
 def _strip_markdown(text: str) -> str:
-    """Drop markdown emphasis/code markers — LLMs emit them despite instructions not to, \
-and TTS reads the literal characters aloud (e.g. "asterisk")."""
-    return _MARKDOWN_EMPHASIS.sub("", text)
+    """Drop markdown headers/rules/emphasis/code markers and emoji — LLMs emit them
+    despite instructions not to, and TTS either reads them aloud literally (e.g.
+    "hash", "asterisk") or renders them as unpronounceable glyphs."""
+    text = _MARKDOWN_HRULE.sub("", text)
+    text = _MARKDOWN_HEADER.sub("", text)
+    text = _MARKDOWN_EMPHASIS.sub("", text)
+    text = _EMOJI.sub("", text)
+    return text
 
 
 # Languages num2words can spell out. Others (ja, ko, zh-cn) are left to Kokoro/espeak's

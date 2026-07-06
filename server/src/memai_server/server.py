@@ -29,6 +29,7 @@ from .infrastructure.postgres import (
     PSMemoryBriefRepository,
     PSMemoryRepository,
     PSPersonaRepository,
+    PSUnitOfWork,
     PSUserRepository,
 )
 from .infrastructure.stt import FasterWhisperSTTService
@@ -53,6 +54,8 @@ class ServerContext:
     embedding_service: SentenceTransformerEmbeddingService
     log_dir: Path
     idle_consolidation_minutes: float
+    memory_merge_threshold: float
+    memory_disambiguate_threshold: float
     user_repo: PSUserRepository
     persona_repo: PSPersonaRepository
     memory_brief_repo: PSMemoryBriefRepository
@@ -87,6 +90,9 @@ async def _run_offline_pipeline(ctx: ServerContext) -> None:
         worthiness_evaluator=ctx.worthiness_evaluator,
         disambiguator=ctx.disambiguator,
         synthesizer=ctx.synthesizer,
+        unit_of_work=PSUnitOfWork(ctx.conn),
+        merge_threshold=ctx.memory_merge_threshold,
+        disambiguate_threshold=ctx.memory_disambiguate_threshold,
     )
     processed = await consolidate.execute()
     if processed:
@@ -242,6 +248,8 @@ def main() -> None:
         embedding_service=embedding_service,
         log_dir=cfg.log_dir,
         idle_consolidation_minutes=cfg.idle_consolidation_minutes,
+        memory_merge_threshold=cfg.memory_merge_threshold,
+        memory_disambiguate_threshold=cfg.memory_disambiguate_threshold,
         user_repo=user_repo,
         persona_repo=PSPersonaRepository(conn),
         memory_brief_repo=PSMemoryBriefRepository(conn),

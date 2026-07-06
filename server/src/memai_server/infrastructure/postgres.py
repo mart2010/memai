@@ -33,12 +33,32 @@ from ..services.ports import MemoryItem
 
 def connect(dsn: str) -> psycopg.Connection:
     """Autocommit — single-user, single-connection process (see CLAUDE.md); no
-    cross-statement transaction boundaries needed yet. Phase 5's "per-conversation
-    atomicity" requirement for ConsolidateMemory should wrap that call in an explicit
-    `with conn.transaction():` block, which works fine on top of autocommit."""
+    cross-statement transaction boundaries needed for most calls. Callers that need
+    atomicity across several writes (e.g. ConsolidateMemory, one conversation at a
+    time) use PSUnitOfWork, which wraps this same connection in `conn.transaction()`."""
     conn = psycopg.connect(dsn, autocommit=True)
     register_vector(conn)
     return conn
+
+
+class PSUnitOfWork:
+    """Wraps a single conversation's consolidation writes in one transaction on top of
+    an autocommit connection — psycopg's `transaction()` block does this correctly even
+    when autocommit is on, committing on clean exit and rolling back on exception."""
+
+    def __init__(self, conn: psycopg.Connection) -> None:
+        self._conn = conn
+        self._txn: psycopg.Transaction | None = None
+
+    def __enter__(self) -> "PSUnitOfWork":
+        self._txn = self._conn.transaction()
+        self._txn.__enter__()
+        return self
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        assert self._txn is not None
+        self._txn.__exit__(exc_type, exc_value, traceback)
+        self._txn = None
 
 
 # ---------------------------------------------------------------------------

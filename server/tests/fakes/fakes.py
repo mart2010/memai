@@ -22,7 +22,6 @@ from memai_server.services.ports import (
     Message,
     SessionInfo,
     SessionLine,
-    WorthinessEvaluator,
 )
 
 
@@ -194,6 +193,16 @@ class FakePersonaRepository:
 
     def delete(self, persona_id: UUID) -> None:
         self._personas.pop(persona_id, None)
+
+
+class FakeUnitOfWork:
+    """No-op: fakes have no transactional storage to demarcate, unlike PSUnitOfWork."""
+
+    def __enter__(self) -> "FakeUnitOfWork":
+        return self
+
+    def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
+        pass
 
 
 class FakeMemoryBriefRepository:
