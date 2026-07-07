@@ -242,7 +242,7 @@ class OpenRouterConsolidationExtractor:
 
     def extract(self, conversation: Conversation) -> ExtractionResult:
         transcript = _format_conversation(conversation)
-        persona_id = conversation.persona_snapshot.id
+        persona_id = conversation.persona_id
         lang = _conversation_language(conversation)
 
         response = self._client.chat.completions.create(

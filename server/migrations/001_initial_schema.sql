@@ -10,9 +10,10 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- ─────────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS users (
-    id                  UUID        PRIMARY KEY,
-    primary_language    TEXT,                           -- NULL until onboarding
-    secondary_languages TEXT[]      NOT NULL DEFAULT '{}'
+    id                          UUID             PRIMARY KEY,
+    primary_language            TEXT,                           -- NULL until onboarding
+    secondary_languages         TEXT[]           NOT NULL DEFAULT '{}',
+    idle_consolidation_minutes  DOUBLE PRECISION NOT NULL DEFAULT 5.0
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -20,15 +21,17 @@ CREATE TABLE IF NOT EXISTS users (
 -- ─────────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS personas (
-    id                UUID        PRIMARY KEY,
-    name              TEXT        NOT NULL,
-    system_prompt     TEXT        NOT NULL,
-    languages         TEXT[]      NOT NULL DEFAULT '{}',  -- input languages; empty = primary language only
-    response_language TEXT        NOT NULL DEFAULT 'en',  -- IETF tag; drives TTS voice selection
-    tts_voice         TEXT        NOT NULL DEFAULT 'af_heart',  -- Kokoro voice identifier
-    is_system         BOOLEAN     NOT NULL DEFAULT FALSE,
-    created_at        TIMESTAMPTZ NOT NULL,
-    updated_at        TIMESTAMPTZ NOT NULL
+    id                UUID             PRIMARY KEY,
+    name              TEXT             NOT NULL,
+    system_prompt     TEXT             NOT NULL,
+    languages         TEXT[]           NOT NULL DEFAULT '{}',  -- input languages; empty = primary language only
+    response_language TEXT             NOT NULL DEFAULT 'en',  -- IETF tag; drives TTS voice selection
+    tts_voice         TEXT             NOT NULL DEFAULT 'af_heart',  -- Kokoro voice identifier
+    is_system         BOOLEAN          NOT NULL DEFAULT FALSE,
+    created_at        TIMESTAMPTZ      NOT NULL,
+    updated_at        TIMESTAMPTZ      NOT NULL,
+    speaking_rate     DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+    is_active         BOOLEAN          NOT NULL DEFAULT TRUE
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -36,13 +39,13 @@ CREATE TABLE IF NOT EXISTS personas (
 -- ─────────────────────────────────────────────────────────────────────────────
 
 CREATE TABLE IF NOT EXISTS conversations (
-    id               BIGSERIAL   PRIMARY KEY,
-    started_at       TIMESTAMPTZ NOT NULL,
-    ended_at         TIMESTAMPTZ,                      -- NULL while grouping is incomplete
-    persona_snapshot JSONB       NOT NULL,             -- AssistantPersona state at conversation start
-    worthiness       BOOLEAN,                          -- set by WorthinessEvaluator during consolidation
-    summary          TEXT,                             -- set by consolidation
-    consolidated     BOOLEAN     NOT NULL DEFAULT FALSE
+    id          BIGSERIAL   PRIMARY KEY,
+    started_at  TIMESTAMPTZ NOT NULL,
+    ended_at    TIMESTAMPTZ,                      -- NULL while grouping is incomplete
+    persona_id  UUID        NOT NULL REFERENCES personas(id) ON DELETE RESTRICT,  -- traceability; see CLAUDE.md §Data Model
+    worthiness  BOOLEAN,                          -- set by WorthinessEvaluator during consolidation
+    summary     TEXT,                             -- set by consolidation
+    consolidated BOOLEAN    NOT NULL DEFAULT FALSE
 );
 
 CREATE TABLE IF NOT EXISTS turns (
@@ -135,17 +138,19 @@ CREATE INDEX IF NOT EXISTS procedures_embedding_hnsw
 -- GENERAL_ASSISTANT_ID in domain/model.py.
 -- name is a generic placeholder — Memai is the product name, not the persona's
 -- spoken identity; this should become voice-configurable in a future phase.
-INSERT INTO personas (id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at)
+INSERT INTO personas (id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at, speaking_rate, is_active)
 VALUES (
     '00000000-0000-0000-0000-000000000001',
     'Vocal Assistant',
-    'You are a helpful, honest voice assistant. Your text is spoken aloud verbatim — never use markdown formatting 
-    (no **bold**, no _italics_, no bullet points, no headers, no code blocks). 
+    'You are a helpful, honest voice assistant. Your text is spoken aloud verbatim — never use markdown formatting
+    (no **bold**, no _italics_, no bullet points, no headers, no code blocks).
     If the user asks what you can do, how to configure you, or asks to hear your introduction again, deliver the onboarding introduction.',
     '{}',
     'en',
     'af_heart',
     TRUE,
     NOW(),
-    NOW()
+    NOW(),
+    1.0,
+    TRUE
 ) ON CONFLICT (id) DO NOTHING;

@@ -54,10 +54,10 @@ class FakeLLMService:
 class FakeTTSService:
     def __init__(self, audio: bytes = b"audio") -> None:
         self.audio = audio
-        self.synthesised: list[tuple[str, str]] = []
+        self.synthesised: list[tuple[str, str, float]] = []
 
-    def synthesise(self, text: str, voice: str) -> bytes:
-        self.synthesised.append((text, voice))
+    def synthesise(self, text: str, voice: str, speed: float = 1.0) -> bytes:
+        self.synthesised.append((text, voice, speed))
         return self.audio
 
 

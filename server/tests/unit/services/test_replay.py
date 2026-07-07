@@ -58,7 +58,7 @@ def _make_replayer(
             id=None,
             started_at=_ts(-100),
             ended_at=_ts(-10),
-            persona_snapshot=_general_assistant(),
+            persona_id=GENERAL_ASSISTANT_ID,
             turns=[Turn(timestamp=_ts(-50), speaker=Speaker.USER, content="old turn")],
         )
         conversation_repo.save_new(conv, session_id=uuid4())
@@ -163,7 +163,7 @@ class TestTurnLogReplayer:
         conv = list(repo._records.values())[0]
         assert len(conv.turns) == 4
         assert conv.ended_at == _ts(4)
-        assert conv.persona_snapshot.id == GENERAL_ASSISTANT_ID
+        assert conv.persona_id == GENERAL_ASSISTANT_ID
 
     def test_topic_continuation_extends_existing_conversation(self):
         sid = uuid4()

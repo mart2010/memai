@@ -46,7 +46,6 @@ class TomlConfigWriter:
             "compute_type": "float16",
         }
         config["llm"] = {"model": plan.llm_model_id or "aya-expanse"}
-        config.setdefault("voice_configurable", {})
         self._write(config)
 
     def write_client_config(self, plan: InstallationPlan) -> None:

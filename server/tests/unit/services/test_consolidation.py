@@ -2,7 +2,6 @@ from datetime import datetime, UTC
 from uuid import UUID
 
 from memai_server.domain.model import (
-    AssistantPersona,
     Concept,
     Conversation,
     Episode,
@@ -28,10 +27,6 @@ from tests.fakes.fakes import (
 
 def _now() -> datetime:
     return datetime.now(UTC)
-
-
-def _general_assistant() -> AssistantPersona:
-    return AssistantPersona.general_assistant("You are helpful.")
 
 
 def _make_consolidation(
@@ -60,7 +55,7 @@ def _seed_ended_conversation(conversation_repo: FakeConversationRepository) -> N
     conv = Conversation(
         id=None,
         started_at=_now(),
-        persona_snapshot=_general_assistant(),
+        persona_id=GENERAL_ASSISTANT_ID,
     )
     conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.USER, content="hello"))
     conv.end(ended_at=_now())

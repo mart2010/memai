@@ -352,6 +352,7 @@ class ProcessTurn:
         response_language = wm.active_persona.response_language
         lang_code = response_language.code if response_language else None
         voice = wm.active_persona.tts_voice
+        speaking_rate = wm.active_persona.speaking_rate
 
         audio_chunks: list[bytes] = []
         content_parts: list[str] = []
@@ -381,7 +382,7 @@ class ProcessTurn:
                 processed = _spell_out_numbers(_strip_markdown(sentence_buffer), lang_code)
                 content_parts.append(processed)
                 t_sentence_ready = time.monotonic()
-                audio_chunks.append(self._tts.synthesise(processed, voice))
+                audio_chunks.append(self._tts.synthesise(processed, voice, speaking_rate))
                 if t_first_audio is None:
                     t_first_audio = time.monotonic()
                     print(f"[latency] TTS first chunk: {t_first_audio - t_sentence_ready:.2f}s")
@@ -395,7 +396,7 @@ class ProcessTurn:
         if sentence_buffer.strip():
             processed = _spell_out_numbers(_strip_markdown(sentence_buffer), lang_code)
             content_parts.append(processed)
-            audio_chunks.append(self._tts.synthesise(processed, voice))
+            audio_chunks.append(self._tts.synthesise(processed, voice, speaking_rate))
             if t_first_audio is None:
                 t_first_audio = time.monotonic()
                 print(f"[latency] Total to first audio: {t_first_audio - t_start:.2f}s")

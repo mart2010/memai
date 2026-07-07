@@ -4,18 +4,16 @@
 #   Windows     : %LOCALAPPDATA%\memai\memai.toml
 # Or run `memai-setup` to generate it automatically.
 #
-# Fixed sections ([server], [database], [stt], [llm], [memory]) require re-running
-# the installation wizard to change.
-#
-# [voice_configurable] is the only section the GeneralAssistant can read and
-# mutate at runtime via voice commands.
+# This file holds only bootstrap-before-DB-exists settings, needed to construct
+# the DB connection/services themselves. Every voice-configurable or domain-meaningful
+# setting lives in the DB instead, as an attribute of the entity that owns it
+# (User or AssistantPersona) — e.g. idle_consolidation_minutes is a User field,
+# tts_voice/speaking_rate are AssistantPersona fields. Changing any setting in this
+# file requires re-running the installation wizard.
 
 [server]
 ws_port = 8765
 log_dir = "logs/sessions"
-# Minutes of no new session after a clean disconnect before the offline pipeline
-# (TurnLogReplayer -> ConsolidateMemory -> GenerateMemoryBrief) fires.
-idle_consolidation_minutes = 5.0
 
 [database]
 # Standard libpq DSN — adjust host/port/credentials as needed.
@@ -44,11 +42,3 @@ model = "aya-expanse"
 # Defaults are placeholders pending calibration against real usage data.
 merge_threshold = 0.93
 disambiguate_threshold = 0.75
-
-[voice_configurable]
-# primary_language is voice-configurable (set once during onboarding, changeable
-# later by talking to the GA) but is NOT stored here — it lives in the `users`
-# table in Postgres (see User.primary_language / UserRepository). This section
-# is reserved for future voice-configurable settings that don't already have a
-# domain entity of their own, e.g.:
-# llm_temperature = 0.7

@@ -153,7 +153,7 @@ class TurnLogReplayer:
                     id=None,
                     started_at=group.turns[0].timestamp,
                     ended_at=group.ended_at,
-                    persona_snapshot=persona,
+                    persona_id=persona.id,
                     turns=list(group.turns),
                 )
                 self._conversation_repo.save_new(conv, session_id)

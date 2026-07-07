@@ -35,6 +35,7 @@ from .infrastructure.postgres import (
 from .infrastructure.stt import FasterWhisperSTTService
 from .infrastructure.tts import KOKORO_DEFAULT_VOICES, KokoroTTSService
 from .services.memory import ConsolidateMemory, GenerateMemoryBrief
+from .services.persona import EditPersona
 from .services.replay import TurnLogReplayer
 from .services.session import EndSession, ProcessTurn, StartSession
 from .services.user import CompleteOnboarding
@@ -53,7 +54,6 @@ class ServerContext:
     tts: KokoroTTSService
     embedding_service: SentenceTransformerEmbeddingService
     log_dir: Path
-    idle_consolidation_minutes: float
     memory_merge_threshold: float
     memory_disambiguate_threshold: float
     user_repo: PSUserRepository
@@ -128,9 +128,9 @@ async def _run_offline_pipeline(ctx: ServerContext) -> None:
     print(f"[offline] replayed={replayed} consolidated={processed}")
 
 
-async def _run_offline_pipeline_after_idle(ctx: ServerContext) -> None:
+async def _run_offline_pipeline_after_idle(ctx: ServerContext, idle_consolidation_minutes: float) -> None:
     try:
-        await asyncio.sleep(ctx.idle_consolidation_minutes * 60)
+        await asyncio.sleep(idle_consolidation_minutes * 60)
     except asyncio.CancelledError:
         return
     try:
@@ -181,6 +181,7 @@ async def _handle(ws, ctx: ServerContext) -> None:
     )
     end_session = EndSession(turn_logger=turn_logger)
     complete_onboarding = CompleteOnboarding(user_repo=ctx.user_repo)
+    edit_persona = EditPersona(persona_repo=ctx.persona_repo)
 
     if session.needs_onboarding:
         supported = [lang.code for lang in SUPPORTED_LANGUAGES]
@@ -207,9 +208,12 @@ async def _handle(ws, ctx: ServerContext) -> None:
                 lang = Language(lang_code)
                 voice = KOKORO_DEFAULT_VOICES.get(lang_code, "af_heart")
                 complete_onboarding.execute(session.user, lang)
-                session.active_persona.tts_voice = voice
-                session.active_persona.response_language = lang
-                ctx.persona_repo.save(session.active_persona)
+                session.active_persona = edit_persona.execute(
+                    persona_id=session.active_persona.id,
+                    now=datetime.now(UTC),
+                    tts_voice=voice,
+                    response_language=lang,
+                )
                 onboarding_done = True
                 print(f"Language selected: {lang_code}, voice: {voice}")
                 continue
@@ -235,7 +239,9 @@ async def _handle(ws, ctx: ServerContext) -> None:
         pass
     finally:
         end_session.execute(session, datetime.now(UTC))
-        ctx.idle_timer_task = asyncio.create_task(_run_offline_pipeline_after_idle(ctx))
+        ctx.idle_timer_task = asyncio.create_task(
+            _run_offline_pipeline_after_idle(ctx, session.user.idle_consolidation_minutes)
+        )
         print("Client disconnected")
 
 
@@ -277,7 +283,6 @@ def main() -> None:
         tts=tts,
         embedding_service=embedding_service,
         log_dir=cfg.log_dir,
-        idle_consolidation_minutes=cfg.idle_consolidation_minutes,
         memory_merge_threshold=cfg.memory_merge_threshold,
         memory_disambiguate_threshold=cfg.memory_disambiguate_threshold,
         user_repo=user_repo,

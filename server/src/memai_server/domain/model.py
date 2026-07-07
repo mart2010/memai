@@ -63,14 +63,38 @@ class AssistantPersona:
     is_system: bool
     created_at: datetime
     updated_at: datetime
+    speaking_rate: float = 1.0  # persona-scoped TTS rate, e.g. a language tutor may want it slower than GA
+    is_active: bool = True
 
-    def update(self, updated_at: datetime, name: str | None = None, system_prompt: str | None = None) -> None:
-        if self.is_system:
-            raise ValueError("System personas cannot be modified")
+    def update(
+        self,
+        updated_at: datetime,
+        name: str | None = None,
+        system_prompt: str | None = None,
+        tts_voice: str | None = None,
+        speaking_rate: float | None = None,
+        response_language: "Language | None" = None,
+    ) -> None:
         if name is not None:
             self.name = name
         if system_prompt is not None:
             self.system_prompt = system_prompt
+        if tts_voice is not None:
+            self.tts_voice = tts_voice
+        if speaking_rate is not None:
+            self.speaking_rate = speaking_rate
+        if response_language is not None:
+            self.response_language = response_language
+        self.updated_at = updated_at
+
+    def deactivate(self, updated_at: datetime) -> None:
+        if self.is_system:
+            raise ValueError("System personas cannot be deactivated")
+        self.is_active = False
+        self.updated_at = updated_at
+
+    def reactivate(self, updated_at: datetime) -> None:
+        self.is_active = True
         self.updated_at = updated_at
 
     @classmethod
@@ -99,9 +123,13 @@ class User:
     id: UUID
     primary_language: Language | None = None  # None until onboarding is complete
     secondary_languages: list[Language] = field(default_factory=list)
+    idle_consolidation_minutes: float = 5.0  # how long to wait after disconnect before running offline consolidation
 
     def update_primary_language(self, new_language: Language) -> None:
         self.primary_language = new_language
+
+    def update_idle_consolidation_minutes(self, minutes: float) -> None:
+        self.idle_consolidation_minutes = minutes
 
 
 @dataclass
@@ -116,7 +144,7 @@ class Turn:
 class Conversation:
     id: int | None
     started_at: datetime
-    persona_snapshot: AssistantPersona
+    persona_id: UUID
     turns: list[Turn] = field(default_factory=list)
     ended_at: datetime | None = None
     worthiness: bool | None = None

@@ -52,12 +52,14 @@ ruff format .
 ## Design Constraints
 
 - **Voice-only configuration (GeneralAssistant scope only)** — this constraint applies to the
-  GeneralAssistant's own settings, not to persona creation or extension. The server uses a
-  dedicated config file (not env vars) with a single `voice_configurable` section —
-  e.g. `llm.temperature`, `primary_language`. Each entry declares a type/range/enum for
-  validation. The GA's config port only knows about this section; everything else in the
-  config file (log_dir, database_url, ws_port, ssh_host, etc.) is implicitly fixed simply by
-  not being listed there — no separate `fixed` section is needed.
+  GeneralAssistant's own settings, not to persona creation or extension. `memai.toml` holds
+  only bootstrap-before-DB-exists settings (`ws_port`, `database.url`,
+  `stt.model_path/device/compute_type`, `llm.model/ollama_host`, `log_dir`) — nothing voice-
+  configurable lives there. Every voice-configurable or domain-meaningful setting is instead a
+  DB-backed attribute of whichever entity owns it — `User` (e.g. `idle_consolidation_minutes`)
+  or `AssistantPersona` (e.g. `tts_voice`, `speaking_rate`) — never a global toml scalar.
+  Because Memai is single-user, "global setting" and "User attribute" are the same thing, so
+  there is no legitimate third bucket.
   - Anything requiring install/download/restart/swap (adding an STT/TTS engine, changing the
     main LLM) is explicitly **out of scope** for the GA. That's handled by re-running the
     `questionary` installation/setup wizard, not by conversation.

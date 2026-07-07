@@ -65,7 +65,7 @@ class LLMService(Protocol):
 
 
 class TTSService(Protocol):
-    def synthesise(self, text: str, voice: str) -> bytes: ...
+    def synthesise(self, text: str, voice: str, speed: float = 1.0) -> bytes: ...
 
 
 class EmbeddingService(Protocol):

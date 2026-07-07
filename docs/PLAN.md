@@ -826,3 +826,136 @@ migration file.
 against real VRAM; `OllamaModelInstaller`'s real downloads/pulls; any `HealthCheck`'s
 actual *success* path (only the failure/degradation path was verified here); the full
 wizard run end-to-end.
+
+---
+
+## Phase 8 — Config Placement & Persona Lifecycle Refactor
+
+Every setting lives in its architecturally correct home (bootstrap `memai.toml` vs.
+domain-owned DB attribute), and `Conversation`↔`AssistantPersona` traceability is a real
+FK instead of a denormalized snapshot that can't actually deliver point-in-time fidelity.
+Decisions and rationale: see memory `project_config_placement_persona_lifecycle` (2026-07-07).
+This phase does **not** include wiring GA to actually change these settings by voice
+mid-conversation — see "Explicitly not in this phase" below.
+
+### Domain (`server/src/memai_server/domain/`)
+- [x] `AssistantPersona`: add `speaking_rate: float = 1.0` (persona-scoped, mirrors `tts_voice` —
+      a language-tutor persona will want a different rate than GA)
+- [x] `AssistantPersona`: add `is_active: bool = True`
+- [x] `AssistantPersona`: add `deactivate()`/`reactivate()` methods — `deactivate()` raises if
+      `is_system` (GA can't be deactivated, same guard `RemovePersona` already has for deletion)
+- [x] `AssistantPersona.update()`: drop the `is_system` check entirely — `name`/`system_prompt`
+      become editable on any persona including GA (resolves the `is_system` guard-split decision,
+      closes `project_memai_open_questions` item 12). Also extended (beyond the original scope
+      here) to accept `tts_voice`/`speaking_rate`/`response_language` so `EditPersona` has one
+      domain method to route every persona-settings mutation through, rather than reaching into
+      attributes directly from the service layer.
+- [x] `User`: add `idle_consolidation_minutes: float = 5.0`, plus an
+      `update_idle_consolidation_minutes()` method mirroring `update_primary_language()`
+- [x] `Conversation`: replace `persona_snapshot: AssistantPersona` field with `persona_id: UUID`
+- [x] New domain events `PersonaDeactivated`/`PersonaReactivated` in `domain/events.py`, mirroring
+      the existing `PersonaSwitched`/`PrimaryLanguageChanged` pattern
+- [x] **Not in scope**: promoting `merge_threshold`/`disambiguate_threshold` to persona-scoped
+      fields — stays deferred pending real calibration data (see `CLAUDE.md` and
+      `project_config_placement_persona_lifecycle`)
+
+### Services (`server/src/memai_server/services/`)
+- [x] `CreatePersona`: accept a `speaking_rate` param (default 1.0)
+- [x] `EditPersona`: extend to also accept `tts_voice`/`speaking_rate`/`response_language`,
+      making it the one canonical "modify persona settings" use case. The onboarding flow
+      in `server.py` (previously mutating `session.active_persona.tts_voice`/`response_language`
+      directly and calling `persona_repo.save()`, bypassing use cases entirely) now routes through
+      `EditPersona`
+- [x] New `DeactivatePersona`/`ReactivatePersona` use cases in `services/persona.py` — additive
+      alongside the existing `RemovePersona` (hard delete + cascade), which is left untouched as
+      the future "purge" path
+- [x] New `UpdateIdleConsolidationMinutes` use case in `services/user.py`, mirroring
+      `UpdatePrimaryLanguage`
+- [x] `services/replay.py`: conversation construction builds `Conversation(persona_id=persona.id,
+      ...)` instead of `persona_snapshot=persona` — no longer needs the full persona object, just
+      `group.persona_id` (with the existing `general_assistant` fallback)
+- [x] `services/memory.py`, `infrastructure/llm/ollama.py`, `infrastructure/llm/openrouter.py`:
+      change every `conversation.persona_snapshot.id` to `conversation.persona_id`
+- [x] `server.py`: idle-consolidation scheduling (`_run_offline_pipeline_after_idle`) reads
+      `session.user.idle_consolidation_minutes` instead of `ctx.idle_consolidation_minutes`
+      (the latter field removed from `ServerContext`/`ServerConfig` entirely)
+
+### Infrastructure (`server/src/memai_server/infrastructure/`)
+- [x] `postgres.py` `PSConversationRepository`: read/write the `persona_id` column instead of
+      `persona_snapshot` JSONB
+- [x] `postgres.py`: remove now-dead `_persona_to_jsonb`/`_jsonb_to_persona` helpers (only ever
+      used for `persona_snapshot`) — replaced with a `_row_to_persona` row-tuple helper shared by
+      `get`/`list_all` now that persona rows carry two more columns
+- [x] `postgres.py` `PSPersonaRepository`: read/write the new `speaking_rate`/`is_active` columns
+- [x] `postgres.py` `PSUserRepository`: read/write the new `idle_consolidation_minutes` column
+- [x] `infrastructure/tts.py`: `KokoroTTSService.synthesise()` takes a `speed` param instead of
+      the hardcoded `speed=1.0`, sourced from `persona.speaking_rate` (threaded through the
+      `TTSService` port and both call sites in `services/session.py`)
+- [x] `infrastructure/config.py` / `server/config/memai.example.toml`: removed
+      `idle_consolidation_minutes` from `[server]`; removed the `[voice_configurable]` section and
+      `update_voice_config()` entirely (confirmed unused — no callers anywhere in the monorepo).
+      `CLAUDE.md`'s "Voice-only configuration" design-constraint bullet updated to describe the
+      DB-attribute placement rule instead of the now-defunct toml section, so the doc doesn't
+      contradict the implemented architecture.
+- [x] `setup/src/memai_setup/infrastructure/config_writer.py`: stopped writing
+      `voice_configurable` (it never wrote `idle_consolidation_minutes` in the first place —
+      that only ever came from `ServerConfig`'s own default, not the wizard)
+
+### Schema (`server/migrations/001_initial_schema.sql`)
+- [x] `personas`: add `speaking_rate DOUBLE PRECISION NOT NULL DEFAULT 1.0`,
+      `is_active BOOLEAN NOT NULL DEFAULT TRUE`
+- [x] `users`: add `idle_consolidation_minutes DOUBLE PRECISION NOT NULL DEFAULT 5.0`
+- [x] `conversations`: replace `persona_snapshot JSONB NOT NULL` with
+      `persona_id UUID NOT NULL REFERENCES personas(id) ON DELETE RESTRICT` — see resolved open
+      question below
+- [x] Update the GA seed `INSERT` with the two new persona columns
+- [ ] Not yet applied against a real database — this dev laptop has no Postgres/GPU access (see
+      `project_dev_environment_split` memory); needs `DROP DATABASE` + re-run of the migration on
+      the GPU workstation before Phase 8 can be considered live-verified
+
+### Tests
+- [x] Update fixtures constructing `AssistantPersona`/`Conversation`/`User` across
+      `server/tests/` — `persona_snapshot`→`persona_id` touched `test_persona.py` (domain),
+      `test_conversation.py`, `test_consolidation.py`, `test_replay.py`, `services/test_persona.py`;
+      `services/test_session.py` needed no changes (only uses the `general_assistant()` factory,
+      never constructs `AssistantPersona`/`Conversation` directly)
+- [x] New unit tests: `deactivate()`/`reactivate()` behavior (including the GA-cannot-deactivate
+      guard), `update()` no longer rejecting `is_system` edits (plus a new test for the
+      `tts_voice`/`speaking_rate`/`response_language` update path), `UpdateIdleConsolidationMinutes`,
+      `EditPersona`'s new fields, `DeactivatePersona`/`ReactivatePersona` use cases
+- [x] `FakeTTSService.synthesise()` signature updated to match the new `speed` param (not
+      explicitly called out above, but required by the `TTSService` port change)
+
+**Verified (Windows dev workstation, no GPU/DB):** `uv run pytest` — 99/99 passing (full
+server suite); `ruff check` on `server/src`, `setup/src`, `client/src` — the only 2 findings
+(`E741` ambiguous variable name `l`, `infrastructure/postgres.py`) are pre-existing, confirmed
+via `git stash` diff (3 instances before this change, 2 after — one was inside the now-deleted
+`_persona_to_jsonb` helper), not introduced by Phase 8.
+- [ ] End-to-end test: real Postgres, exercise `DeactivatePersona`/`ReactivatePersona` and the
+      new `persona_id` FK's `ON DELETE RESTRICT` behavior against real conversation history —
+      blocked on the same real-Postgres access gap as every other Phase 3/5/6 integration test
+
+### Open questions to resolve during implementation (not settled by prior discussion)
+- [x] `ON DELETE` behavior for the new `conversations.persona_id` FK, given `RemovePersona`'s hard
+      delete is left in place — **decided: `RESTRICT`**. Matches "session logs kept forever":
+      once a persona has any conversation history, `RemovePersona`'s hard delete becomes
+      permanently blocked for it (an FK violation), forcing `DeactivatePersona` instead —
+      `CASCADE` would silently violate the log-retention invariant, and `SET NULL` isn't legal
+      against a `NOT NULL` column. In effect, hard delete is now only usable for personas that
+      were created and abandoned without ever being used in a conversation; anything with real
+      history must be deactivated, not deleted. This narrowing is judged correct, not a
+      regression — the dual-lifecycle design's whole point was to make deactivation the normal
+      path once a persona has actually been used.
+
+**Decided 2026-07-07**: no migration framework needed — still in dev, no data worth preserving.
+Just edit `001_initial_schema.sql` in place with the new column definitions (no `ALTER TABLE`
+statements) and drop/recreate the local dev DB before re-running it.
+
+### Explicitly not in this phase
+- Live voice-command wiring — LLM tool-calling / intent detection to actually *trigger*
+  `UpdateIdleConsolidationMinutes`, `DeactivatePersona`, or a voice/speaking-rate change
+  mid-conversation. This phase only gets the data model and use cases into a correct, consistent
+  state; wiring GA to invoke them by voice is separate, larger, undesigned work (candidate Phase 9)
+- VAD silence-frame threshold voice-configurability — needs a new server→client WS message,
+  unrelated to this DB/config refactor
+- Merge/disambiguate threshold promotion — blocked on real calibration data

@@ -132,7 +132,7 @@ class ConsolidateMemory:
                     concept.embedding = self._embedding_service.embed(f"{concept.name}: {concept.description}")
                     candidates = self._memory_repo.search(
                         concept.embedding, (MemoryType.CONCEPT,), top_n=1,
-                        persona_id=conversation.persona_snapshot.id,
+                        persona_id=conversation.persona_id,
                     )
                     existing = _existing_to_merge(
                         candidates, concept, self._disambiguator,
@@ -149,7 +149,7 @@ class ConsolidateMemory:
                     procedure.embedding = self._embedding_service.embed(f"{procedure.name}: {procedure.description}")
                     candidates = self._memory_repo.search(
                         procedure.embedding, (MemoryType.PROCEDURE,), top_n=1,
-                        persona_id=conversation.persona_snapshot.id,
+                        persona_id=conversation.persona_id,
                     )
                     existing = _existing_to_merge(
                         candidates, procedure, self._disambiguator,

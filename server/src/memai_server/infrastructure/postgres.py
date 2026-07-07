@@ -12,7 +12,6 @@ from uuid import UUID
 import numpy as np
 import psycopg
 from pgvector.psycopg import register_vector
-from psycopg.types.json import Jsonb
 
 from ..domain.model import (
     AssistantPersona,
@@ -65,31 +64,21 @@ class PSUnitOfWork:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _persona_to_jsonb(persona: AssistantPersona) -> Jsonb:
-    return Jsonb({
-        "id": str(persona.id),
-        "name": persona.name,
-        "system_prompt": persona.system_prompt,
-        "languages": [l.code for l in persona.languages],
-        "response_language": persona.response_language.code,
-        "tts_voice": persona.tts_voice,
-        "is_system": persona.is_system,
-        "created_at": persona.created_at.isoformat(),
-        "updated_at": persona.updated_at.isoformat(),
-    })
-
-
-def _jsonb_to_persona(data: dict) -> AssistantPersona:
+def _row_to_persona(row: tuple) -> AssistantPersona:
+    (id_, name, system_prompt, languages, response_language, tts_voice, is_system,
+     created_at, updated_at, speaking_rate, is_active) = row
     return AssistantPersona(
-        id=UUID(data["id"]),
-        name=data["name"],
-        system_prompt=data["system_prompt"],
-        languages=[Language(c) for c in data["languages"]],
-        response_language=Language(data.get("response_language", "en")),
-        tts_voice=data.get("tts_voice", "af_heart"),
-        is_system=data["is_system"],
-        created_at=datetime.fromisoformat(data["created_at"]),
-        updated_at=datetime.fromisoformat(data["updated_at"]),
+        id=id_,
+        name=name,
+        system_prompt=system_prompt,
+        languages=[Language(c) for c in languages],
+        response_language=Language(response_language),
+        tts_voice=tts_voice,
+        is_system=is_system,
+        created_at=created_at,
+        updated_at=updated_at,
+        speaking_rate=speaking_rate,
+        is_active=is_active,
     )
 
 
@@ -111,31 +100,36 @@ class PSUserRepository:
 
     def get(self) -> User | None:
         with self._conn.cursor() as cur:
-            cur.execute("SELECT id, primary_language, secondary_languages FROM users LIMIT 1")
+            cur.execute(
+                "SELECT id, primary_language, secondary_languages, idle_consolidation_minutes FROM users LIMIT 1"
+            )
             row = cur.fetchone()
             if row is None:
                 return None
-            id_, primary_lang, secondary_langs = row
+            id_, primary_lang, secondary_langs, idle_consolidation_minutes = row
             return User(
                 id=id_,
                 primary_language=Language(primary_lang) if primary_lang else None,
                 secondary_languages=[Language(c) for c in (secondary_langs or [])],
+                idle_consolidation_minutes=idle_consolidation_minutes,
             )
 
     def save(self, user: User) -> None:
         with self._conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO users (id, primary_language, secondary_languages)
-                VALUES (%s, %s, %s)
+                INSERT INTO users (id, primary_language, secondary_languages, idle_consolidation_minutes)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     primary_language = EXCLUDED.primary_language,
-                    secondary_languages = EXCLUDED.secondary_languages
+                    secondary_languages = EXCLUDED.secondary_languages,
+                    idle_consolidation_minutes = EXCLUDED.idle_consolidation_minutes
                 """,
                 (
                     user.id,
                     user.primary_language.code if user.primary_language else None,
                     [l.code for l in user.secondary_languages],
+                    user.idle_consolidation_minutes,
                 ),
             )
 
@@ -151,59 +145,41 @@ class PSPersonaRepository:
     def get(self, persona_id: UUID) -> AssistantPersona | None:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at "
+                "SELECT id, name, system_prompt, languages, response_language, tts_voice, is_system, "
+                "created_at, updated_at, speaking_rate, is_active "
                 "FROM personas WHERE id = %s",
                 (persona_id,),
             )
             row = cur.fetchone()
             if row is None:
                 return None
-            id_, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at = row
-            return AssistantPersona(
-                id=id_,
-                name=name,
-                system_prompt=system_prompt,
-                languages=[Language(c) for c in languages],
-                response_language=Language(response_language),
-                tts_voice=tts_voice,
-                is_system=is_system,
-                created_at=created_at,
-                updated_at=updated_at,
-            )
+            return _row_to_persona(row)
 
     def list_all(self) -> list[AssistantPersona]:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at FROM personas"
+                "SELECT id, name, system_prompt, languages, response_language, tts_voice, is_system, "
+                "created_at, updated_at, speaking_rate, is_active FROM personas"
             )
-            return [
-                AssistantPersona(
-                    id=id_,
-                    name=name,
-                    system_prompt=system_prompt,
-                    languages=[Language(c) for c in languages],
-                    response_language=Language(response_language),
-                    tts_voice=tts_voice,
-                    is_system=is_system,
-                    created_at=created_at,
-                    updated_at=updated_at,
-                )
-                for id_, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at in cur.fetchall()
-            ]
+            return [_row_to_persona(row) for row in cur.fetchall()]
 
     def save(self, persona: AssistantPersona) -> None:
         with self._conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO personas (id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO personas
+                    (id, name, system_prompt, languages, response_language, tts_voice, is_system,
+                     created_at, updated_at, speaking_rate, is_active)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     name = EXCLUDED.name,
                     system_prompt = EXCLUDED.system_prompt,
                     languages = EXCLUDED.languages,
                     response_language = EXCLUDED.response_language,
                     tts_voice = EXCLUDED.tts_voice,
-                    updated_at = EXCLUDED.updated_at
+                    updated_at = EXCLUDED.updated_at,
+                    speaking_rate = EXCLUDED.speaking_rate,
+                    is_active = EXCLUDED.is_active
                 """,
                 (
                     persona.id,
@@ -215,6 +191,8 @@ class PSPersonaRepository:
                     persona.is_system,
                     persona.created_at,
                     persona.updated_at,
+                    persona.speaking_rate,
+                    persona.is_active,
                 ),
             )
 
@@ -232,15 +210,14 @@ class PSConversationRepository:
         self._conn = conn
 
     def save_new(self, conversation: Conversation, session_id: UUID) -> int:
-        persona_jsonb = _persona_to_jsonb(conversation.persona_snapshot)
         with self._conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO conversations (started_at, ended_at, persona_snapshot, consolidated)
+                INSERT INTO conversations (started_at, ended_at, persona_id, consolidated)
                 VALUES (%s, %s, %s, FALSE)
                 RETURNING id
                 """,
-                (conversation.started_at, conversation.ended_at, persona_jsonb),
+                (conversation.started_at, conversation.ended_at, conversation.persona_id),
             )
             new_id = cur.fetchone()[0]
             for turn in conversation.turns:
@@ -316,7 +293,7 @@ class PSConversationRepository:
         with self._conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT c.id, c.started_at, c.ended_at, c.persona_snapshot,
+                SELECT c.id, c.started_at, c.ended_at, c.persona_id,
                        c.worthiness, c.summary, c.consolidated,
                        t.timestamp, t.speaker, t.content, t.language
                 FROM conversations c
@@ -329,14 +306,14 @@ class PSConversationRepository:
 
         conversations: dict[int, Conversation] = {}
         for row in rows:
-            (conv_id, started_at, ended_at, persona_data, worthiness, summary, consolidated,
+            (conv_id, started_at, ended_at, persona_id, worthiness, summary, consolidated,
              t_ts, t_speaker, t_content, t_lang) = row
             if conv_id not in conversations:
                 conversations[conv_id] = Conversation(
                     id=conv_id,
                     started_at=started_at,
                     ended_at=ended_at,
-                    persona_snapshot=_jsonb_to_persona(persona_data),
+                    persona_id=persona_id,
                     worthiness=worthiness,
                     summary=summary,
                     consolidated=consolidated,

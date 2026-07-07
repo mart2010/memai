@@ -35,6 +35,16 @@ class PersonaSwitched:
     to_persona_id: UUID
 
 
+@dataclass(frozen=True)
+class PersonaDeactivated:
+    persona_id: UUID
+
+
+@dataclass(frozen=True)
+class PersonaReactivated:
+    persona_id: UUID
+
+
 class ConversationBoundaryType(Enum):
     BREAK = "break"
     CONTINUATION = "continuation"

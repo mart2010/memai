@@ -3,7 +3,15 @@ from datetime import datetime, UTC
 from uuid import uuid4
 
 from memai_server.domain.model import AssistantPersona, GENERAL_ASSISTANT_ID, Language, User
-from memai_server.services.persona import CreatePersona, EditPersona, ListPersonas, RemovePersona, SwitchPersona
+from memai_server.services.persona import (
+    CreatePersona,
+    DeactivatePersona,
+    EditPersona,
+    ListPersonas,
+    ReactivatePersona,
+    RemovePersona,
+    SwitchPersona,
+)
 from memai_server.services.session import WorkingMemory
 
 from tests.fakes.fakes import FakePersonaRepository
@@ -108,6 +116,57 @@ class TestEditPersona:
         use_case = EditPersona(FakePersonaRepository())
         with pytest.raises(ValueError):
             use_case.execute(uuid4(), now=_now(), name="X")
+
+    def test_updates_tts_voice_speaking_rate_response_language(self):
+        coach = _other_persona("Coach")
+        repo = _repo_with(coach)
+        use_case = EditPersona(repo)
+        updated = use_case.execute(
+            coach.id, now=_now(), tts_voice="ff_siwis", speaking_rate=0.9, response_language=Language("fr"),
+        )
+        assert updated.tts_voice == "ff_siwis"
+        assert updated.speaking_rate == 0.9
+        assert updated.response_language == Language("fr")
+
+    def test_updates_system_persona(self):
+        ga = _general_assistant()
+        repo = _repo_with(ga)
+        use_case = EditPersona(repo)
+        updated = use_case.execute(ga.id, now=_now(), name="Renamed")
+        assert updated.name == "Renamed"
+
+
+class TestDeactivatePersona:
+    def test_deactivates_non_system_persona(self):
+        coach = _other_persona("Coach")
+        repo = _repo_with(coach)
+        event = DeactivatePersona(repo).execute(coach.id, now=_now())
+        assert repo.get(coach.id).is_active is False
+        assert event.persona_id == coach.id
+
+    def test_raises_on_system_persona(self):
+        ga = _general_assistant()
+        repo = _repo_with(ga)
+        with pytest.raises(ValueError, match="[Ss]ystem"):
+            DeactivatePersona(repo).execute(ga.id, now=_now())
+
+    def test_raises_on_unknown_persona(self):
+        with pytest.raises(ValueError):
+            DeactivatePersona(FakePersonaRepository()).execute(uuid4(), now=_now())
+
+
+class TestReactivatePersona:
+    def test_reactivates_deactivated_persona(self):
+        coach = _other_persona("Coach")
+        repo = _repo_with(coach)
+        DeactivatePersona(repo).execute(coach.id, now=_now())
+        event = ReactivatePersona(repo).execute(coach.id, now=_now())
+        assert repo.get(coach.id).is_active is True
+        assert event.persona_id == coach.id
+
+    def test_raises_on_unknown_persona(self):
+        with pytest.raises(ValueError):
+            ReactivatePersona(FakePersonaRepository()).execute(uuid4(), now=_now())
 
 
 class TestRemovePersona:

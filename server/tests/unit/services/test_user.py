@@ -1,7 +1,7 @@
 from uuid import uuid4
 
 from memai_server.domain.model import Language, User
-from memai_server.services.user import UpdatePrimaryLanguage
+from memai_server.services.user import UpdateIdleConsolidationMinutes, UpdatePrimaryLanguage
 
 from tests.fakes.fakes import FakeUserRepository
 
@@ -34,3 +34,17 @@ class TestUpdatePrimaryLanguage:
         user = _user()
         event = UpdatePrimaryLanguage(FakeUserRepository(user=user)).execute(user, Language("en"))
         assert event.old_language == event.new_language
+
+
+class TestUpdateIdleConsolidationMinutes:
+    def test_updates_user_idle_consolidation_minutes(self):
+        user = _user()
+        repo = FakeUserRepository(user=user)
+        UpdateIdleConsolidationMinutes(repo).execute(user, 10.0)
+        assert user.idle_consolidation_minutes == 10.0
+
+    def test_persists_updated_user(self):
+        user = _user()
+        repo = FakeUserRepository(user=user)
+        UpdateIdleConsolidationMinutes(repo).execute(user, 10.0)
+        assert repo.get().idle_consolidation_minutes == 10.0

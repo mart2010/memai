@@ -29,3 +29,12 @@ class UpdatePrimaryLanguage:
             old_language=old_language,
             new_language=new_language,
         )
+
+
+class UpdateIdleConsolidationMinutes:
+    def __init__(self, user_repo: UserRepository) -> None:
+        self._user_repo = user_repo
+
+    def execute(self, user: User, minutes: float) -> None:
+        user.update_idle_consolidation_minutes(minutes)
+        self._user_repo.save(user)

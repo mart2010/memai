@@ -56,9 +56,9 @@ class KokoroTTSService:
             self._pipelines[prefix] = KPipeline(lang_code=lang_code)
         return self._pipelines[prefix]
 
-    def synthesise(self, text: str, voice: str) -> bytes:
+    def synthesise(self, text: str, voice: str, speed: float = 1.0) -> bytes:
         pipeline = self._pipeline(voice)
-        chunks = [audio for _, _, audio in pipeline(text, voice=voice, speed=1.0)]
+        chunks = [audio for _, _, audio in pipeline(text, voice=voice, speed=speed)]
         if not chunks:
             return b""
         combined = np.concatenate(chunks)

@@ -3,7 +3,6 @@ from datetime import datetime, UTC
 from uuid import uuid4
 
 from memai_server.domain.model import (
-    AssistantPersona,
     Conversation,
     Language,
     Speaker,
@@ -11,21 +10,12 @@ from memai_server.domain.model import (
 )
 
 
-def _persona() -> AssistantPersona:
-    now = datetime.now(UTC)
-    return AssistantPersona(
-        id=uuid4(), name="Test", system_prompt="Be helpful.",
-        languages=[], response_language=Language("en"), tts_voice="af_heart",
-        is_system=False, created_at=now, updated_at=now,
-    )
-
-
 def _turn() -> Turn:
     return Turn(timestamp=datetime.now(UTC), speaker=Speaker.USER, content="Hello", language=Language("en"))
 
 
 def _conversation() -> Conversation:
-    return Conversation(id=uuid4(), started_at=datetime.now(UTC), persona_snapshot=_persona())
+    return Conversation(id=uuid4(), started_at=datetime.now(UTC), persona_id=uuid4())
 
 
 class TestConversationInvariants:
