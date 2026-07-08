@@ -852,11 +852,68 @@ real `HealthCheck` implementations verified to degrade gracefully (no crash) wit
 running locally, schema file path resolution verified to find the real (now-idempotent)
 migration file.
 
-**Not yet verified — requires the GPU server:** `NvidiaSmiGPUDetector`'s actual
-`nvidia-smi` output parsing; the full `SelectLLM`/`ResolveSTTEngine` fit-hint output
-against real VRAM; `OllamaModelInstaller`'s real downloads/pulls; any `HealthCheck`'s
-actual *success* path (only the failure/degradation path was verified here); the full
-wizard run end-to-end.
+**Verified live (GPU workstation, 2026-07-09):** `uv sync` for the `setup` package for the
+first time on this box (needed the corporate-proxy `--system-certs` workaround); full
+`pytest` suite 38/38 passing on Linux. `NvidiaSmiGPUDetector.detect_vram_gb()` against the
+real RTX 4090 correctly returned 23.99 GB. Full wizard flow run end-to-end via a throwaway
+driver script (not committed) that kept every adapter real (GPU detector, TOML catalogues,
+model installer, config writer, schema runner, health checks) and only swapped
+`QuestionaryPrompter` for a scripted auto-answering stand-in — legitimate given
+`WizardPrompter` is already the exact seam the architecture exposes for this
+(`FakeWizardPrompter` does the same for unit tests). Confirmed:
+- `SelectLLM`/`ResolveSTTEngine` fit-hint text against real 24GB VRAM — correct for every
+  catalogue entry (e.g. `gemma3:27b` → "Fits, but tightly", `llama3.3` → "Does not fit —
+  needs at least 52 GB free", everything else → "Fits comfortably").
+- `OllamaModelInstaller.download_whisper_model("small")` performed a real network download
+  (6 files via `huggingface_hub`) through the corporate proxy, scoped correctly to just that
+  call (see finding below).
+- `HealthCheck`'s actual *success* path, not just failure: `PostgresHealthCheck`,
+  `PgvectorExtensionHealthCheck`, `OllamaHealthCheck` all returned `ok=True` against the real
+  services. `ServerWebSocketHealthCheck` correctly returned failure (no `memai-server`
+  process was running) — its success path still needs a real running server, out of scope
+  here.
+- `SetupSchema`'s real re-apply against the real dev DB (not a test DB) was safely idempotent
+  — confirmed 0 rows changed (still just the GA seed persona).
+- End result: a real `memai.toml` was written (`llm=aya-expanse`, `stt.model_path="small"`,
+  `languages=[en, fr]`, both routed to Kokoro) — kept in place, replacing the stale
+  Phase-4-era manual config (`gemma4` stand-in), per discussion with Martin.
+
+**Real bugs/gaps found while doing this (not Pass-7 logic bugs — same "verify by actually
+running it" category as Phase 4's findings):**
+- **`ModelInstaller.pull_llm()` exists but no wizard step ever calls it — FIXED 2026-07-09.**
+  `SelectLLM` picked an LLM `model_id` and wrote it to config, but nothing in
+  `services/steps.py` invoked `installer.pull_llm(model_id)` — confirmed by reading every
+  step and grepping for call sites; matches the original flow doc's step 5, "LLM selection +
+  ollama pull," which was never fully implemented. Fixed: `SelectLLM.run()` now calls
+  `self._installer.pull_llm(plan.llm_model_id)` right after the selection, wrapped in a
+  warn-and-confirm guard matching `CheckPrerequisites`' existing pattern — on failure
+  (`OSError`/`subprocess.SubprocessError`), asks via `prompter.confirm(..., default=False)`
+  whether to continue anyway, raising `WizardAborted` if declined. `SelectLLM.__init__` now
+  takes a `ModelInstaller` (constructor signature change; `cli.py`'s one call site updated).
+  `FakeModelInstaller` gained a `fail_pull_llm` constructor flag to test the failure path.
+  Two new unit tests (`test_select_llm_step.py`): pull is called with the chosen model_id;
+  decline-on-failure raises `WizardAborted`; confirm-on-failure continues. 41/41 setup-package
+  tests passing (Windows + Linux). **Live-verified on the GPU workstation**: a real `ollama
+  pull` failure (blocked by the same shared-daemon corporate-proxy limitation noted above —
+  not something this fix addresses, and already declined to touch since it's a shared systemd
+  service affecting other lab users) now degrades gracefully with a clean `WizardAborted`
+  message instead of a raw traceback, confirmed via direct real-subprocess test.
+- **Confirmed exactly as documented, not new**: `_install_steps()` in `cli.py` builds
+  `PostgresHealthCheck`/`PgvectorExtensionHealthCheck` from `InstallationPlan().database_url`
+  (the class default, `...changeme@localhost...`) *before* the wizard runs — completely
+  decoupled from whatever `plan.database_url` ends up being, since no step currently sets it.
+  Reproduced live: the checks failed with a real password-auth error until the driver script
+  substituted the real credentials directly into the check construction (bypassing
+  `plan.database_url` entirely, since reading it wouldn't have helped). Confirms the "Known
+  gaps" note below is accurate and still blocking, not stale.
+- **Corporate-proxy env vars must be scoped to just the download call, not the whole
+  process** — confirmed by reproducing the exact mistake once: wrapping the entire driver
+  script in `http_proxy`/`https_proxy` (to let the Whisper download through) silently routed
+  `OllamaHealthCheck`'s `localhost:11434` request through the proxy too, which returned `403
+  Forbidden`. Fixed in the driver by wrapping only the `ModelInstaller` calls in a
+  context-managed proxy scope. Matches `project_gpu_workstation_environment` memory's existing
+  warning about this exact pitfall — good to have it concretely reproduced once rather than
+  just documented in the abstract.
 
 ---
 

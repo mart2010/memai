@@ -63,7 +63,7 @@ def _install_steps(
         ShowWelcome(),
         SelectTopology(),
         CheckPrerequisites(prerequisite_checks),
-        SelectLLM(catalogues, gpu),
+        SelectLLM(catalogues, gpu, installer),
         SelectLanguages(catalogues),
         ResolveSTTEngine(catalogues, gpu, installer),
         ResolveTTSEngines(catalogues, installer),

@@ -1,3 +1,5 @@
+import subprocess
+
 from memai_setup.domain.model import LLMCatalogueEntry, STTCatalogueEntry, TTSCatalogueEntry
 from memai_setup.domain.plan import InstallationPlan
 from memai_setup.services.ports import HealthCheckResult, PromptChoice
@@ -78,12 +80,15 @@ class FakeExistingInstallDetector:
 class FakeModelInstaller:
     """Records every install call instead of touching the network/Ollama."""
 
-    def __init__(self) -> None:
+    def __init__(self, fail_pull_llm: bool = False) -> None:
         self.pulled_llms: list[str] = []
         self.downloaded_whisper_models: list[str] = []
         self.downloaded_piper_voices: list[str] = []
+        self._fail_pull_llm = fail_pull_llm
 
     def pull_llm(self, model_id: str) -> None:
+        if self._fail_pull_llm:
+            raise subprocess.CalledProcessError(1, ["ollama", "pull", model_id])
         self.pulled_llms.append(model_id)
 
     def download_whisper_model(self, name: str) -> None:

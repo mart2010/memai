@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 from __future__ import annotations
 
+import subprocess
 from typing import Protocol
 
 from ..domain.language_coverage import offered_languages
@@ -117,11 +118,15 @@ class CheckPrerequisites:
 class SelectLLM:
     """Flow steps 4-5. Presents every catalogue entry with a plain-English fit
     hint — never filters the list, per CLAUDE.md ("user always sees all
-    options, never a filtered list")."""
+    options, never a filtered list"). Pulls the chosen model via Ollama before
+    returning, matching the original flow doc's step 5 ("LLM selection +
+    ollama pull") — the wizard should leave Ollama actually holding the model,
+    not just record a choice in the plan."""
 
-    def __init__(self, catalogues: CatalogueRepository, gpu: GPUDetector) -> None:
+    def __init__(self, catalogues: CatalogueRepository, gpu: GPUDetector, installer: ModelInstaller) -> None:
         self._catalogues = catalogues
         self._gpu = gpu
+        self._installer = installer
 
     def run(self, plan: InstallationPlan, prompter: WizardPrompter) -> None:
         vram_gb = self._gpu.detect_vram_gb()
@@ -145,6 +150,18 @@ class SelectLLM:
             )
 
         plan.llm_model_id = prompter.select("Choose a language model:", choices)
+        try:
+            self._installer.pull_llm(plan.llm_model_id)
+        except (OSError, subprocess.SubprocessError) as exc:
+            proceed = prompter.confirm(
+                f"Could not pull '{plan.llm_model_id}' via Ollama ({exc}). Continue anyway?",
+                default=False,
+            )
+            if not proceed:
+                raise WizardAborted(
+                    f"Installation cancelled — pull '{plan.llm_model_id}' manually "
+                    f"(`ollama pull {plan.llm_model_id}`) and re-run memai-setup."
+                ) from exc
 
 
 class SelectLanguages:

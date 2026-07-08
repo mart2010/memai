@@ -1,8 +1,11 @@
+import pytest
+
 from memai_setup.domain.model import LLMCatalogueEntry, VRAMEstimate
 from memai_setup.domain.plan import InstallationPlan
+from memai_setup.services.errors import WizardAborted
 from memai_setup.services.steps import SelectLLM
 
-from tests.fakes.fakes import FakeCatalogueRepository, FakeGPUDetector, FakeWizardPrompter
+from tests.fakes.fakes import FakeCatalogueRepository, FakeGPUDetector, FakeModelInstaller, FakeWizardPrompter
 
 
 def _entry(model_id: str, display_name: str, min_gb: float, rec_gb: float, recommended: bool, reasoning: bool = False) -> LLMCatalogueEntry:
@@ -24,8 +27,49 @@ def test_select_llm_stores_chosen_model_id():
             _entry("qwen3:14b", "Qwen3 14B", 10, 14, recommended=False, reasoning=True),
         )
     )
-    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24))
+    installer = FakeModelInstaller()
+    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24), installer)
     prompter = FakeWizardPrompter(select_answers=["aya-expanse"])
+    plan = InstallationPlan()
+
+    step.run(plan, prompter)
+
+    assert plan.llm_model_id == "aya-expanse"
+
+
+def test_select_llm_pulls_the_chosen_model():
+    catalogues = FakeCatalogueRepository(
+        llm_entries=(
+            _entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),
+            _entry("qwen3:14b", "Qwen3 14B", 10, 14, recommended=False, reasoning=True),
+        )
+    )
+    installer = FakeModelInstaller()
+    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24), installer)
+    prompter = FakeWizardPrompter(select_answers=["aya-expanse"])
+    plan = InstallationPlan()
+
+    step.run(plan, prompter)
+
+    assert installer.pulled_llms == ["aya-expanse"]
+
+
+def test_select_llm_pull_failure_declined_raises_wizard_aborted():
+    catalogues = FakeCatalogueRepository(llm_entries=(_entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),))
+    installer = FakeModelInstaller(fail_pull_llm=True)
+    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24), installer)
+    prompter = FakeWizardPrompter(select_answers=["aya-expanse"], confirm_answers=[False])
+    plan = InstallationPlan()
+
+    with pytest.raises(WizardAborted):
+        step.run(plan, prompter)
+
+
+def test_select_llm_pull_failure_confirmed_continues():
+    catalogues = FakeCatalogueRepository(llm_entries=(_entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),))
+    installer = FakeModelInstaller(fail_pull_llm=True)
+    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24), installer)
+    prompter = FakeWizardPrompter(select_answers=["aya-expanse"], confirm_answers=[True])
     plan = InstallationPlan()
 
     step.run(plan, prompter)
@@ -35,7 +79,7 @@ def test_select_llm_stores_chosen_model_id():
 
 def test_select_llm_warns_when_vram_undetectable():
     catalogues = FakeCatalogueRepository(llm_entries=(_entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),))
-    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=None))
+    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=None), FakeModelInstaller())
     prompter = FakeWizardPrompter(select_answers=["aya-expanse"])
     plan = InstallationPlan()
 
@@ -55,7 +99,7 @@ def test_select_llm_flags_reasoning_models_in_choice_label():
             captured_choices["choices"] = choices
             return super().select(message, choices)
 
-    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24))
+    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24), FakeModelInstaller())
     prompter = RecordingPrompter(select_answers=["qwen3:14b"])
     plan = InstallationPlan()
 
