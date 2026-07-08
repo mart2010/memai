@@ -245,12 +245,44 @@ One adapter at a time. Inner layers unchanged.
       Phase 3 Integration Test below, still blocked on real DB/embedding access.
 
 ### Integration Tests — Phase 3
-- [ ] PostgreSQL repositories (real DB, test schema)
-- [ ] `FasterWhisperSTTService` (real model, short audio fixture)
-- [ ] `KokoroTTSService` (real model, short text fixture; verify default voice names match installed version)
-- [ ] `SentenceTransformerEmbeddingService` — real model, calibration test: embed pairs
+- [x] PostgreSQL repositories (real DB, test schema) — `server/tests/integration/test_postgres.py`
+      (2026-07-08), against a dedicated `memai_test` database (never the dev DB) created/migrated
+      fresh each session, tables truncated per test. Covers all five `PS*Repository` classes +
+      `PSUnitOfWork`: user/persona/conversation/memory-item CRUD round trips, `get_unconsolidated`
+      ordering, persona-scoped concept/procedure search (the "big bang" astronomy-vs-sitcom
+      disambiguation example from CLAUDE.md), `conversations.persona_id` `ON DELETE RESTRICT`,
+      `concepts`/`procedures` `ON DELETE CASCADE` on persona delete, `PSUnitOfWork` commit/rollback.
+      23/23 passing live.
+- [x] `FasterWhisperSTTService` (real model, short audio fixture) — `server/tests/integration/test_stt.py`,
+      real speech synthesized via `espeak-ng` (already a system dependency for Kokoro's non-English
+      backend — no binary fixture committed) and transcribed for real on CUDA. 2/2 passing live
+      (needed `MEMAI_TEST_WHISPER_MODEL_PATH` pointed at the already-cached local model directory —
+      the bare model-name default tries to download from HF, blocked without the corporate-proxy
+      env vars).
+- [x] `KokoroTTSService` (real model, short text fixture; verify default voice names match installed
+      version) — `server/tests/integration/test_tts.py`. 4/4 core tests passing (real synthesis,
+      `speaking_rate` affecting output length); per-language default-voice check parametrized over
+      all of `KOKORO_DEFAULT_VOICES`, skipping (not failing) languages whose voice pack/optional
+      dependency isn't installed locally (es/it/pt/ja/zh-cn — matches the known Phase 7 TODO on
+      wizard-driven model downloads). **Real bug found, not fixed here**: the `ko` entry in
+      `KOKORO_DEFAULT_VOICES`/`_PREFIX_TO_LANG` (`infrastructure/tts.py`) does not work at all —
+      the installed Kokoro package (`hexgrad/Kokoro-82M`) has no Korean pipeline; its only valid
+      `lang_code`s are `a/b/e/f/h/i/p/j/z` (English×2, Spanish, French, **Hindi**, Italian,
+      Portuguese, Japanese, Mandarin). Korean is listed as supported in `SUPPORTED_LANGUAGES`
+      (`domain/model.py`) and `KOKORO_DEFAULT_VOICES` but silently can't produce audio. Needs a
+      decision: drop Korean from `SUPPORTED_LANGUAGES`, or source Korean TTS from a different
+      engine (Piper?). Flagged, not resolved.
+- [x] `SentenceTransformerEmbeddingService` — real model, calibration test: embed pairs
       of semantically similar vs. dissimilar texts and print similarity scores to help
-      determine a good threshold value for the merge decision
+      determine a good threshold value for the merge decision — `server/tests/integration/test_embedding.py`,
+      7/7 passing live. Real numbers from the GPU workstation (2026-07-08, run with `-s`):
+      similar pairs 0.87–0.98 (paraphrase 0.98, cross-lingual FR/EN paraphrase 0.93, hypernym
+      "golden retriever"/"dog" 0.87), dissimilar pairs 0.71–0.86 ("big bang" astronomy vs sitcom
+      0.86 — a real near-miss for the disambiguation band, not a clean auto-insert case; unrelated
+      sentences 0.71). Confirms the `0.75`/`0.93` two-tier thresholds in CLAUDE.md are in a
+      plausible range but the CONCEPT/CONCEPT hypernym vs. same-name-different-domain cases sit
+      close together (0.86–0.87) — worth revisiting once more real usage data accumulates, per
+      CLAUDE.md's "still placeholders pending calibration" note.
 
 ---
 
@@ -455,10 +487,9 @@ changed files.
   Confirmed via `uv.lock` inspection that this is a real gap, not a resolver conflict —
   `ctranslate2` declares zero CUDA dependency of its own (`numpy`, `pyyaml`, `setuptools`
   only) and `torch` pulls the differently-named, CUDA-13-generation `nvidia-cublas` package
-  on Linux, so nothing in the tree provided `libcublas.so.12` without this pin. Not yet
-  verified: needs `uv sync` + a real STT run on the GPU workstation (this laptop has no GPU
-  and can't fully build/sync torch locally — see Phase 7 TODO below, tracked as part of the
-  wizard's dependency-installation scope going forward).
+  on Linux, so nothing in the tree provided `libcublas.so.12` without this pin.
+  **Verified live 2026-07-08**: `uv sync` + real `WhisperModel(..., device="cuda")` load and
+  transcribe call succeeded on the GPU workstation with no `LD_LIBRARY_PATH` workaround needed.
 - **Fixed: `SentenceTransformerEmbeddingService` needed network on every load, even
   fully-cached.** `SentenceTransformer(...)` does a HEAD request to Hugging Face Hub to check
   for updates regardless of local cache state — same "live server must never need network"
@@ -909,9 +940,11 @@ mid-conversation — see "Explicitly not in this phase" below.
       `persona_id UUID NOT NULL REFERENCES personas(id) ON DELETE RESTRICT` — see resolved open
       question below
 - [x] Update the GA seed `INSERT` with the two new persona columns
-- [ ] Not yet applied against a real database — this dev laptop has no Postgres/GPU access (see
-      `project_dev_environment_split` memory); needs `DROP DATABASE` + re-run of the migration on
-      the GPU workstation before Phase 8 can be considered live-verified
+- [x] Applied against the real dev database on the GPU workstation (2026-07-08) — dropped and
+      recreated the `public` schema (old data was 2 disposable test conversations), re-ran
+      `001_initial_schema.sql`; confirmed all new columns present (`personas.speaking_rate`/
+      `is_active`, `users.idle_consolidation_minutes`, `conversations.persona_id` FK) and the
+      GA seed row correct
 
 ### Tests
 - [x] Update fixtures constructing `AssistantPersona`/`Conversation`/`User` across
@@ -931,9 +964,22 @@ server suite); `ruff check` on `server/src`, `setup/src`, `client/src` — the o
 (`E741` ambiguous variable name `l`, `infrastructure/postgres.py`) are pre-existing, confirmed
 via `git stash` diff (3 instances before this change, 2 after — one was inside the now-deleted
 `_persona_to_jsonb` helper), not introduced by Phase 8.
-- [ ] End-to-end test: real Postgres, exercise `DeactivatePersona`/`ReactivatePersona` and the
+
+**Verified live (GPU workstation, 2026-07-08):** `uv sync` clean (required the corporate-proxy
+`--system-certs` workaround, see `project_gpu_workstation_environment` memory); full `pytest`
+suite 99/99 passing on Linux against the real venv. Real `faster_whisper.WhisperModel` loaded on
+CUDA and ran a transcribe call successfully — confirms the `nvidia-cublas-cu12` pin (Phase 4
+Pass 2 finding) actually resolves `libcublas.so.12` with no `LD_LIBRARY_PATH` workaround needed.
+
+- [x] End-to-end test: real Postgres, exercise `DeactivatePersona`/`ReactivatePersona` and the
       new `persona_id` FK's `ON DELETE RESTRICT` behavior against real conversation history —
-      blocked on the same real-Postgres access gap as every other Phase 3/5/6 integration test
+      verified live 2026-07-08 via a throwaway script (not committed) against the real recreated
+      DB: (1) GA (`is_system`) deactivation correctly raises `ValueError`; (2) `RemovePersona`
+      hard-deletes a persona with no conversation history; (3) `RemovePersona` on a persona with
+      a real `conversations` row raises `ForeignKeyViolation` (`ON DELETE RESTRICT` confirmed);
+      (4) `DeactivatePersona`/`ReactivatePersona` both succeed on that same persona instead,
+      firing `PersonaDeactivated`/`PersonaReactivated` and flipping `is_active` correctly. DB
+      left clean afterward (1 persona = GA seed, 0 conversations).
 
 ### Open questions to resolve during implementation (not settled by prior discussion)
 - [x] `ON DELETE` behavior for the new `conversations.persona_id` FK, given `RemovePersona`'s hard
