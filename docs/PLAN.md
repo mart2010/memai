@@ -21,7 +21,8 @@ Pure Python. No imports from outer layers. Fully unit-testable in isolation.
 
 ### Value Objects & Enums
 - [x] `Language` value object (IETF language code)
-- [x] `SUPPORTED_LANGUAGES` constant — intersection of faster-whisper and Kokoro (~8 languages; Kokoro is the limiting factor)
+- [x] `SUPPORTED_LANGUAGES` constant — intersection of faster-whisper and Kokoro (~7 languages
+      as of 2026-07-09 — Korean was removed, see Phase 3 findings; Kokoro is the limiting factor)
 - [x] `Speaker` enum (user, assistant)
 - [x] `EngagementLevel` IntEnum — states: unseen | mentioned | explored | integrated (ordered; explored absorbs the former practiced level)
 - [x] `MemoryType` enum (EPISODE, CONCEPT, PROCEDURE)
@@ -264,14 +265,28 @@ One adapter at a time. Inner layers unchanged.
       `speaking_rate` affecting output length); per-language default-voice check parametrized over
       all of `KOKORO_DEFAULT_VOICES`, skipping (not failing) languages whose voice pack/optional
       dependency isn't installed locally (es/it/pt/ja/zh-cn — matches the known Phase 7 TODO on
-      wizard-driven model downloads). **Real bug found, not fixed here**: the `ko` entry in
-      `KOKORO_DEFAULT_VOICES`/`_PREFIX_TO_LANG` (`infrastructure/tts.py`) does not work at all —
+      wizard-driven model downloads). **Real bug found and resolved 2026-07-09**: the `ko` entry
+      in `KOKORO_DEFAULT_VOICES`/`_PREFIX_TO_LANG` (`infrastructure/tts.py`) never worked at all —
       the installed Kokoro package (`hexgrad/Kokoro-82M`) has no Korean pipeline; its only valid
       `lang_code`s are `a/b/e/f/h/i/p/j/z` (English×2, Spanish, French, **Hindi**, Italian,
-      Portuguese, Japanese, Mandarin). Korean is listed as supported in `SUPPORTED_LANGUAGES`
-      (`domain/model.py`) and `KOKORO_DEFAULT_VOICES` but silently can't produce audio. Needs a
-      decision: drop Korean from `SUPPORTED_LANGUAGES`, or source Korean TTS from a different
-      engine (Piper?). Flagged, not resolved.
+      Portuguese, Japanese, Mandarin). Considered fixing via a second TTS engine (MeloTTS, MIT
+      licensed, has a real Korean model) but rejected: MeloTTS's actual dependency footprint is
+      far heavier than expected for a single-language fix — full Japanese pipeline (`unidic`,
+      `mecab-python3`, `fugashi`), full Chinese pipeline (`pypinyin`, `jieba`), `gradio`/
+      `tensorboard` (its own demo webapp), and its own `torch`/`torchaudio` pins with real risk of
+      reopening the `nvidia-cublas` CUDA-version conflict this project already fixed once (Phase 4
+      Pass 2). No proper PyPI package either — official install is git-clone + `pip install -e .`
+      + a manual `python -m unidic download` step, the same fragile pattern as the earlier spaCy
+      saga. **Decision: dropped Korean from `SUPPORTED_LANGUAGES` instead of adding MeloTTS.**
+      `ko` removed from `SUPPORTED_LANGUAGES` (`domain/model.py`) and from
+      `KOKORO_DEFAULT_VOICES`/`_PREFIX_TO_LANG` (`infrastructure/tts.py`); ~7 languages supported
+      now. Not affected: the wizard's own language offering (`SelectLanguages` step,
+      `offered_languages()`) was already correctly excluding Korean before this fix, since neither
+      Kokoro's nor Piper's catalogue entries ever listed `ko` — confirmed live during the Phase 7
+      wizard run (2026-07-09), whose printed language list had no Korean option. LLM catalogue
+      entries correctly keep `ko` in their own `languages` lists (a model understanding Korean
+      text is unrelated to Memai's TTS/STT voice coverage). MeloTTS not ruled out permanently —
+      revisit if a lighter-weight Korean-only TTS option turns up later.
 - [x] `SentenceTransformerEmbeddingService` — real model, calibration test: embed pairs
       of semantically similar vs. dissimilar texts and print similarity scores to help
       determine a good threshold value for the merge decision — `server/tests/integration/test_embedding.py`,
@@ -599,9 +614,16 @@ Off-session memory consolidation runs reliably after every disconnect.
       risk, just duplicate data for that one session — deferred rather than adding a claim
       table (e.g. `replayed_sessions(session_id UUID PRIMARY KEY)` with
       `INSERT ... ON CONFLICT DO NOTHING RETURNING session_id`) right now.
-- [ ] End-to-end test: disconnect → verify Conversations consolidated + DB state correct —
-      manually verified live 2026-07-06 (Phase 4 Pass 2), but no automated integration test yet;
-      blocked on the same real-Postgres test setup as Phase 3's integration tests
+- [x] End-to-end test: disconnect → verify Conversations consolidated + DB state correct —
+      `server/tests/integration/test_consolidation_pipeline.py` (2026-07-09), unblocked by
+      Phase 3's real-Postgres fixture. Real JSONL session file → real `JSONLSessionReplayReader`
+      → real `TurnLogReplayer` → real `PSConversationRepository` → real `ConsolidateMemory` with
+      real `PSUnitOfWork`, Fakes only for the LLM-dependent ports (extraction, worthiness,
+      disambiguation, synthesis). Verifies: replay produces the right unconsolidated
+      Conversation; consolidation flips `consolidated`/`worthiness` in the DB; extracted
+      Episode/Concept rows are actually queryable afterward via `PSMemoryRepository.search()`.
+      Second test covers the worthy/unworthy split (Concepts always extracted, Episodes only
+      when worthy) against the real DB. 2/2 passing live.
 
 ---
 
@@ -616,8 +638,16 @@ The assistant has meaningful context from past conversations at every session st
 - [x] StartSession injects MemoryBrief content as static system-level block —
       `_compose_working_context` in `services/session.py` appends `wm.memory_brief.content`
       to the system prompt; unit-tested by `test_injects_memory_brief` (Phase 2)
-- [ ] End-to-end test: two sessions; second session's LLM context contains summary of first —
-      not yet an automated test; same real-Postgres blocker as Phase 3/5's end-to-end tests
+- [x] End-to-end test: two sessions; second session's LLM context contains summary of first —
+      `server/tests/integration/test_memory_brief_injection.py` (2026-07-09), same real-Postgres
+      fixture as Phase 5's test. Real `GenerateMemoryBrief` (Fake LLM — what the LLM would say
+      isn't what's under test, the plumbing that gets its answer into the next session's prompt
+      is) saves a brief via real `PSMemoryBriefRepository`; real `StartSession` (real
+      `PSUserRepository`/`PSPersonaRepository`/`PSMemoryBriefRepository`) pulls it back for
+      "session 2"; asserts the brief content is both on `WorkingMemory.memory_brief` and
+      literally present in the composed system prompt returned by the real
+      `_compose_working_context`. 1/1 passing live; full suite 141/141 (up from 138, no
+      regressions from either Phase 5 or Phase 6's new tests).
 
 ---
 

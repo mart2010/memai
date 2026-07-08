@@ -12,6 +12,10 @@ _RESAMPLE_DOWN = _KOKORO_SAMPLE_RATE // _g  # 3
 
 # Maps Kokoro voice prefix to the lang_code argument KPipeline expects.
 # Prefix is the first character of the voice name (e.g. "af_heart" → "a").
+# No Korean entry: the installed Kokoro package (hexgrad/Kokoro-82M) has no Korean
+# pipeline at all — confirmed live 2026-07-08 (KPipeline(lang_code='ko') raises; its
+# only valid codes are a/b/e/f/h/i/p/j/z). "ko" was removed from SUPPORTED_LANGUAGES
+# for the same reason — see docs/PLAN.md Phase 3 findings.
 _PREFIX_TO_LANG: dict[str, str] = {
     "a": "a",   # American English
     "b": "b",   # British English
@@ -19,7 +23,6 @@ _PREFIX_TO_LANG: dict[str, str] = {
     "f": "f",   # French
     "i": "i",   # Italian
     "j": "j",   # Japanese
-    "k": "ko",  # Korean
     "p": "p",   # Portuguese
     "z": "z",   # Mandarin Chinese
 }
@@ -33,7 +36,6 @@ KOKORO_DEFAULT_VOICES: dict[str, str] = {
     "it":    "if_sara",
     "pt":    "pf_dora",
     "ja":    "jf_alpha",
-    "ko":    "kf_alpha",
     "zh-cn": "zf_xiaobei",
 }
 

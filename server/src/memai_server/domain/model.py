@@ -22,7 +22,7 @@ class Language:
 # Kokoro is the limiting factor; this is the full set Memai supports.
 SUPPORTED_LANGUAGES: list[Language] = [
     Language("en"), Language("fr"), Language("es"), Language("it"),
-    Language("pt"), Language("ja"), Language("ko"), Language("zh-cn"),
+    Language("pt"), Language("ja"), Language("zh-cn"),
 ]
 
 
