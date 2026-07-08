@@ -959,3 +959,43 @@ statements) and drop/recreate the local dev DB before re-running it.
 - VAD silence-frame threshold voice-configurability — needs a new server→client WS message,
   unrelated to this DB/config refactor
 - Merge/disambiguate threshold promotion — blocked on real calibration data
+
+---
+
+## Phase 9 — Live Voice-Command Wiring (not yet designed)
+
+Not started; not yet grilled/scoped the way Phases 1-8 were. Captured here as a placeholder so
+the next design session has a starting point, per the discussion that closed out Phase 8
+(2026-07-07). Scope, ordering, and the items below are all open — nothing in this section is a
+committed decision.
+
+### Known scope (from Phase 8's "explicitly not in this phase")
+- [ ] LLM tool-calling / intent detection so GA can actually *trigger*, mid-conversation:
+      `UpdateIdleConsolidationMinutes`, `DeactivatePersona`/`ReactivatePersona`, and a
+      voice/speaking-rate or `tts_voice` change via `EditPersona`. Phase 8 only built the data
+      model and use cases these would call — none are wired to live conversation yet.
+
+### Prerequisite design question (surfaced 2026-07-07, see `project_memai_open_questions` item 15)
+- [ ] **Discovery/registry for "what's voice-configurable"** — Phase 8 answered *where* each
+      setting's value lives (a DB attribute of `User` or `AssistantPersona`), but not *how GA
+      knows an attribute exists, its valid type/range, or which use case to invoke to change it*.
+      Today GA's only "knowledge" of what it can configure is hand-written prose in
+      `ONBOARDING_SCRIPT` (`services/session.py`) — human-maintained, not bound to the actual
+      entity fields, already stale (`idle_consolidation_minutes`/`speaking_rate` exist as real
+      fields but aren't mentioned there). A candidate direction floated in passing (not decided):
+      a small declarative registry — e.g. a `VoiceConfigurableField` descriptor per attribute
+      (entity, field name, type, validator, use case to call) — that both `ONBOARDING_SCRIPT` and
+      the tool-calling layer above could read from, instead of two hand-maintained lists drifting
+      independently. This is likely a prerequisite for the tool-calling item above, not a parallel
+      track — needs its own design session before implementation starts.
+
+### Other known candidates, not yet scoped
+- [ ] `StartSession`'s two hardcoded, unwired constructor defaults (`session_tail_turns: int = 10`,
+      `session_continuation_threshold_hours: float = 24.0` in `services/session.py` — never passed
+      a value at the `server.py` call site). Same category as `idle_consolidation_minutes`;
+      candidate: promote to `User` fields under the same DB-attribute placement rule. See
+      `project_memai_open_questions` item 14.
+- [ ] VAD silence-frame threshold voice-configurability (client-side; needs a new server→client
+      WS message, since the client is documented as fully stateless)
+- [ ] Merge/disambiguate threshold promotion to persona-scoped, voice-configurable fields —
+      blocked on real calibration data (see Phase 3's integration test)
