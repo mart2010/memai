@@ -1237,12 +1237,27 @@ meaningful and belongs in Phase 12.
   Phase 10 round-trip tests**: multi-entry `voices` map round-trip,
   concept/procedure `category` + `persona_state` round-trips including
   upsert-doesn't-clobber-persona_state, and `update_persona_state` EPISODE rejection.
-  **Not yet run against a real DB** — this laptop's venv has no `psycopg` (integration
-  runs have always lived on the GPU workstation), so the standard GPU-workstation pass
-  (fresh DB from the edited migration + full integration suite) is the remaining step,
-  same posture as Phases 3/5/6/8.
-- [ ] GPU workstation run: drop/recreate dev DB with the edited `001_initial_schema.sql`,
-      full pytest suite including the new integration tests
+  Initially not runnable on this laptop (venv has no `psycopg` — integration runs have
+  always lived on the GPU workstation); done for real the same day, see below.
+- [x] GPU workstation run (2026-07-10, tx940094): **165 passed, 5 skipped** — full suite
+      including every new Phase 10 integration test against real Postgres (the 5 skips are
+      the known missing voice packs es/it/pt/ja/zh-cn, the standing Phase 7 TODO).
+      Dev DB re-created from the edited `001_initial_schema.sql` after confirming it held
+      only the GA seed row (0 users/conversations/memories): `personas.voices` JSONB with
+      correct `{"default": "af_heart"}` seed, `category`/`persona_state` present on
+      concepts and procedures, and the migration confirmed still idempotent on a second
+      apply. Real `memai-server` boot against the new schema verified end-to-end wiring
+      (`_ensure_user_exists` on new schema, new `offline_user_repo`, model loads,
+      "Server listening on :8765"), then shut down via `fuser -k 8765/tcp`.
+      Getting the code there: `git pull` was blocked by a dirty workstation tree — local
+      edits + untracked integration-test files from the 2026-07-08/09 live sessions that
+      the pushed commits now track. Verified file-by-file (CR-insensitive) that every
+      local difference was already contained in the pushed commits (the only content
+      delta, `domain/model.py`, was just the pre-Phase-10 `tts_voice` version), then
+      `git stash -u` (kept recoverable, not discarded) + fast-forward to `a631d38`.
+      `uv sync --system-certs` behind the proxy was a clean no-op (Phase 10 adds no deps).
+      Note: `--native-tls` is now a deprecated alias — `--system-certs` (as recorded in
+      the workstation memory) is the current flag name.
 
 ### Findings / side-fixes from this phase
 - **`infrastructure/llm/__init__.py` eagerly imported the OpenRouter family, making

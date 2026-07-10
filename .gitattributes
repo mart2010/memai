@@ -1,0 +1,6 @@
+# Line-ending policy is repo-owned (overrides each machine's core.autocrlf):
+# all text files are stored AND checked out with LF, on every OS. Python, uv,
+# ruff, pytest and modern Windows editors all handle LF working trees fine —
+# this kills CRLF-vs-LF diff noise between the Windows laptop and the Linux
+# GPU workstation in both directions.
+* text=auto eol=lf
