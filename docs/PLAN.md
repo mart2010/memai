@@ -1276,28 +1276,44 @@ meaningful and belongs in Phase 12.
 
 ---
 
-## Phase 11 — Persona Bundle Format + `InstallPersonaBundle` (design session first)
+## Phase 11 — Persona Bundle Format + `InstallPersonaBundle`
 
-The long-deferred starting point (see `project_language_tutor_model` memory). Needs its
-own grill/design session before implementation — nothing below is committed detail.
+Design settled 2026-07-10 — full rationale and format spec in
+`docs/BRIEF_phase11_bundle_format.md`. Headline decision: **the bundle file format IS
+the port** between memai and any (external, future, possibly commercial) authoring tool
+— memai owns the versioned envelope schema; authors own all content vocabulary. The
+authoring tool itself, the standalone validator CLI, and the content quality/safety
+review pass are all explicitly out of Phase 11 scope (see brief's Non-goals).
 
-- [ ] Bundle file format/schema — ships the persona definition (name, system_prompt,
-      `voices`, persona settings e.g. pair-difficulty coefficient) + content items
-      (Concept/Procedure drafts with category + language). Lesson grouping is an
-      authoring-time-only ordering convenience — no persisted structure after import.
-      CEFR level = one bundle; cognate accelerators = small per-language-pair bundles.
-- [ ] `PersonaBundleSource` port + `InstallPersonaBundle` use case — one-shot, triggered
-      by install (not by the session loop); emits `MemoryItemDraft`s into the existing
-      upsert/consolidation pipeline (embedding + similarity merge-or-insert), no separate
-      insertion path
-- [ ] Multi-pass LLM bundle-authoring strategy — lesson-by-lesson with a running
-      "already taught" roster (enforces no-two-unknowns + ephemeral-generation during
-      authoring); MEO-BR pedagogy ordering as the lesson template: cognate/cultural
-      anchoring per pair → modal verbs → base structures (affirmation/negation/question)
-      → frequent action verbs → interest-driven thematic clusters → Zipf top-1000 woven
-      throughout
-- [ ] Validation/review pass for generated or third-party bundle content before it
-      reaches the upsert pipeline
+- [ ] Schema + domain: `personas.persona_key TEXT NULL UNIQUE` (author-namespaced
+      identity, e.g. `meo/spanish-tutor`, convention-enforced — no registry),
+      `personas.settings JSONB NULL` (opaque persona-owned tunables, e.g. the
+      learner-language-keyed `pair_difficulty` map; same leak-prevention contract as
+      `persona_state`), new `bundle_installs` append-only provenance log
+- [ ] Refactor: extract the merge-or-insert upsert machinery
+      (`_merge_action`/`_existing_to_merge` + embedding + synthesis) from
+      `ConsolidateMemory` into a shared upserter used by both consolidation and the
+      installer — pure move, no behavior change
+- [ ] `PersonaBundleSource` port + TOML reader adapter — bundle = directory
+      (`bundle.toml` manifest + `lessons/*.toml`, ~15–40 `[[items]]` per lesson file);
+      stdlib `tomllib`, read-only; `format_version = 1` from day one
+- [ ] `InstallPersonaBundle` use case — one-shot, session loop never calls it; persona
+      exists (by `persona_key`) → attach content, absent → create from `[persona]`
+      (upgrade/overwrite semantics deferred); per-lesson `UnitOfWork`; recovery =
+      re-run (idempotent by merge; exact-duplicate short-circuit optimization); items
+      always inserted `UNSEEN`, no `persona_state`, embedding computed at install;
+      **insertion order is the contract** (lesson filename sort → SERIAL id = curriculum
+      order; Phase 12 selection tiebreaks UNSEEN by ascending id); pair-independence
+      rules: `voices["default"]` derived from `User.primary_language` when omitted,
+      pair-specific content ships in per-pair accelerator bundles
+- [ ] `memai-bundle install <path>` console script on the server package (needs
+      embedding model + DB + config); documented run-while-idle caveat
+- [ ] Hand-written mini-bundle fixture + unit tests + integration test (real Postgres,
+      GPU workstation)
+- [ ] Authoring guide doc (replaces the former "multi-pass LLM authoring strategy" code
+      item): roster workflow, no-two-unknowns, ephemeral-generation, MEO-BR
+      lesson-ordering template — doubles as the seed requirements doc for the future
+      authoring app
 
 ---
 
