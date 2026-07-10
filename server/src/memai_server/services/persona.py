@@ -3,7 +3,7 @@ from datetime import datetime
 from uuid import UUID, uuid4
 
 from ..domain.events import PersonaDeactivated, PersonaReactivated, PersonaSwitched
-from ..domain.model import AssistantPersona, GENERAL_ASSISTANT_ID, Language
+from ..domain.model import AssistantPersona, DEFAULT_VOICE_ROLE, GENERAL_ASSISTANT_ID, Language
 from .ports import PersonaRepository
 from .session import WorkingMemory
 
@@ -19,7 +19,7 @@ class CreatePersona:
         system_prompt: str,
         now: datetime,
         response_language: Language | None = None,
-        tts_voice: str = "af_heart",
+        voices: dict[str, str] | None = None,
         speaking_rate: float = 1.0,
         languages: list[Language] | None = None,
     ) -> AssistantPersona:
@@ -32,7 +32,7 @@ class CreatePersona:
             system_prompt=system_prompt,
             languages=languages or [],
             response_language=lang,
-            tts_voice=tts_voice,
+            voices=voices or {DEFAULT_VOICE_ROLE: "af_heart"},
             speaking_rate=speaking_rate,
             is_system=False,
             created_at=now,
@@ -60,7 +60,7 @@ class EditPersona:
         now: datetime,
         name: str | None = None,
         system_prompt: str | None = None,
-        tts_voice: str | None = None,
+        voices: dict[str, str] | None = None,
         speaking_rate: float | None = None,
         response_language: Language | None = None,
     ) -> AssistantPersona:
@@ -71,7 +71,7 @@ class EditPersona:
             updated_at=now,
             name=name,
             system_prompt=system_prompt,
-            tts_voice=tts_voice,
+            voices=voices,
             speaking_rate=speaking_rate,
             response_language=response_language,
         )

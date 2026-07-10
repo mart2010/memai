@@ -11,7 +11,7 @@ from uuid import uuid4
 import psycopg
 import websockets
 
-from .domain.model import Language, SUPPORTED_LANGUAGES, User
+from .domain.model import DEFAULT_VOICE_ROLE, Language, SUPPORTED_LANGUAGES, User
 from .infrastructure import postgres
 from .infrastructure.config import load_config
 from .infrastructure.embedding import SentenceTransformerEmbeddingService
@@ -74,6 +74,7 @@ class ServerContext:
     # could execute as part of that transaction, or block the event loop waiting on it.
     # Two independent connections sidestep this entirely.
     offline_conn: psycopg.Connection
+    offline_user_repo: PSUserRepository
     offline_persona_repo: PSPersonaRepository
     offline_memory_brief_repo: PSMemoryBriefRepository
     offline_memory_repo: PSMemoryRepository
@@ -118,6 +119,9 @@ async def _run_offline_pipeline(ctx: ServerContext) -> None:
         disambiguator=ctx.disambiguator,
         synthesizer=ctx.synthesizer,
         unit_of_work=ctx.offline_unit_of_work,
+        user_repo=ctx.offline_user_repo,
+        # No assessment strategies registered yet — the first concrete one is the
+        # language tutor's (Phase 12); GA assesses nothing.
         merge_threshold=ctx.memory_merge_threshold,
         disambiguate_threshold=ctx.memory_disambiguate_threshold,
     )
@@ -211,7 +215,7 @@ async def _handle(ws, ctx: ServerContext) -> None:
                 session.active_persona = edit_persona.execute(
                     persona_id=session.active_persona.id,
                     now=datetime.now(UTC),
-                    tts_voice=voice,
+                    voices={DEFAULT_VOICE_ROLE: voice},
                     response_language=lang,
                 )
                 onboarding_done = True
@@ -296,6 +300,7 @@ def main() -> None:
         synthesizer=OllamaMemorySynthesizer(model=cfg.llm_model, host=cfg.llm_ollama_host),
         extractor=OllamaConsolidationExtractor(model=cfg.llm_model, host=cfg.llm_ollama_host),
         offline_conn=offline_conn,
+        offline_user_repo=PSUserRepository(offline_conn),
         offline_persona_repo=PSPersonaRepository(offline_conn),
         offline_memory_brief_repo=PSMemoryBriefRepository(offline_conn),
         offline_memory_repo=PSMemoryRepository(offline_conn),

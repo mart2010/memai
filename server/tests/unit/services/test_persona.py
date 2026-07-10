@@ -32,7 +32,7 @@ def _other_persona(name: str = "Coach") -> AssistantPersona:
         system_prompt="You are a coach.",
         languages=[],
         response_language=Language("en"),
-        tts_voice="af_heart",
+        voices={"default": "af_heart"},
         is_system=False,
         created_at=_now(),
         updated_at=_now(),
@@ -117,14 +117,14 @@ class TestEditPersona:
         with pytest.raises(ValueError):
             use_case.execute(uuid4(), now=_now(), name="X")
 
-    def test_updates_tts_voice_speaking_rate_response_language(self):
+    def test_updates_voices_speaking_rate_response_language(self):
         coach = _other_persona("Coach")
         repo = _repo_with(coach)
         use_case = EditPersona(repo)
         updated = use_case.execute(
-            coach.id, now=_now(), tts_voice="ff_siwis", speaking_rate=0.9, response_language=Language("fr"),
+            coach.id, now=_now(), voices={"default": "ff_siwis"}, speaking_rate=0.9, response_language=Language("fr"),
         )
-        assert updated.tts_voice == "ff_siwis"
+        assert updated.default_voice == "ff_siwis"
         assert updated.speaking_rate == 0.9
         assert updated.response_language == Language("fr")
 

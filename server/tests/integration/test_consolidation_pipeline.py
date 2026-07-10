@@ -18,6 +18,7 @@ from memai_server.domain.model import (
     MemoryType,
     Speaker,
     Turn,
+    User,
 )
 from memai_server.infrastructure.json_file import JSONLSessionReplayReader, JSONLTurnLogger
 from memai_server.infrastructure.postgres import (
@@ -35,6 +36,7 @@ from tests.fakes.fakes import (
     FakeDisambiguationEvaluator,
     FakeEmbeddingService,
     FakeMemorySynthesizer,
+    FakeUserRepository,
     FakeWorthinessEvaluator,
 )
 
@@ -116,6 +118,7 @@ def test_disconnect_replay_consolidate_updates_db_state(pg_conn: psycopg.Connect
         disambiguator=FakeDisambiguationEvaluator(),
         synthesizer=FakeMemorySynthesizer(),
         unit_of_work=PSUnitOfWork(pg_conn),
+        user_repo=FakeUserRepository(User(id=uuid4(), primary_language=Language("en"))),
     )
     processed = consolidate.execute()
     assert processed == 1
@@ -178,6 +181,7 @@ def test_unworthy_conversation_still_extracts_concepts_but_no_episodes(
         disambiguator=FakeDisambiguationEvaluator(),
         synthesizer=FakeMemorySynthesizer(),
         unit_of_work=PSUnitOfWork(pg_conn),
+        user_repo=FakeUserRepository(User(id=uuid4(), primary_language=Language("en"))),
     )
     consolidate.execute()
 

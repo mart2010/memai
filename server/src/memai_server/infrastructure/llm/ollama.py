@@ -4,9 +4,9 @@ import json
 import ollama
 
 from ...domain.events import RecallSource, RecallTriggered
-from ...domain.model import Concept, Conversation, Episode, MemoryType, Procedure
+from ...domain.model import Concept, Conversation, Episode, Language, MemoryType, Procedure
 from ...services.ports import ExtractionResult, MemoryItem, Message
-from ._common import _conversation_language, _format_conversation, _parse_extraction
+from ._common import _conversation_language, _extraction_system_prompt, _format_conversation, _parse_extraction
 
 
 # ---------------------------------------------------------------------------
@@ -216,7 +216,7 @@ class OllamaConsolidationExtractor:
         self._client = ollama.Client(host=host)
         self._model = model
 
-    def extract(self, conversation: Conversation) -> ExtractionResult:
+    def extract(self, conversation: Conversation, primary_language: Language | None = None) -> ExtractionResult:
         transcript = _format_conversation(conversation)
         persona_id = conversation.persona_id
         lang = _conversation_language(conversation)
@@ -226,19 +226,7 @@ class OllamaConsolidationExtractor:
             messages=[
                 {
                     "role": "system",
-                    "content": (
-                        "Extract structured memories from this conversation. "
-                        f"The conversation took place around {conversation.started_at.isoformat()}.\n"
-                        "Return JSON with three arrays:\n"
-                        '- "episodes": personal events or experiences the user mentioned '
-                        '(each: {"summary": str, "happened_at": ISO8601 datetime or null})\n'
-                        '- "concepts": facts or knowledge the user learned or discussed '
-                        '(each: {"name": str, "description": str, "language": IETF code})\n'
-                        '- "procedures": how-to knowledge '
-                        '(each: {"name": str, "description": str, "steps": [str], "language": IETF code})\n'
-                        "Be selective — only include what is genuinely informative. "
-                        "Leave arrays empty when nothing qualifies."
-                    ),
+                    "content": _extraction_system_prompt(conversation, primary_language),
                 },
                 {"role": "user", "content": transcript},
             ],

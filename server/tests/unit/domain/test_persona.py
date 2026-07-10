@@ -10,7 +10,7 @@ class TestAssistantPersonaGuards:
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
-            languages=[], response_language=Language("en"), tts_voice="af_heart",
+            languages=[], response_language=Language("en"), voices={"default": "af_heart"},
             is_system=False, created_at=now, updated_at=now,
         )
         later = datetime.now(UTC)
@@ -23,7 +23,7 @@ class TestAssistantPersonaGuards:
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="General Assistant", system_prompt="Help.",
-            languages=[], response_language=Language("en"), tts_voice="af_heart",
+            languages=[], response_language=Language("en"), voices={"default": "af_heart"},
             is_system=True, created_at=now, updated_at=now,
         )
         later = datetime.now(UTC)
@@ -32,28 +32,49 @@ class TestAssistantPersonaGuards:
         assert persona.system_prompt == "Help differently."
         assert persona.updated_at == later
 
-    def test_update_can_change_tts_voice_speaking_rate_response_language(self):
+    def test_update_can_change_voices_speaking_rate_response_language(self):
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
-            languages=[], response_language=Language("en"), tts_voice="af_heart",
+            languages=[], response_language=Language("en"), voices={"default": "af_heart"},
             is_system=False, created_at=now, updated_at=now,
         )
         persona.update(
             updated_at=datetime.now(UTC),
-            tts_voice="ff_siwis",
+            voices={"default": "ff_siwis", "target_teacher": "ef_dora"},
             speaking_rate=0.8,
             response_language=Language("fr"),
         )
-        assert persona.tts_voice == "ff_siwis"
+        assert persona.default_voice == "ff_siwis"
+        assert persona.voices["target_teacher"] == "ef_dora"
         assert persona.speaking_rate == 0.8
         assert persona.response_language == Language("fr")
+
+    def test_voices_must_include_default_role(self):
+        now = datetime.now(UTC)
+        with pytest.raises(ValueError, match="default"):
+            AssistantPersona(
+                id=uuid4(), name="Tutor", system_prompt="Teach me.",
+                languages=[], response_language=Language("en"), voices={"narrator": "af_heart"},
+                is_system=False, created_at=now, updated_at=now,
+            )
+
+    def test_update_rejects_voices_without_default_role(self):
+        now = datetime.now(UTC)
+        persona = AssistantPersona(
+            id=uuid4(), name="Tutor", system_prompt="Teach me.",
+            languages=[], response_language=Language("en"), voices={"default": "af_heart"},
+            is_system=False, created_at=now, updated_at=now,
+        )
+        with pytest.raises(ValueError, match="default"):
+            persona.update(updated_at=datetime.now(UTC), voices={"narrator": "ff_siwis"})
+        assert persona.default_voice == "af_heart"
 
     def test_partial_update_preserves_unchanged_fields(self):
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Original prompt.",
-            languages=[], response_language=Language("en"), tts_voice="af_heart",
+            languages=[], response_language=Language("en"), voices={"default": "af_heart"},
             is_system=False, created_at=now, updated_at=now,
         )
         persona.update(name="New Name", updated_at=datetime.now(UTC))
@@ -72,7 +93,7 @@ class TestAssistantPersonaGuards:
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
-            languages=[], response_language=Language("en"), tts_voice="af_heart",
+            languages=[], response_language=Language("en"), voices={"default": "af_heart"},
             is_system=False, created_at=now, updated_at=now,
         )
         later = datetime.now(UTC)
@@ -89,7 +110,7 @@ class TestAssistantPersonaGuards:
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="General Assistant", system_prompt="Help.",
-            languages=[], response_language=Language("en"), tts_voice="af_heart",
+            languages=[], response_language=Language("en"), voices={"default": "af_heart"},
             is_system=True, created_at=now, updated_at=now,
         )
         with pytest.raises(ValueError, match="System personas"):

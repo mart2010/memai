@@ -57,7 +57,7 @@ ruff format .
   `stt.model_path/device/compute_type`, `llm.model/ollama_host`, `log_dir`) — nothing voice-
   configurable lives there. Every voice-configurable or domain-meaningful setting is instead a
   DB-backed attribute of whichever entity owns it — `User` (e.g. `idle_consolidation_minutes`)
-  or `AssistantPersona` (e.g. `tts_voice`, `speaking_rate`) — never a global toml scalar.
+  or `AssistantPersona` (e.g. `voices`, `speaking_rate`) — never a global toml scalar.
   Because Memai is single-user, "global setting" and "User attribute" are the same thing, so
   there is no legitimate third bucket.
   - Anything requiring install/download/restart/swap (adding an STT/TTS engine, changing the
@@ -200,6 +200,37 @@ and `embedding` are always updated together on every enrichment.
 It stays fixed even if the concept resurfaces in another language. The description is
 always maintained in this original language; content from other-language conversations is
 translated and synthesised into the existing description during the upsert LLM call.
+
+Related extractor rule: **Episode summaries are always written in `User.primary_language`**
+regardless of conversation language — Episodes are persona-independent and carry no
+language field; months of tutoring must not turn the user's life story into
+target-language documents.
+
+### Persona extension fields and ports (Phase 10)
+
+`Concept` and `Procedure` carry two persona-extension slots:
+
+- `category: str | None` — free text, interpreted in the owning persona's own vocabulary
+  (e.g. the tutor's `noun`/`idiom`/`contrast_pair`); generic code passes it through as a
+  filter value, never enumerates it. On upsert-merge the existing category wins; a new
+  one only fills a gap (curated bundle content beats extractor guesses).
+- `persona_state: dict | None` (JSONB) — opaque, unkeyed (the `persona_id` FK already
+  scopes ownership). **Single-writer contract**: written only by the owning persona's
+  assessment strategy via `MemoryRepository.update_persona_state()` (upsert UPDATEs
+  structurally exclude the column), read only by that persona's selection strategy; no
+  generic code path may branch on its contents. `engagement_level` stays the generic
+  coarse tier, written only by generic consolidation.
+
+Three optional persona strategy ports (`services/ports.py`; GA registers none):
+`PersonaSelectionPort.select_items` (live — proactive batch fetched once at session
+start, consumed one item per turn via the RAG-style context injection),
+`PersonaEnrichmentPort.propose_items` (offline — proposes new drafts), and
+`PersonaAssessmentPort.assess_items` (offline — runs in consolidation after upsert,
+returns `ItemAssessment(item_id, memory_type, persona_state)` persisted byte-for-byte).
+
+`AssistantPersona.voices` is a speaker-role → Kokoro-voice map that must always contain
+the `"default"` role; generic code only reads `default_voice`. Additional roles (e.g. the
+tutor's two-teacher cast) are persona-defined — per-segment voice switching is Phase 12.
 
 ### Upsert similarity threshold
 

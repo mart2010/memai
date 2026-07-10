@@ -7,14 +7,26 @@ from .ollama import (
     OllamaRecallIntentDetector,
     OllamaWorthinessEvaluator,
 )
-from .openrouter import (
-    OpenRouterConsolidationExtractor,
-    OpenRouterDisambiguationEvaluator,
-    OpenRouterLLMService,
-    OpenRouterMemorySynthesizer,
-    OpenRouterRecallIntentDetector,
-    OpenRouterWorthinessEvaluator,
-)
+
+# The OpenRouter family is a cloud-gateway *alternative* to the fully-local default —
+# re-exported lazily so importing this package (or the Ollama family) never requires the
+# `openai` client package at runtime on a fully-local deployment.
+_OPENROUTER_EXPORTS = frozenset({
+    "OpenRouterLLMService",
+    "OpenRouterWorthinessEvaluator",
+    "OpenRouterRecallIntentDetector",
+    "OpenRouterMemorySynthesizer",
+    "OpenRouterDisambiguationEvaluator",
+    "OpenRouterConsolidationExtractor",
+})
+
+
+def __getattr__(name: str):
+    if name in _OPENROUTER_EXPORTS:
+        from . import openrouter
+        return getattr(openrouter, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "OllamaLLMService",
@@ -23,10 +35,5 @@ __all__ = [
     "OllamaMemorySynthesizer",
     "OllamaDisambiguationEvaluator",
     "OllamaConsolidationExtractor",
-    "OpenRouterLLMService",
-    "OpenRouterWorthinessEvaluator",
-    "OpenRouterRecallIntentDetector",
-    "OpenRouterMemorySynthesizer",
-    "OpenRouterDisambiguationEvaluator",
-    "OpenRouterConsolidationExtractor",
+    *sorted(_OPENROUTER_EXPORTS),
 ]

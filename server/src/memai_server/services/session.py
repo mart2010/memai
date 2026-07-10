@@ -25,6 +25,8 @@ from .ports import (
     MemoryRepository,
     Message,
     PersonaRepository,
+    PersonaSelectionPort,
+    SelectedItem,
     SessionLogReader,
     STTService,
     TTSService,
@@ -46,6 +48,9 @@ class WorkingMemory:
     rolling_summary: str | None = None
     total_turn_count: int = 0
     session_tail: list[Turn] = field(default_factory=list)
+    # Persona-selected items fetched once at session start (live path never writes to the
+    # DB, so re-querying mid-session cannot return anything new); consumed one per turn.
+    selection_batch: list[SelectedItem] = field(default_factory=list)
 
 
 @dataclass
@@ -202,7 +207,11 @@ def _format_memory_item(item: MemoryItem) -> str:
     return str(item)
 
 
-def _compose_working_context(wm: WorkingMemory, recalled_memories: list[MemoryItem]) -> tuple[str, list[Message]]:
+def _compose_working_context(
+    wm: WorkingMemory,
+    recalled_memories: list[MemoryItem],
+    selected_item: SelectedItem | None = None,
+) -> tuple[str, list[Message]]:
     prompt_parts = [wm.active_persona.system_prompt]
     if wm.needs_onboarding:
         prompt_parts.insert(0, _FIRST_LAUNCH_DIRECTIVE)
@@ -235,6 +244,17 @@ def _compose_working_context(wm: WorkingMemory, recalled_memories: list[MemoryIt
         role = "user" if turn.speaker == Speaker.USER else "assistant"
         messages.append(Message(role=role, content=turn.content))
 
+    if selected_item is not None:
+        # Same per-turn injection mechanism as RAG recall: a role-tagged context message,
+        # inserted just before the current user turn. Item and context are injected
+        # verbatim — the strategy composed them; generic code never interprets them.
+        lines = [f"Work this item into the conversation naturally this turn:\n{_format_memory_item(selected_item.item)}"]
+        if selected_item.context:
+            lines.append(f"Context: {selected_item.context}")
+        injection = Message(role="system", content="\n".join(lines))
+        insert_at = len(messages) - 1 if messages else 0
+        messages.insert(insert_at, injection)
+
     return system_prompt, messages
 
 
@@ -245,6 +265,7 @@ class StartSession:
         persona_repo: PersonaRepository,
         memory_brief_repo: MemoryBriefRepository,
         session_log_reader: SessionLogReader,
+        selection_strategies: dict[UUID, PersonaSelectionPort] | None = None,
         session_tail_turns: int = 10,
         session_continuation_threshold_hours: float = 24.0,
     ) -> None:
@@ -252,6 +273,8 @@ class StartSession:
         self._persona_repo = persona_repo
         self._memory_brief_repo = memory_brief_repo
         self._session_log_reader = session_log_reader
+        # persona_id -> selection strategy; personas without one (e.g. GA) get no batch.
+        self._selection_strategies = selection_strategies or {}
         self._tail_turns = session_tail_turns
         self._threshold_hours = session_continuation_threshold_hours
 
@@ -274,6 +297,12 @@ class StartSession:
                         previous.session_id, self._tail_turns
                     )
 
+        # Persona-driven selection batch — fetched alongside the other session-start reads.
+        selection_batch: list[SelectedItem] = []
+        strategy = self._selection_strategies.get(persona.id)
+        if strategy is not None and not needs_onboarding:
+            selection_batch = list(strategy.select_items(persona.id))
+
         return WorkingMemory(
             session_id=session_id,
             started_at=started_at,
@@ -283,6 +312,7 @@ class StartSession:
             memory_brief=None if needs_onboarding else self._memory_brief_repo.get(),
             needs_onboarding=needs_onboarding,
             session_tail=session_tail,
+            selection_batch=selection_batch,
         )
 
 
@@ -344,14 +374,20 @@ class ProcessTurn:
                 )
             ]
 
-        # 5. Stream the LLM response; resolve any leading [PERSONA:name]/boundary marker
+        # 5. Persona-selected item (if any left in the session batch) — one per turn,
+        # injected via the same context-message mechanism as recall above.
+        selected_item = wm.selection_batch.pop(0) if wm.selection_batch else None
+
+        # 6. Stream the LLM response; resolve any leading [PERSONA:name]/boundary marker
         # as soon as enough tokens arrive, then synthesise each sentence via TTS as it
         # completes — instead of waiting for the entire reply before speaking a word.
-        system_prompt, messages = _compose_working_context(wm, recalled_memories)
+        system_prompt, messages = _compose_working_context(wm, recalled_memories, selected_item)
         wm.needs_onboarding = False
         response_language = wm.active_persona.response_language
         lang_code = response_language.code if response_language else None
-        voice = wm.active_persona.tts_voice
+        # Per-segment speaker switching (multi-voice cast) is Phase 12 — the live path
+        # only ever uses the default role for now.
+        voice = wm.active_persona.default_voice
         speaking_rate = wm.active_persona.speaking_rate
 
         audio_chunks: list[bytes] = []
@@ -404,10 +440,10 @@ class ProcessTurn:
         assistant_content = "".join(content_parts).strip()
         print(f"[latency] Total turn: {time.monotonic() - t_start:.2f}s")
 
-        # 6. Conversation boundary event — marker embedded in assistant turn below
+        # 7. Conversation boundary event — marker embedded in assistant turn below
         boundary = ConversationBoundaryDetected(boundary_type=boundary_marker) if boundary_marker else None
 
-        # 7. Persona switch from detected prefix
+        # 8. Persona switch from detected prefix
         persona_switched: PersonaSwitched | None = None
         if detected_name:
             match = next(
@@ -421,14 +457,14 @@ class ProcessTurn:
                 )
                 wm.active_persona = match
 
-        # 8. Log assistant turn + update working memory
+        # 9. Log assistant turn + update working memory
         # Fresh timestamp captures when the LLM finished — gap from `now` reflects response time.
         assistant_turn = Turn(timestamp=datetime.now(UTC), speaker=Speaker.ASSISTANT, content=assistant_content)
         self._turn_logger.append(wm.session_id, assistant_turn, marker=boundary_marker, persona_id=wm.active_persona.id)
         wm.recent_turns.append(assistant_turn)
         wm.total_turn_count += 1
 
-        # 9. Rolling window check
+        # 10. Rolling window check
         if (self._rolling_window_size > 0
                 and wm.total_turn_count % self._rolling_window_size == 0):
             await self._summarise_window(wm)

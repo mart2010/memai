@@ -51,6 +51,10 @@ class Speaker(Enum):
 
 GENERAL_ASSISTANT_ID = UUID("00000000-0000-0000-0000-000000000001")
 
+# Every persona's `voices` map must carry this role. Additional roles (e.g. a language
+# tutor's two-teacher cast) are persona-defined; generic code only ever reads DEFAULT_VOICE_ROLE.
+DEFAULT_VOICE_ROLE = "default"
+
 
 @dataclass
 class AssistantPersona:
@@ -59,19 +63,27 @@ class AssistantPersona:
     system_prompt: str
     languages: list[Language]  # languages this persona accepts as input; empty = primary language only
     response_language: Language  # language this persona responds in; drives TTS voice selection
-    tts_voice: str              # Kokoro voice identifier, e.g. "af_heart", "ff_siwis"
+    voices: dict[str, str]      # speaker role -> Kokoro voice identifier; must include DEFAULT_VOICE_ROLE
     is_system: bool
     created_at: datetime
     updated_at: datetime
     speaking_rate: float = 1.0  # persona-scoped TTS rate, e.g. a language tutor may want it slower than GA
     is_active: bool = True
 
+    def __post_init__(self) -> None:
+        if DEFAULT_VOICE_ROLE not in self.voices:
+            raise ValueError(f"voices must include the '{DEFAULT_VOICE_ROLE}' role")
+
+    @property
+    def default_voice(self) -> str:
+        return self.voices[DEFAULT_VOICE_ROLE]
+
     def update(
         self,
         updated_at: datetime,
         name: str | None = None,
         system_prompt: str | None = None,
-        tts_voice: str | None = None,
+        voices: dict[str, str] | None = None,
         speaking_rate: float | None = None,
         response_language: "Language | None" = None,
     ) -> None:
@@ -79,8 +91,10 @@ class AssistantPersona:
             self.name = name
         if system_prompt is not None:
             self.system_prompt = system_prompt
-        if tts_voice is not None:
-            self.tts_voice = tts_voice
+        if voices is not None:
+            if DEFAULT_VOICE_ROLE not in voices:
+                raise ValueError(f"voices must include the '{DEFAULT_VOICE_ROLE}' role")
+            self.voices = voices
         if speaking_rate is not None:
             self.speaking_rate = speaking_rate
         if response_language is not None:
@@ -111,7 +125,7 @@ class AssistantPersona:
             system_prompt=system_prompt,
             languages=[],
             response_language=response_language,
-            tts_voice=tts_voice,
+            voices={DEFAULT_VOICE_ROLE: tts_voice},
             is_system=True,
             created_at=now,
             updated_at=now,
@@ -193,6 +207,11 @@ class Concept:
     name: str
     description: str
     language: Language  # first introduced; stays fixed on upsert
+    category: str | None = None  # free text, interpreted in the owning persona's own vocabulary
+    # Opaque, unkeyed slot (persona_id already scopes ownership). Single-writer contract:
+    # written only by the owning persona's assessment strategy, read only by that persona's
+    # selection strategy — generic code never branches on its contents.
+    persona_state: dict | None = None
     engagement_level: EngagementLevel = EngagementLevel.MENTIONED
     created_at: datetime | None = None
     updated_at: datetime | None = None
@@ -207,6 +226,8 @@ class Procedure:
     description: str  # primary carrier of knowledge; always populated (~300 words)
     language: Language  # first introduced; stays fixed on upsert
     steps: list[str] = field(default_factory=list)  # empty when not decomposable into discrete steps
+    category: str | None = None  # free text, interpreted in the owning persona's own vocabulary
+    persona_state: dict | None = None  # same single-writer contract as Concept.persona_state
     engagement_level: EngagementLevel = EngagementLevel.MENTIONED
     created_at: datetime | None = None
     updated_at: datetime | None = None

@@ -49,7 +49,7 @@ def _persona(**overrides) -> AssistantPersona:
         system_prompt="You are a test persona.",
         languages=[Language("en")],
         response_language=Language("en"),
-        tts_voice="af_heart",
+        voices={"default": "af_heart"},
         is_system=False,
         created_at=_NOW,
         updated_at=_NOW,
@@ -119,6 +119,16 @@ class TestPSPersonaRepository:
         repo.save(persona)
         repo.delete(persona.id)
         assert repo.get(persona.id) is None
+
+    def test_voices_map_round_trip(self, pg_conn: psycopg.Connection) -> None:
+        """Phase 10: voices is a JSONB speaker-role map (two-teacher cast is Phase 12,
+        but the multi-entry shape must round-trip already)."""
+        repo = PSPersonaRepository(pg_conn)
+        persona = _persona(voices={"default": "ff_siwis", "target_teacher": "ef_dora"})
+        repo.save(persona)
+        loaded = repo.get(persona.id)
+        assert loaded.voices == {"default": "ff_siwis", "target_teacher": "ef_dora"}
+        assert loaded.default_voice == "ff_siwis"
 
 
 class TestPSConversationRepository:
@@ -303,6 +313,60 @@ class TestPSMemoryRepository:
         )
         [(similarity, _)] = memory_repo.search(embedding=_vec(0.7), memory_types=(MemoryType.CONCEPT,), top_n=1, persona_id=persona.id)
         assert similarity == pytest.approx(1.0, abs=1e-4)
+
+    def test_category_and_persona_state_round_trip(self, pg_conn: psycopg.Connection) -> None:
+        """Phase 10: category round-trips through upsert INSERT/UPDATE; persona_state is
+        written only via update_persona_state and never clobbered by a later upsert."""
+        persona_repo = PSPersonaRepository(pg_conn)
+        memory_repo = PSMemoryRepository(pg_conn)
+        persona = _persona()
+        persona_repo.save(persona)
+
+        concept = Concept(
+            id=None, persona_id=persona.id, name="ser vs estar", description="d",
+            language=Language("es"), category="contrast_pair", embedding=_vec(0.3),
+        )
+        concept_id = memory_repo.upsert_concept(concept)
+
+        state = {"last_practiced_at": "2026-07-10", "half_life_days": 3.5, "retrievals": 2}
+        memory_repo.update_persona_state(MemoryType.CONCEPT, concept_id, state)
+
+        [(_, found)] = memory_repo.search(embedding=_vec(0.3), memory_types=(MemoryType.CONCEPT,), top_n=1, persona_id=persona.id)
+        assert found.category == "contrast_pair"
+        assert found.persona_state == state
+
+        # A subsequent upsert (merge path: extraction drafts carry persona_state=None)
+        # must not wipe the assessment strategy's state.
+        concept.id = concept_id
+        concept.description = "enriched description"
+        concept.persona_state = None
+        memory_repo.upsert_concept(concept)
+
+        [(_, found)] = memory_repo.search(embedding=_vec(0.3), memory_types=(MemoryType.CONCEPT,), top_n=1, persona_id=persona.id)
+        assert found.description == "enriched description"
+        assert found.persona_state == state
+
+    def test_update_persona_state_rejects_episodes(self, pg_conn: psycopg.Connection) -> None:
+        memory_repo = PSMemoryRepository(pg_conn)
+        with pytest.raises(ValueError, match="episode"):
+            memory_repo.update_persona_state(MemoryType.EPISODE, 1, {"x": 1})
+
+    def test_procedure_category_and_persona_state_round_trip(self, pg_conn: psycopg.Connection) -> None:
+        persona_repo = PSPersonaRepository(pg_conn)
+        memory_repo = PSMemoryRepository(pg_conn)
+        persona = _persona()
+        persona_repo.save(persona)
+
+        procedure = Procedure(
+            id=None, persona_id=persona.id, name="-er conjugation", description="d",
+            language=Language("fr"), category="morphological_pattern", embedding=_vec(0.4),
+        )
+        proc_id = memory_repo.upsert_procedure(procedure)
+        memory_repo.update_persona_state(MemoryType.PROCEDURE, proc_id, {"errors": 1})
+
+        [(_, found)] = memory_repo.search(embedding=_vec(0.4), memory_types=(MemoryType.PROCEDURE,), top_n=1, persona_id=persona.id)
+        assert found.category == "morphological_pattern"
+        assert found.persona_state == {"errors": 1}
 
     def test_persona_delete_cascades_to_concepts_and_procedures(self, pg_conn: psycopg.Connection) -> None:
         """CLAUDE.md: cascade delete is intentional for Concept/Procedure — deleting a

@@ -1132,3 +1132,184 @@ committed decision.
       WS message, since the client is documented as fully stateless)
 - [ ] Merge/disambiguate threshold promotion to persona-scoped, voice-configurable fields —
       blocked on real calibration data (see Phase 3's integration test)
+
+---
+
+## Phase 10 — Persona Extension Foundations (schema + port contracts)
+
+Design settled 2026-07-10 (MEO BR-doc session) — full rationale in the
+`project_persona_extension_ports` and `project_language_tutor_model` memory files. This
+phase lands every schema/contract change that the bundle file format (Phase 11) and the
+tutor persona (Phase 12) will reference, so those are designed against a fixed target.
+Deliberately excludes all tutor runtime machinery (strategies, half-life function,
+two-teacher TTS streaming) — that needs bundle content and calibration data to be
+meaningful and belongs in Phase 12.
+
+### Schema + domain (one migration)
+- [x] `category: str | None` on `Concept`/`Procedure` — free-text, persona-interpreted
+      (taxonomies live in the persona's own vocabulary, e.g. tutor's noun/verb/idiom/
+      contrast_pair, morphological_pattern/construction/rules); domain fields + migration
+      (`001_initial_schema.sql` edited in place per the Phase 8 no-migration-framework
+      decision) + `postgres.py` round-trip (INSERT and UPDATE both carry it) + extraction
+      plumbing (`_parse_extraction` reads an optional `"category"` key; the shared
+      extraction prompt asks for a "short lowercase classification label or null").
+      **Merge rule decided during implementation**: on upsert-merge, the existing
+      category wins and the new one only fills a gap (`existing.category or new.category`
+      in `ConsolidateMemory`) — curated bundle content must not be overwritten by a
+      generic extractor's guess. Unit-tested both ways.
+- [x] `persona_state: dict | None` (nullable JSONB) on `Concept`/`Procedure` — opaque,
+      UNKEYED slot (persona_id FK already scopes ownership — persona-keyed map explicitly
+      rejected). Single-writer contract enforced **structurally, not just by convention**:
+      the upsert UPDATE statements deliberately exclude the column (a merge upsert can
+      never clobber assessment state), and the only write path is the new
+      `MemoryRepository.update_persona_state(memory_type, item_id, persona_state)` port
+      method (raises on EPISODE — episodes have no persona_state; the
+      `persona_episode_state` association table stays deferred). `search()` reads it back
+      so selection strategies can rank on it.
+- [x] `AssistantPersona.tts_voice: str` → `voices: dict[str, str]` (speaker role → Kokoro
+      voice) — new `DEFAULT_VOICE_ROLE = "default"` constant + `default_voice` property;
+      `__post_init__`/`update()` guard that the map always contains the default role.
+      GA seed and `general_assistant()` factory produce a single-entry map; the live path
+      (`ProcessTurn`) keeps using only the default role — per-segment speaker switching
+      (two-teacher cast) is Phase 12, not here. `CreatePersona`/`EditPersona` take a
+      `voices` map now; the onboarding handler in `server.py` writes
+      `{"default": <derived voice>}`. Migration: `voices JSONB NOT NULL DEFAULT
+      '{"default": "af_heart"}'` replaces the `tts_voice` column; seed updated;
+      `CLAUDE.md`'s config-placement example updated to match.
+- [x] Extractor rule: Episode summaries always written in `User.primary_language`
+      regardless of conversation language — implemented as a shared
+      `_extraction_system_prompt(conversation, primary_language)` in
+      `infrastructure/llm/_common.py` (Ollama and OpenRouter extractors previously
+      duplicated the whole prompt inline; now they can't drift), instruction emitted only
+      when `primary_language` is known (pre-onboarding conversations fall back to old
+      behaviour). `ConsolidationExtractor.extract()` gained a `primary_language` param;
+      `ConsolidateMemory` reads it once per run via a new required `user_repo` (wired in
+      `server.py` as a new `offline_user_repo` on the offline connection). Unit-tested at
+      both levels: prompt text (`tests/unit/infrastructure/test_extraction_prompt.py`)
+      and `ConsolidateMemory` → extractor pass-through.
+
+### Port contracts + Fakes (no real strategies yet)
+- [x] `SelectedItem(item: MemoryItem, context: str | None)` — frozen dataclass in
+      `services/ports.py`; `context` injected verbatim, never interpreted
+- [x] `PersonaSelectionPort.select_items(persona_id, category=None, engagement_level=None,
+      limit=10) -> Sequence[SelectedItem]` — live hook, fetched once at session start
+- [x] `PersonaEnrichmentPort.propose_items(persona_id) -> Sequence[MemoryItemDraft]` —
+      offline hook, OPTIONAL per persona. Port + Fake only in this phase (deliberately no
+      pipeline wiring — the first real consumer is the tutor's interest-cluster strategy,
+      Phase 12). New `MemoryItemDraft` type alias = `Concept | Procedure` with `id=None`
+      (same shape Phase 11's `InstallPersonaBundle` will emit).
+- [x] `PersonaAssessmentPort.assess_items(persona_id, conversation, touched_items) ->
+      Sequence[ItemAssessment]` — offline hook, OPTIONAL per persona.
+      **`ItemAssessment` gained a `memory_type` field beyond the designed
+      `(item_id, persona_state)` pair** — concepts and procedures have independent id
+      sequences (separate SERIAL columns), so a bare `item_id` cannot identify the target
+      table; the persistence call needs the discriminator.
+- [x] `Fake*` implementations for all three ports (`FakePersonaSelectionPort`,
+      `FakePersonaEnrichmentPort`, `FakePersonaAssessmentPort`, all call-recording) +
+      `FakeMemoryRepository.update_persona_state` + unit tests
+- [x] Consolidation pipeline hook: after upsert (so new items have IDs), dispatch
+      `assess_items` for the conversation's persona if a strategy is registered; persist
+      the returned dicts byte-for-byte via `update_persona_state`. Runs **inside** the
+      per-conversation `UnitOfWork` (assessment is part of that conversation's atomic
+      consolidation). Registration mechanism: a plain `dict[UUID, PersonaAssessmentPort]`
+      constructor param on `ConsolidateMemory` (default empty — GA registers nothing);
+      a fancier registry abstraction was deliberately not built with zero real strategies
+      existing. `touched_items` = the conversation's upserted concepts + procedures;
+      episodes excluded (no persona_state slot). Unit tests: dispatched-with-ids,
+      persisted-verbatim, no-strategy no-op, nothing-touched no-op.
+- [x] Live consumption wiring: `StartSession` takes the same style of
+      `dict[UUID, PersonaSelectionPort]` registry, fetches the batch alongside
+      User/MemoryBrief/Persona into new `WorkingMemory.selection_batch` (skipped during
+      onboarding, like MemoryBrief); `ProcessTurn` consumes **one item per turn** (default
+      generic pacing until Phase 12's strategy-driven policy exists), injecting
+      `item + context` as a role-tagged system message placed just before the current
+      user turn — same mechanism as RAG recall, per the settled design. GA registers no
+      strategy → empty batch → no-op path. Unit tests: batch fetched at start, skipped in
+      onboarding, injected content + context present in LLM messages, one-per-turn
+      consumption until exhausted, no injection without a batch.
+
+### Verification (2026-07-10, Windows dev laptop — no GPU/DB)
+- 103/103 unit tests passing (up from 99; server suite), `ruff check` clean on all three
+  packages' `src` (only the 2 pre-existing `E741`s in `postgres.py`, same as Phase 8),
+  full `compileall` syntax pass on `server/src`.
+- Integration tests updated (`test_postgres.py` persona fixture → `voices`;
+  `test_consolidation_pipeline.py` → new `user_repo` param) **and extended with new
+  Phase 10 round-trip tests**: multi-entry `voices` map round-trip,
+  concept/procedure `category` + `persona_state` round-trips including
+  upsert-doesn't-clobber-persona_state, and `update_persona_state` EPISODE rejection.
+  **Not yet run against a real DB** — this laptop's venv has no `psycopg` (integration
+  runs have always lived on the GPU workstation), so the standard GPU-workstation pass
+  (fresh DB from the edited migration + full integration suite) is the remaining step,
+  same posture as Phases 3/5/6/8.
+- [ ] GPU workstation run: drop/recreate dev DB with the edited `001_initial_schema.sql`,
+      full pytest suite including the new integration tests
+
+### Findings / side-fixes from this phase
+- **`infrastructure/llm/__init__.py` eagerly imported the OpenRouter family, making
+  `openai` a hard import-time requirement even for fully-local Ollama deployments** —
+  against the project's fully-local default (the OpenRouter family is explicitly the
+  opt-in cloud alternative). Fixed: OpenRouter names are now lazily re-exported via
+  module `__getattr__`; importing the package or the Ollama family no longer touches
+  `openai`. (Surfaced because this laptop's venv predates the `openai` dependency.)
+- **This laptop's venv cannot be re-synced: `uv.lock` pins `numpy==1.26.4`** (locked on
+  the Linux GPU box), which has no cp313 wheels and fails to build from source on
+  Windows/Python 3.13 — while the venv actually contains numpy 2.4.4 from an earlier
+  resolution. Any `uv sync` here dies on the numpy build (after first dying on the
+  corporate proxy without `--native-tls`). Not a Phase 10 issue and not fixed here —
+  flagging that the lock needs a re-resolve (`uv lock --upgrade-package numpy`) next time
+  the GPU box is touched, or the laptop stays frozen on `uv run --no-sync`.
+
+---
+
+## Phase 11 — Persona Bundle Format + `InstallPersonaBundle` (design session first)
+
+The long-deferred starting point (see `project_language_tutor_model` memory). Needs its
+own grill/design session before implementation — nothing below is committed detail.
+
+- [ ] Bundle file format/schema — ships the persona definition (name, system_prompt,
+      `voices`, persona settings e.g. pair-difficulty coefficient) + content items
+      (Concept/Procedure drafts with category + language). Lesson grouping is an
+      authoring-time-only ordering convenience — no persisted structure after import.
+      CEFR level = one bundle; cognate accelerators = small per-language-pair bundles.
+- [ ] `PersonaBundleSource` port + `InstallPersonaBundle` use case — one-shot, triggered
+      by install (not by the session loop); emits `MemoryItemDraft`s into the existing
+      upsert/consolidation pipeline (embedding + similarity merge-or-insert), no separate
+      insertion path
+- [ ] Multi-pass LLM bundle-authoring strategy — lesson-by-lesson with a running
+      "already taught" roster (enforces no-two-unknowns + ephemeral-generation during
+      authoring); MEO-BR pedagogy ordering as the lesson template: cognate/cultural
+      anchoring per pair → modal verbs → base structures (affirmation/negation/question)
+      → frequent action verbs → interest-driven thematic clusters → Zipf top-1000 woven
+      throughout
+- [ ] Validation/review pass for generated or third-party bundle content before it
+      reaches the upsert pipeline
+
+---
+
+## Phase 12 — Language Tutor Persona (first concrete extension)
+
+All tutor runtime machinery, buildable once Phase 11 provides content. Full design in
+`project_language_tutor_model` memory (2026-07-10 sections).
+
+- [ ] Tutor selection strategy — due-ness ranking derived from `persona_state`
+      (exponential decay from `last_practiced_at` with `half_life_days`; mastery/next-due
+      derived at selection time, never stored); interleaved by `category` (anti-blocking);
+      Episode pairing via existing similarity search at session start; elicitation hint in
+      `SelectedItem.context` on similarity miss, capped at 1–2 per batch
+- [ ] Tutor assessment strategy — retrievals (successful only) / errors / response
+      latency (from `Turn.timestamp` deltas, weighted low) / `user_initiated` salience;
+      day-granularity `last_practiced_at` (sleep-gated spacing); half-life update rule
+- [ ] Tutor enrichment strategy (`propose_items`) — interest-cluster proposals once
+      consolidation shows several user-initiated Concepts sharing a theme
+- [ ] Two-teacher cast — speaker-tagged LLM output parsing + per-segment Kokoro voice
+      switching in the streaming path; target-teacher voice rotates across sessions
+      (HVPT), native-teacher voice fixed; ONE persona, ONE LLM call (two-agent design
+      rejected on latency)
+- [ ] Tutor persona prompt pack — production-before-correction as elicit-self-repair-
+      then-recast; pretesting/cognate guessing; TPRS-style narrative co-construction;
+      episode-elicitation behaviour with ramp-up (A0 elicitation = seeding, not practice)
+- [ ] Half-life function calibration — assessment strategy writes `persona_state` from
+      day one; selection keeps ranking by `engagement_level` until real data justifies
+      switching to retention ranking (same posture as the 0.93/0.75 upsert thresholds)
+- [ ] First real bundle authored via the Phase 11 pipeline (target language TBD;
+      French↔English cognate accelerator is the natural first pair given the MEO user)

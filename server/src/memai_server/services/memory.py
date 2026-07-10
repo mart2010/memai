@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 from datetime import datetime
 from enum import Enum
+from uuid import UUID
 
 from ..domain.model import EngagementLevel, MemoryBrief, MemoryType
 from ..domain.protocols import WorthinessEvaluator
@@ -15,7 +16,9 @@ from .ports import (
     MemoryRepository,
     MemorySynthesizer,
     Message,
+    PersonaAssessmentPort,
     UnitOfWork,
+    UserRepository,
 )
 
 def _max_engagement(a: EngagementLevel, b: EngagementLevel) -> EngagementLevel:
@@ -82,6 +85,8 @@ class ConsolidateMemory:
         disambiguator: DisambiguationEvaluator,
         synthesizer: MemorySynthesizer,
         unit_of_work: UnitOfWork,
+        user_repo: UserRepository,
+        assessment_strategies: dict[UUID, PersonaAssessmentPort] | None = None,
         merge_threshold: float = DEFAULT_MERGE_THRESHOLD,
         disambiguate_threshold: float = DEFAULT_DISAMBIGUATE_THRESHOLD,
     ) -> None:
@@ -93,6 +98,9 @@ class ConsolidateMemory:
         self._disambiguator = disambiguator
         self._synthesizer = synthesizer
         self._unit_of_work = unit_of_work
+        self._user_repo = user_repo
+        # persona_id -> assessment strategy; personas without one (e.g. GA) are skipped.
+        self._assessment_strategies = assessment_strategies or {}
         self._merge_threshold = merge_threshold
         self._disambiguate_threshold = disambiguate_threshold
 
@@ -102,6 +110,8 @@ class ConsolidateMemory:
         run this from an asyncio event loop (see `server.py`) must dispatch it via
         `asyncio.to_thread` so it doesn't block other connections for the run's duration."""
         conversations = self._conversation_repo.get_unconsolidated()
+        user = self._user_repo.get()
+        primary_language = user.primary_language if user else None
         processed = 0
         for conversation in conversations:
             # One transaction per conversation: if anything below raises, none of this
@@ -109,7 +119,7 @@ class ConsolidateMemory:
             # so it's safely reprocessed in full on the next run.
             with self._unit_of_work:
                 worthy = self._worthiness_evaluator.evaluate(conversation)
-                extraction = self._extractor.extract(conversation)
+                extraction = self._extractor.extract(conversation, primary_language)
 
                 # Episodes require a worthy conversation — trivial exchanges shouldn't
                 # generate episodic memories. Concepts and procedures are extracted
@@ -142,6 +152,9 @@ class ConsolidateMemory:
                         concept.description = self._synthesizer.synthesize_concept(existing, concept.description)
                         concept.embedding = self._embedding_service.embed(f"{concept.name}: {concept.description}")
                         concept.engagement_level = _max_engagement(existing.engagement_level, concept.engagement_level)
+                        # An existing category (curated bundle content or an earlier
+                        # extraction) wins; the new extraction only fills a gap.
+                        concept.category = existing.category or concept.category
                         concept.id = existing.id
                     concept.id = self._memory_repo.upsert_concept(concept)
 
@@ -161,8 +174,21 @@ class ConsolidateMemory:
                         )
                         procedure.embedding = self._embedding_service.embed(f"{procedure.name}: {procedure.description}")
                         procedure.engagement_level = _max_engagement(existing.engagement_level, procedure.engagement_level)
+                        procedure.category = existing.category or procedure.category
                         procedure.id = existing.id
                     procedure.id = self._memory_repo.upsert_procedure(procedure)
+
+                # Persona assessment hook — runs AFTER upsert so newly inserted items have
+                # ids and their first exposure is assessable. The returned persona_state
+                # dicts are persisted byte-for-byte; generic code never reads inside them.
+                strategy = self._assessment_strategies.get(conversation.persona_id)
+                if strategy is not None:
+                    touched: list[MemoryItem] = [*extraction.concepts, *extraction.procedures]
+                    if touched:
+                        for assessment in strategy.assess_items(conversation.persona_id, conversation, touched):
+                            self._memory_repo.update_persona_state(
+                                assessment.memory_type, assessment.item_id, assessment.persona_state
+                            )
 
                 conversation.mark_consolidated(worthiness=worthy, summary=None)
                 self._conversation_repo.save_consolidation(conversation)

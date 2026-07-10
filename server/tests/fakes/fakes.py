@@ -18,8 +18,11 @@ from memai_server.domain.model import (
 from memai_server.services.ports import (
     ConsolidationExtractor,
     ExtractionResult,
+    ItemAssessment,
     MemoryItem,
+    MemoryItemDraft,
     Message,
+    SelectedItem,
     SessionInfo,
     SessionLine,
 )
@@ -149,6 +152,7 @@ class FakeMemoryRepository:
         self.episodes: list[Episode] = []
         self.concepts: list[Concept] = []
         self.procedures: list[Procedure] = []
+        self.persona_state_writes: list[tuple[MemoryType, int, dict]] = []
         self._next_id: int = 1
 
     def _next(self) -> int:
@@ -167,6 +171,15 @@ class FakeMemoryRepository:
     def upsert_procedure(self, procedure: Procedure) -> int:
         self.procedures.append(procedure)
         return procedure.id if procedure.id is not None else self._next()
+
+    def update_persona_state(self, memory_type: MemoryType, item_id: int, persona_state: dict) -> None:
+        if memory_type == MemoryType.EPISODE:
+            raise ValueError("persona_state does not exist on episode items")
+        self.persona_state_writes.append((memory_type, item_id, persona_state))
+        items = self.concepts if memory_type == MemoryType.CONCEPT else self.procedures
+        for item in items:
+            if item.id == item_id:
+                item.persona_state = persona_state
 
     def search(
         self,
@@ -280,9 +293,56 @@ class FakeWorthinessEvaluator:
 class FakeConsolidationExtractor:
     def __init__(self, result: ExtractionResult | None = None) -> None:
         self.result = result or ExtractionResult(episodes=[], concepts=[], procedures=[])
+        self.primary_languages: list[Language | None] = []
 
-    def extract(self, conversation: Conversation) -> ExtractionResult:
+    def extract(self, conversation: Conversation, primary_language: Language | None = None) -> ExtractionResult:
+        self.primary_languages.append(primary_language)
         return self.result
+
+
+# ---------------------------------------------------------------------------
+# Persona extension port fakes
+# ---------------------------------------------------------------------------
+
+class FakePersonaSelectionPort:
+    def __init__(self, items: list[SelectedItem] | None = None) -> None:
+        self.items = items or []
+        self.calls: list[tuple[UUID, str | None, EngagementLevel | None, int]] = []
+
+    def select_items(
+        self,
+        persona_id: UUID,
+        category: str | None = None,
+        engagement_level: EngagementLevel | None = None,
+        limit: int = 10,
+    ) -> list[SelectedItem]:
+        self.calls.append((persona_id, category, engagement_level, limit))
+        return self.items[:limit]
+
+
+class FakePersonaEnrichmentPort:
+    def __init__(self, drafts: list[MemoryItemDraft] | None = None) -> None:
+        self.drafts = drafts or []
+        self.calls: list[UUID] = []
+
+    def propose_items(self, persona_id: UUID) -> list[MemoryItemDraft]:
+        self.calls.append(persona_id)
+        return self.drafts
+
+
+class FakePersonaAssessmentPort:
+    def __init__(self, assessments: list[ItemAssessment] | None = None) -> None:
+        self.assessments = assessments or []
+        self.calls: list[tuple[UUID, Conversation, list[MemoryItem]]] = []
+
+    def assess_items(
+        self,
+        persona_id: UUID,
+        conversation: Conversation,
+        touched_items,
+    ) -> list[ItemAssessment]:
+        self.calls.append((persona_id, conversation, list(touched_items)))
+        return self.assessments
 
 
 class FakeDisambiguationEvaluator:

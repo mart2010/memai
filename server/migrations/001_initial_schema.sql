@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS personas (
     system_prompt     TEXT             NOT NULL,
     languages         TEXT[]           NOT NULL DEFAULT '{}',  -- input languages; empty = primary language only
     response_language TEXT             NOT NULL DEFAULT 'en',  -- IETF tag; drives TTS voice selection
-    tts_voice         TEXT             NOT NULL DEFAULT 'af_heart',  -- Kokoro voice identifier
+    voices            JSONB            NOT NULL DEFAULT '{"default": "af_heart"}',  -- speaker role -> Kokoro voice; must include "default"
     is_system         BOOLEAN          NOT NULL DEFAULT FALSE,
     created_at        TIMESTAMPTZ      NOT NULL,
     updated_at        TIMESTAMPTZ      NOT NULL,
@@ -78,6 +78,8 @@ CREATE TABLE IF NOT EXISTS concepts (
     name             TEXT        NOT NULL,
     description      TEXT        NOT NULL,  -- LLM synthesis ~300 words; see CLAUDE.md
     language         TEXT        NOT NULL,  -- first introduced; fixed on upsert
+    category         TEXT,                  -- free text, interpreted in the owning persona's vocabulary
+    persona_state    JSONB,                 -- opaque; written only by the owning persona's assessment strategy
     engagement_level TEXT        NOT NULL DEFAULT 'mentioned',
     created_at       TIMESTAMPTZ NOT NULL,
     updated_at       TIMESTAMPTZ NOT NULL,
@@ -91,6 +93,8 @@ CREATE TABLE IF NOT EXISTS procedures (
     description      TEXT        NOT NULL,  -- LLM synthesis; see CLAUDE.md
     steps            TEXT[]      NOT NULL DEFAULT '{}',  -- empty when not decomposable into discrete steps
     language         TEXT        NOT NULL,  -- first introduced; fixed on upsert
+    category         TEXT,                  -- free text, interpreted in the owning persona's vocabulary
+    persona_state    JSONB,                 -- opaque; written only by the owning persona's assessment strategy
     engagement_level TEXT        NOT NULL DEFAULT 'mentioned',
     created_at       TIMESTAMPTZ NOT NULL,
     updated_at       TIMESTAMPTZ NOT NULL,
@@ -138,7 +142,7 @@ CREATE INDEX IF NOT EXISTS procedures_embedding_hnsw
 -- GENERAL_ASSISTANT_ID in domain/model.py.
 -- name is a generic placeholder — Memai is the product name, not the persona's
 -- spoken identity; this should become voice-configurable in a future phase.
-INSERT INTO personas (id, name, system_prompt, languages, response_language, tts_voice, is_system, created_at, updated_at, speaking_rate, is_active)
+INSERT INTO personas (id, name, system_prompt, languages, response_language, voices, is_system, created_at, updated_at, speaking_rate, is_active)
 VALUES (
     '00000000-0000-0000-0000-000000000001',
     'Vocal Assistant',
@@ -147,7 +151,7 @@ VALUES (
     If the user asks what you can do, how to configure you, or asks to hear your introduction again, deliver the onboarding introduction.',
     '{}',
     'en',
-    'af_heart',
+    '{"default": "af_heart"}',
     TRUE,
     NOW(),
     NOW(),

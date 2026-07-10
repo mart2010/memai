@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import AsyncIterator, Protocol
@@ -10,6 +10,7 @@ from ..domain.model import (
     AssistantPersona,
     Conversation,
     Concept,
+    EngagementLevel,
     Episode,
     Language,
     MemoryBrief,
@@ -21,6 +22,11 @@ from ..domain.model import (
 )
 
 type MemoryItem = Episode | Concept | Procedure
+
+# A draft is a not-yet-persisted Concept/Procedure (id=None) destined for the existing
+# upsert/consolidation pipeline — the same shape PersonaEnrichmentPort.propose_items and
+# the future InstallPersonaBundle (Phase 11) both emit. Episodes are never proposed.
+type MemoryItemDraft = Concept | Procedure
 
 
 @dataclass(frozen=True)
@@ -105,6 +111,10 @@ class MemoryRepository(Protocol):
     def upsert_episode(self, episode: Episode) -> int: ...
     def upsert_concept(self, concept: Concept) -> int: ...
     def upsert_procedure(self, procedure: Procedure) -> int: ...
+    def update_persona_state(self, memory_type: MemoryType, item_id: int, persona_state: dict) -> None:
+        """Persists an assessment strategy's opaque state byte-for-byte — the only write
+        path to `persona_state` (single-writer contract; upserts never touch the column)."""
+        ...
     def search(
         self,
         embedding: list[float],
@@ -112,6 +122,62 @@ class MemoryRepository(Protocol):
         top_n: int,
         persona_id: UUID | None = None,
     ) -> list[tuple[float, MemoryItem]]: ...  # float is cosine similarity in [0, 1]
+
+
+# ---------------------------------------------------------------------------
+# Persona extension ports — persona-agnostic contracts; each persona's strategy
+# implementation (Infrastructure layer) owns all persona-specific vocabulary.
+# GA registers no strategies; all three ports are optional per persona.
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class SelectedItem:
+    """`context` is free text composed by the selection strategy (e.g. an episode anchor
+    or elicitation hint) — injected verbatim, never interpreted by generic code."""
+    item: MemoryItem
+    context: str | None = None
+
+
+@dataclass(frozen=True)
+class ItemAssessment:
+    """`persona_state` is persisted byte-for-byte to the item's opaque slot.
+    `memory_type` disambiguates the target table (concepts and procedures have
+    independent id sequences)."""
+    item_id: int
+    memory_type: MemoryType
+    persona_state: dict
+
+
+class PersonaSelectionPort(Protocol):
+    """Live hook — proactive, persona-driven selection (e.g. spaced repetition), distinct
+    from utterance-triggered RAG recall. Fetched once per session at session start; the
+    live conversation never writes to the DB, so re-querying mid-session is pointless."""
+    def select_items(
+        self,
+        persona_id: UUID,
+        category: str | None = None,
+        engagement_level: EngagementLevel | None = None,
+        limit: int = 10,
+    ) -> Sequence[SelectedItem]: ...
+
+
+class PersonaEnrichmentPort(Protocol):
+    """Offline hook — proposes new memory item drafts (fed into the existing upsert
+    pipeline). Exclusions are computed internally by the strategy via the repositories,
+    not passed in — which items matter for exclusion is persona-specific knowledge."""
+    def propose_items(self, persona_id: UUID) -> Sequence[MemoryItemDraft]: ...
+
+
+class PersonaAssessmentPort(Protocol):
+    """Offline hook — updates existing items' persona_state from conversational evidence.
+    Dispatched by the consolidation pipeline AFTER upsert, so newly inserted items have
+    ids and their first exposure is assessable."""
+    def assess_items(
+        self,
+        persona_id: UUID,
+        conversation: Conversation,
+        touched_items: Sequence[MemoryItem],
+    ) -> Sequence[ItemAssessment]: ...
 
 
 class DisambiguationEvaluator(Protocol):
@@ -142,7 +208,12 @@ class TurnLogger(Protocol):
 
 
 class ConsolidationExtractor(Protocol):
-    def extract(self, conversation: Conversation) -> ExtractionResult: ...
+    def extract(self, conversation: Conversation, primary_language: Language | None = None) -> ExtractionResult:
+        """`primary_language` drives the episode-summary language rule: Episode summaries
+        are always written in the user's primary language regardless of conversation
+        language (Episodes are persona-independent; months of tutoring must not turn the
+        user's life story into target-language documents)."""
+        ...
 
 
 class UnitOfWork(Protocol):

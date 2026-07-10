@@ -5,6 +5,7 @@ from uuid import uuid4
 from memai_server.domain.events import ConversationBoundaryType, RecallTriggered
 from memai_server.domain.model import (
     AssistantPersona,
+    Concept,
     GENERAL_ASSISTANT_ID,
     Language,
     MemoryBrief,
@@ -13,7 +14,7 @@ from memai_server.domain.model import (
     Turn,
     User,
 )
-from memai_server.services.ports import SessionInfo
+from memai_server.services.ports import SelectedItem, SessionInfo
 from memai_server.services.session import EndSession, ProcessTurn, StartSession
 
 from tests.fakes.fakes import (
@@ -22,6 +23,7 @@ from tests.fakes.fakes import (
     FakeMemoryBriefRepository,
     FakeMemoryRepository,
     FakePersonaRepository,
+    FakePersonaSelectionPort,
     FakeRecallIntentDetector,
     FakeSessionLogReader,
     FakeSTTService,
@@ -43,12 +45,20 @@ def _user() -> User:
     return User(id=uuid4(), primary_language=Language("en"))
 
 
+def _concept(name: str, id_: int) -> Concept:
+    return Concept(
+        id=id_, persona_id=GENERAL_ASSISTANT_ID, name=name,
+        description=f"{name} description", language=Language("es"),
+    )
+
+
 def _make_start_session(
     user: User | None = None,
     brief: MemoryBrief | None = None,
     previous: SessionInfo | None = None,
     tail_turns: list[Turn] | None = None,
     threshold_hours: float = 24.0,
+    selection_strategies: dict | None = None,
 ) -> tuple[StartSession, FakePersonaRepository]:
     persona_repo = FakePersonaRepository()
     persona_repo.save(_general_assistant())
@@ -57,6 +67,7 @@ def _make_start_session(
         persona_repo=persona_repo,
         memory_brief_repo=FakeMemoryBriefRepository(brief=brief),
         session_log_reader=FakeSessionLogReader(previous=previous, tail=tail_turns),
+        selection_strategies=selection_strategies,
         session_tail_turns=10,
         session_continuation_threshold_hours=threshold_hours,
     )
@@ -136,6 +147,33 @@ class TestStartSession:
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
         assert ctx.session_tail == []
 
+    def test_selection_batch_empty_when_no_strategy_registered(self):
+        # GA registers no selection strategy — the no-op path.
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+        assert ctx.selection_batch == []
+
+    def test_selection_batch_fetched_at_session_start(self):
+        item = SelectedItem(item=_concept("hola", 1), context="Anchor: your trip to Madrid.")
+        strategy = FakePersonaSelectionPort(items=[item])
+        use_case, _ = _make_start_session(
+            selection_strategies={GENERAL_ASSISTANT_ID: strategy},
+        )
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+        assert ctx.selection_batch == [item]
+        assert len(strategy.calls) == 1
+        assert strategy.calls[0][0] == GENERAL_ASSISTANT_ID
+
+    def test_selection_skipped_during_onboarding(self):
+        strategy = FakePersonaSelectionPort(items=[SelectedItem(item=_concept("hola", 1))])
+        use_case, _ = _make_start_session(
+            user=User(id=uuid4(), primary_language=None),  # onboarding not done
+            selection_strategies={GENERAL_ASSISTANT_ID: strategy},
+        )
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+        assert ctx.selection_batch == []
+        assert strategy.calls == []
+
 
 class TestProcessTurn:
     @pytest.mark.asyncio
@@ -210,6 +248,59 @@ class TestProcessTurn:
         assert result is not None
         assert result.conversation_boundary is None
         assert not wal.markers
+
+    @pytest.mark.asyncio
+    async def test_selected_item_injected_into_llm_context(self):
+        process_turn, _, _, llm = _make_process_turn()
+        use_case, _ = _make_start_session(
+            selection_strategies={
+                GENERAL_ASSISTANT_ID: FakePersonaSelectionPort(
+                    items=[SelectedItem(item=_concept("hola", 1), context="Anchor: your trip to Madrid.")]
+                )
+            },
+        )
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"a", now=_now())
+
+        messages, _ = llm.calls[0]
+        injected = [m for m in messages if m.role == "system" and "hola" in m.content]
+        assert len(injected) == 1
+        assert "Anchor: your trip to Madrid." in injected[0].content
+        # Injected verbatim as context, never as literal dialogue text
+        assert ctx.selection_batch == []  # consumed
+
+    @pytest.mark.asyncio
+    async def test_selection_batch_consumed_one_item_per_turn(self):
+        items = [SelectedItem(item=_concept("hola", 1)), SelectedItem(item=_concept("adios", 2))]
+        process_turn, _, _, llm = _make_process_turn()
+        use_case, _ = _make_start_session(
+            selection_strategies={GENERAL_ASSISTANT_ID: FakePersonaSelectionPort(items=items)},
+        )
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"a", now=_now())
+        assert len(ctx.selection_batch) == 1
+
+        await process_turn.execute(ctx, audio=b"b", now=_now())
+        assert ctx.selection_batch == []
+        second_messages, _ = llm.calls[1]
+        assert any("adios" in m.content for m in second_messages if m.role == "system")
+
+        # Batch exhausted — third turn injects nothing.
+        await process_turn.execute(ctx, audio=b"c", now=_now())
+        third_messages, _ = llm.calls[2]
+        assert not any("Work this item" in m.content for m in third_messages if m.role == "system")
+
+    @pytest.mark.asyncio
+    async def test_no_injection_without_selection_batch(self):
+        process_turn, _, _, llm = _make_process_turn()
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"a", now=_now())
+        messages, _ = llm.calls[0]
+        assert not any("Work this item" in m.content for m in messages)
 
     @pytest.mark.asyncio
     async def test_rolling_window_triggered(self):

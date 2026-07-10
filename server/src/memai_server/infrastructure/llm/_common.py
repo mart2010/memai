@@ -21,6 +21,36 @@ def _conversation_language(conversation: Conversation) -> Language:
     return Language("en")
 
 
+def _extraction_system_prompt(conversation: Conversation, primary_language: Language | None) -> str:
+    """Shared by the Ollama and OpenRouter extractors so the extraction contract
+    (JSON shape, episode-language rule) cannot drift between the two."""
+    # Episodes are persona-independent and carry no language field — summaries are always
+    # written in the user's primary language regardless of conversation language, so months
+    # of tutoring don't turn the user's life story into target-language documents.
+    episode_language_rule = (
+        f" Write every episode summary in the language with IETF code '{primary_language.code}', "
+        "regardless of the language the conversation was held in."
+        if primary_language
+        else ""
+    )
+    return (
+        "Extract structured memories from this conversation. "
+        f"The conversation took place around {conversation.started_at.isoformat()}.\n"
+        "Return JSON with three arrays:\n"
+        '- "episodes": personal events or experiences the user mentioned '
+        '(each: {"summary": str, "happened_at": ISO8601 datetime or null}).'
+        f"{episode_language_rule}\n"
+        '- "concepts": facts or knowledge the user learned or discussed '
+        '(each: {"name": str, "description": str, "language": IETF code, '
+        '"category": short lowercase classification label or null})\n'
+        '- "procedures": how-to knowledge '
+        '(each: {"name": str, "description": str, "steps": [str], "language": IETF code, '
+        '"category": short lowercase classification label or null})\n'
+        "Be selective — only include what is genuinely informative. "
+        "Leave arrays empty when nothing qualifies."
+    )
+
+
 def _parse_extraction(data: dict, conversation: Conversation, persona_id: UUID, lang: Language) -> ExtractionResult:
     origin_id = conversation.id or 0
 
@@ -53,6 +83,7 @@ def _parse_extraction(data: dict, conversation: Conversation, persona_id: UUID, 
             name=c["name"],
             description=c["description"],
             language=entry_lang,
+            category=c.get("category") or None,
         ))
 
     procedures = []
@@ -68,6 +99,7 @@ def _parse_extraction(data: dict, conversation: Conversation, persona_id: UUID, 
             description=p["description"],
             steps=p.get("steps", []),
             language=entry_lang,
+            category=p.get("category") or None,
         ))
 
     return ExtractionResult(episodes=episodes, concepts=concepts, procedures=procedures)

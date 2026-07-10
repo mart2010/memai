@@ -12,6 +12,7 @@ from uuid import UUID
 import numpy as np
 import psycopg
 from pgvector.psycopg import register_vector
+from psycopg.types.json import Jsonb
 
 from ..domain.model import (
     AssistantPersona,
@@ -65,7 +66,7 @@ class PSUnitOfWork:
 # ---------------------------------------------------------------------------
 
 def _row_to_persona(row: tuple) -> AssistantPersona:
-    (id_, name, system_prompt, languages, response_language, tts_voice, is_system,
+    (id_, name, system_prompt, languages, response_language, voices, is_system,
      created_at, updated_at, speaking_rate, is_active) = row
     return AssistantPersona(
         id=id_,
@@ -73,7 +74,7 @@ def _row_to_persona(row: tuple) -> AssistantPersona:
         system_prompt=system_prompt,
         languages=[Language(c) for c in languages],
         response_language=Language(response_language),
-        tts_voice=tts_voice,
+        voices=voices,
         is_system=is_system,
         created_at=created_at,
         updated_at=updated_at,
@@ -145,7 +146,7 @@ class PSPersonaRepository:
     def get(self, persona_id: UUID) -> AssistantPersona | None:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT id, name, system_prompt, languages, response_language, tts_voice, is_system, "
+                "SELECT id, name, system_prompt, languages, response_language, voices, is_system, "
                 "created_at, updated_at, speaking_rate, is_active "
                 "FROM personas WHERE id = %s",
                 (persona_id,),
@@ -158,7 +159,7 @@ class PSPersonaRepository:
     def list_all(self) -> list[AssistantPersona]:
         with self._conn.cursor() as cur:
             cur.execute(
-                "SELECT id, name, system_prompt, languages, response_language, tts_voice, is_system, "
+                "SELECT id, name, system_prompt, languages, response_language, voices, is_system, "
                 "created_at, updated_at, speaking_rate, is_active FROM personas"
             )
             return [_row_to_persona(row) for row in cur.fetchall()]
@@ -168,7 +169,7 @@ class PSPersonaRepository:
             cur.execute(
                 """
                 INSERT INTO personas
-                    (id, name, system_prompt, languages, response_language, tts_voice, is_system,
+                    (id, name, system_prompt, languages, response_language, voices, is_system,
                      created_at, updated_at, speaking_rate, is_active)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
@@ -176,7 +177,7 @@ class PSPersonaRepository:
                     system_prompt = EXCLUDED.system_prompt,
                     languages = EXCLUDED.languages,
                     response_language = EXCLUDED.response_language,
-                    tts_voice = EXCLUDED.tts_voice,
+                    voices = EXCLUDED.voices,
                     updated_at = EXCLUDED.updated_at,
                     speaking_rate = EXCLUDED.speaking_rate,
                     is_active = EXCLUDED.is_active
@@ -187,7 +188,7 @@ class PSPersonaRepository:
                     persona.system_prompt,
                     [l.code for l in persona.languages],
                     persona.response_language.code,
-                    persona.tts_voice,
+                    Jsonb(persona.voices),
                     persona.is_system,
                     persona.created_at,
                     persona.updated_at,
@@ -358,13 +359,18 @@ class PSMemoryRepository:
                 return episode.id
 
     def upsert_concept(self, concept: Concept) -> int:
+        # persona_state is deliberately absent from the UPDATE branch: upserts must never
+        # clobber the owning persona's assessment state (single-writer contract) —
+        # update_persona_state() below is the only write path to that column.
         now = datetime.now(UTC)
         with self._conn.cursor() as cur:
             if concept.id is None:
                 cur.execute(
                     """
-                    INSERT INTO concepts (persona_id, name, description, language, engagement_level, created_at, updated_at, embedding)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    INSERT INTO concepts
+                        (persona_id, name, description, language, category, persona_state,
+                         engagement_level, created_at, updated_at, embedding)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -372,6 +378,8 @@ class PSMemoryRepository:
                         concept.name,
                         concept.description,
                         concept.language.code,
+                        concept.category,
+                        Jsonb(concept.persona_state) if concept.persona_state is not None else None,
                         concept.engagement_level.name.lower(),
                         now,
                         now,
@@ -382,10 +390,17 @@ class PSMemoryRepository:
             else:
                 cur.execute(
                     """
-                    UPDATE concepts SET description = %s, engagement_level = %s, updated_at = %s, embedding = %s
+                    UPDATE concepts SET description = %s, category = %s, engagement_level = %s, updated_at = %s, embedding = %s
                     WHERE id = %s
                     """,
-                    (concept.description, concept.engagement_level.name.lower(), now, _vec(concept.embedding), concept.id),
+                    (
+                        concept.description,
+                        concept.category,
+                        concept.engagement_level.name.lower(),
+                        now,
+                        _vec(concept.embedding),
+                        concept.id,
+                    ),
                 )
                 return concept.id
 
@@ -396,8 +411,9 @@ class PSMemoryRepository:
                 cur.execute(
                     """
                     INSERT INTO procedures
-                        (persona_id, name, description, steps, language, engagement_level, created_at, updated_at, embedding)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        (persona_id, name, description, steps, language, category, persona_state,
+                         engagement_level, created_at, updated_at, embedding)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -406,6 +422,8 @@ class PSMemoryRepository:
                         procedure.description,
                         procedure.steps,
                         procedure.language.code,
+                        procedure.category,
+                        Jsonb(procedure.persona_state) if procedure.persona_state is not None else None,
                         procedure.engagement_level.name.lower(),
                         now,
                         now,
@@ -414,15 +432,17 @@ class PSMemoryRepository:
                 )
                 return cur.fetchone()[0]
             else:
+                # Same single-writer rule as upsert_concept: persona_state never updated here.
                 cur.execute(
                     """
                     UPDATE procedures
-                    SET description = %s, steps = %s, engagement_level = %s, updated_at = %s, embedding = %s
+                    SET description = %s, steps = %s, category = %s, engagement_level = %s, updated_at = %s, embedding = %s
                     WHERE id = %s
                     """,
                     (
                         procedure.description,
                         procedure.steps,
+                        procedure.category,
                         procedure.engagement_level.name.lower(),
                         now,
                         _vec(procedure.embedding),
@@ -430,6 +450,19 @@ class PSMemoryRepository:
                     ),
                 )
                 return procedure.id
+
+    def update_persona_state(self, memory_type: MemoryType, item_id: int, persona_state: dict) -> None:
+        if memory_type == MemoryType.CONCEPT:
+            table = "concepts"
+        elif memory_type == MemoryType.PROCEDURE:
+            table = "procedures"
+        else:
+            raise ValueError(f"persona_state does not exist on {memory_type.value} items")
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE {table} SET persona_state = %s, updated_at = %s WHERE id = %s",
+                (Jsonb(persona_state), datetime.now(UTC), item_id),
+            )
 
     def search(
         self,
@@ -468,7 +501,8 @@ class PSMemoryRepository:
                 if persona_id is not None:
                     cur.execute(
                         """
-                        SELECT id, persona_id, name, description, language, engagement_level, created_at, updated_at, embedding,
+                        SELECT id, persona_id, name, description, language, category, persona_state,
+                               engagement_level, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM concepts
                         WHERE persona_id = %s
@@ -480,7 +514,8 @@ class PSMemoryRepository:
                 else:
                     cur.execute(
                         """
-                        SELECT id, persona_id, name, description, language, engagement_level, created_at, updated_at, embedding,
+                        SELECT id, persona_id, name, description, language, category, persona_state,
+                               engagement_level, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM concepts
                         ORDER BY distance
@@ -488,13 +523,16 @@ class PSMemoryRepository:
                         """,
                         (vec, top_n),
                     )
-                for id_, p_id, name, description, language, engagement_level, created_at, updated_at, emb, distance in cur.fetchall():
+                for (id_, p_id, name, description, language, category, persona_state,
+                     engagement_level, created_at, updated_at, emb, distance) in cur.fetchall():
                     results.append((distance, Concept(
                         id=id_,
                         persona_id=p_id,
                         name=name,
                         description=description,
                         language=Language(language),
+                        category=category,
+                        persona_state=persona_state,
                         engagement_level=EngagementLevel[engagement_level.upper()],
                         created_at=created_at,
                         updated_at=updated_at,
@@ -505,7 +543,8 @@ class PSMemoryRepository:
                 if persona_id is not None:
                     cur.execute(
                         """
-                        SELECT id, persona_id, name, description, steps, language, engagement_level, created_at, updated_at, embedding,
+                        SELECT id, persona_id, name, description, steps, language, category, persona_state,
+                               engagement_level, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM procedures
                         WHERE persona_id = %s
@@ -517,7 +556,8 @@ class PSMemoryRepository:
                 else:
                     cur.execute(
                         """
-                        SELECT id, persona_id, name, description, steps, language, engagement_level, created_at, updated_at, embedding,
+                        SELECT id, persona_id, name, description, steps, language, category, persona_state,
+                               engagement_level, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM procedures
                         ORDER BY distance
@@ -525,7 +565,8 @@ class PSMemoryRepository:
                         """,
                         (vec, top_n),
                     )
-                for id_, p_id, name, description, steps, language, engagement_level, created_at, updated_at, emb, distance in cur.fetchall():
+                for (id_, p_id, name, description, steps, language, category, persona_state,
+                     engagement_level, created_at, updated_at, emb, distance) in cur.fetchall():
                     results.append((distance, Procedure(
                         id=id_,
                         persona_id=p_id,
@@ -533,6 +574,8 @@ class PSMemoryRepository:
                         description=description,
                         steps=list(steps) if steps else [],
                         language=Language(language),
+                        category=category,
+                        persona_state=persona_state,
                         engagement_level=EngagementLevel[engagement_level.upper()],
                         created_at=created_at,
                         updated_at=updated_at,
