@@ -15,15 +15,19 @@ STT_SELECTION_TTS_HEADROOM_GB = 2.0
 
 def assess_fit(vram: VRAMEstimate, available_vram_gb: float | None, reserved_gb: float) -> FitAssessment:
     """Pure domain service — no infrastructure dependency. `available_vram_gb`
-    is `None` when GPUDetector could not read the GPU; treated as TIGHT with a
-    warning rather than blocking the choice outright. `reserved_gb` is
-    whatever else needs to run alongside this component (see the two module
-    constants above) — kept explicit rather than hardcoded so this function
-    works for both LLM and Whisper-model-size fit checks."""
+    is `None` when GPUDetector could not read NVIDIA/CUDA VRAM specifically —
+    this includes AMD GPUs, which GPUDetector never measures (see gpu.py) but
+    which Ollama still detects and uses on its own for the LLM. So None means
+    "this sizing estimate is unavailable," not "no GPU will be used" — treated
+    as TIGHT with a warning rather than blocking the choice outright.
+    `reserved_gb` is whatever else needs to run alongside this component (see
+    the two module constants above) — kept explicit rather than hardcoded so
+    this function works for both LLM and Whisper-model-size fit checks."""
     if available_vram_gb is None:
         return FitAssessment(
             level=FitLevel.TIGHT,
-            message="GPU VRAM could not be detected — proceed with caution.",
+            message="VRAM size could not be detected (this check only recognizes NVIDIA/CUDA "
+            "GPUs) — proceed with caution.",
         )
 
     headroom_gb = available_vram_gb - reserved_gb

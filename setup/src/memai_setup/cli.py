@@ -4,6 +4,8 @@ from __future__ import annotations
 import argparse
 import sys
 
+import truststore
+
 from .domain.plan import InstallationPlan
 from .infrastructure.config_writer import TomlConfigWriter
 from .infrastructure.existing_install import FileExistingInstallDetector
@@ -76,6 +78,12 @@ def _install_steps(
 
 
 def main() -> None:
+    # Patches ssl.SSLContext to verify against the OS's native trust store instead of
+    # certifi's bundled CA list — fixes SSL verification failures behind corporate
+    # TLS-inspecting proxies (the proxy's CA is typically already OS-trusted but not
+    # in certifi), without weakening verification on machines that don't have one.
+    truststore.inject_into_ssl()
+
     parser = argparse.ArgumentParser(prog="memai-setup", description="Mémai installation wizard")
     parser.add_argument("--client", action="store_true", help="Configure this machine as a client only")
     parser.add_argument("--uninstall", action="store_true", help="Remove Mémai config and downloaded voice files")

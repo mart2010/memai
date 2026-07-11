@@ -80,11 +80,18 @@ class FakeExistingInstallDetector:
 class FakeModelInstaller:
     """Records every install call instead of touching the network/Ollama."""
 
-    def __init__(self, fail_pull_llm: bool = False) -> None:
+    def __init__(
+        self,
+        fail_pull_llm: bool = False,
+        fail_download_whisper_model: bool = False,
+        fail_download_piper_voice: bool = False,
+    ) -> None:
         self.pulled_llms: list[str] = []
         self.downloaded_whisper_models: list[str] = []
         self.downloaded_piper_voices: list[str] = []
         self._fail_pull_llm = fail_pull_llm
+        self._fail_download_whisper_model = fail_download_whisper_model
+        self._fail_download_piper_voice = fail_download_piper_voice
 
     def pull_llm(self, model_id: str) -> None:
         if self._fail_pull_llm:
@@ -92,9 +99,13 @@ class FakeModelInstaller:
         self.pulled_llms.append(model_id)
 
     def download_whisper_model(self, name: str) -> None:
+        if self._fail_download_whisper_model:
+            raise RuntimeError("simulated network failure")
         self.downloaded_whisper_models.append(name)
 
     def download_piper_voice(self, voice_id: str) -> None:
+        if self._fail_download_piper_voice:
+            raise RuntimeError("simulated network failure")
         self.downloaded_piper_voices.append(voice_id)
 
 

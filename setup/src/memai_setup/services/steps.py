@@ -38,15 +38,28 @@ class ShowWelcome:
     below only makes sense once that distinction exists — SelectTopology
     (step 2) is where the user actually picks one. Lists every prerequisite,
     including the ones nothing in this wizard can verify programmatically
-    (CUDA driver, PortAudio, SSH key auth); CheckPrerequisites (step 3)
+    (GPU driver, PortAudio, SSH key auth); CheckPrerequisites (step 3)
     verifies the subset that's actually checkable (Postgres, pgvector,
-    Ollama)."""
+    Ollama).
+
+    The GPU bullets deliberately don't overstate the no-GPU case: STT/TTS on
+    CPU is a validated fast path (benchmarked on a Strix Halo APU — several
+    times faster than realtime once warm, see DetectComputeDevice), but LLM
+    speed on CPU-only is Ollama's own concern, not something this codebase
+    controls or has characterized, and there is no cloud/alternative LLM
+    backend to fall back to (single-user, local-only is a hard project
+    constraint — see CLAUDE.md)."""
 
     _PREREQUISITES = (
         "PostgreSQL 15+ with the pgvector extension installed (not just Postgres running)",
         "Ollama installed and running",
-        "(Optional) NVIDIA driver + CUDA 12 + cuDNN 9 — enables GPU-accelerated STT/TTS; "
-        "without it, Mémai automatically falls back to CPU (slower but fully functional)",
+        "(Optional) A GPU speeds things up. NVIDIA (CUDA 12 + cuDNN 9) accelerates "
+        "STT, TTS, and the LLM. AMD GPUs are auto-detected by Ollama and accelerate "
+        "the LLM only — STT/TTS have no AMD-accelerated path yet and always run on CPU",
+        "With no GPU at all, everything still works: STT/TTS run comfortably on CPU "
+        "(benchmarked fast on modern hardware), but LLM responses run via Ollama on CPU "
+        "too and will be noticeably slower depending on model size — there is currently "
+        "no cloud or alternative LLM service configured as a fallback",
         "SSH server + key auth on the server machine — only if you'll use split-host "
         "(see below); not needed for single-host",
         "PortAudio — macOS/Linux client only (`brew install portaudio` / `apt install "
@@ -163,7 +176,11 @@ class SelectLLM:
     def run(self, plan: InstallationPlan, prompter: WizardPrompter) -> None:
         vram_gb = self._gpu.detect_vram_gb()
         if vram_gb is None:
-            prompter.info("Could not detect GPU VRAM — fit hints below are best-effort.")
+            prompter.info(
+                "Could not detect NVIDIA/CUDA GPU VRAM — sizing hints below are best-effort. "
+                "This does not mean no GPU will be used: Ollama detects and uses AMD GPUs on "
+                "its own for the LLM, independent of this check."
+            )
 
         entries = self._catalogues.load_llm_catalogue()
         choices = []
@@ -260,7 +277,16 @@ class ResolveSTTEngine:
             choices.append(PromptChoice(model.name, f"{model.name}{recommended} — {fit.message}{warning}"))
 
         plan.whisper_model = prompter.select(f"Choose a Whisper model size ({engine.engine}):", choices)
-        self._installer.download_whisper_model(plan.whisper_model)
+        try:
+            self._installer.download_whisper_model(plan.whisper_model)
+        except Exception as exc:  # noqa: BLE001 — huggingface_hub can raise many exception types on network failure
+            # Non-fatal: FasterWhisperSTTService triggers the same download lazily on
+            # first use (see model_installer.py), so a failure here just means the
+            # first server startup will be slower, not that the install is broken.
+            prompter.info(
+                f"Could not pre-download the '{plan.whisper_model}' Whisper model ({exc}). "
+                "It will be downloaded automatically the first time the server starts instead."
+            )
 
 
 class ResolveTTSEngines:
@@ -298,7 +324,15 @@ class ResolveTTSEngines:
             if not engine.bundled:
                 voice = next((v for v in engine.voices if v.language == language), None)
                 if voice is not None:
-                    self._installer.download_piper_voice(voice.voice_id)
+                    try:
+                        self._installer.download_piper_voice(voice.voice_id)
+                    except Exception as exc:  # noqa: BLE001 — network calls can fail in many ways
+                        # Non-fatal, matching ModelInstaller's re-runnable/idempotent contract
+                        # (CLAUDE.md) — re-running memai-setup will retry this download.
+                        prompter.info(
+                            f"Could not download the '{voice.voice_id}' voice for "
+                            f"{format_language(language)} ({exc}). Re-run memai-setup later to retry."
+                        )
                 else:
                     prompter.info(
                         f"{engine.engine} covers {format_language(language)} but no specific voice is "
