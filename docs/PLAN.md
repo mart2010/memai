@@ -1449,7 +1449,8 @@ review pass are all explicitly out of Phase 11 scope (see brief's Non-goals).
 ## Phase 12 — Language Tutor Persona (first concrete extension)
 
 All tutor runtime machinery, buildable once Phase 11 provides content. Full design in
-`project_language_tutor_model` memory (2026-07-10 sections).
+`docs/BRIEF_phase12_tutor.md` (consolidated from the language-tutor design record,
+2026-06-29 → 2026-07-10).
 
 - [ ] Tutor selection strategy — due-ness ranking derived from `persona_state`
       (exponential decay from `last_practiced_at` with `half_life_days`; mastery/next-due
