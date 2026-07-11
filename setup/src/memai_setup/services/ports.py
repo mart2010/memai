@@ -78,3 +78,14 @@ class HealthCheck(Protocol):
     name: str
 
     def check(self) -> HealthCheckResult: ...
+
+
+class DatabaseConnectionVerifier(Protocol):
+    """Verifies a candidate database_url actually works, used by
+    ConfigureDatabaseConnection while it's still deciding on/confirming a
+    connection string — distinct from HealthCheck, which re-verifies an
+    already-fixed URL later (RunHealthChecks)."""
+
+    def verify(self, database_url: str) -> tuple[HealthCheckResult, HealthCheckResult]:
+        """Returns (postgres_reachable, pgvector_installed)."""
+        ...

@@ -6,25 +6,20 @@ import sys
 
 import truststore
 
-from .domain.plan import InstallationPlan
 from .infrastructure.config_writer import TomlConfigWriter
 from .infrastructure.existing_install import FileExistingInstallDetector
 from .infrastructure.gpu import NvidiaSmiGPUDetector
-from .infrastructure.health_checks import (
-    OllamaHealthCheck,
-    PgvectorExtensionHealthCheck,
-    PostgresHealthCheck,
-    ServerWebSocketHealthCheck,
-)
+from .infrastructure.health_checks import OllamaHealthCheck, PsycopgConnectionVerifier
 from .infrastructure.model_installer import OllamaModelInstaller
 from .infrastructure.prompter import QuestionaryPrompter
 from .infrastructure.schema_runner import PsycopgSchemaRunner
 from .infrastructure.toml_catalogue import TomlCatalogueRepository
 from .services.errors import WizardAborted
-from .services.ports import SchemaRunner
+from .services.ports import DatabaseConnectionVerifier, SchemaRunner
 from .services.run_wizard import RunInstallWizard
 from .services.steps import (
     CheckPrerequisites,
+    ConfigureDatabaseConnection,
     DetectComputeDevice,
     GenerateConfig,
     ResolveSTTEngine,
@@ -45,26 +40,24 @@ def _install_steps(
     installer: OllamaModelInstaller,
     writer: TomlConfigWriter,
     schema_runner: SchemaRunner,
+    verifier: DatabaseConnectionVerifier,
 ) -> list[WizardStep]:
-    # Both check lists are constructed here (not deferred to plan.database_url
-    # at runtime) because no wizard step currently collects a real Postgres
-    # connection string — plan.database_url is always its class default.
-    # Revisit once a "collect Postgres connection" step exists (see
-    # docs/PLAN.md) — the checks would need building after that step runs.
-    default_database_url = InstallationPlan().database_url
-    prerequisite_checks = [
-        PostgresHealthCheck(default_database_url),
-        PgvectorExtensionHealthCheck(default_database_url),
-        OllamaHealthCheck(),
-    ]
-    health_checks = [
-        PostgresHealthCheck(default_database_url),
-        OllamaHealthCheck(),
-        ServerWebSocketHealthCheck(),
-    ]
+    # Postgres/pgvector are verified by ConfigureDatabaseConnection itself
+    # (using the connection it just collected), not listed here — unlike
+    # Ollama, there's no fixed database_url to build a check from until that
+    # step has run. SetupSchema/RunHealthChecks run after it, so plan.database_url
+    # is always real by the time anything else needs it.
+    prerequisite_checks = [OllamaHealthCheck()]
+    # No ServerWebSocketHealthCheck here — the wizard never starts memai-server
+    # itself (see its docstring), so right after a fresh install this would
+    # always fail with "connection refused," which reads as a wizard error
+    # rather than the expected "you haven't started it yet." main() tells the
+    # user how to start it instead, once the wizard actually succeeds.
+    health_checks = [OllamaHealthCheck()]
     return [
         ShowWelcome(),
         SelectTopology(),
+        ConfigureDatabaseConnection(verifier),
         CheckPrerequisites(prerequisite_checks),
         DetectComputeDevice(gpu),
         SelectLLM(catalogues, gpu, installer),
@@ -100,7 +93,8 @@ def main() -> None:
     installer = OllamaModelInstaller()
     writer = TomlConfigWriter()
     schema_runner = PsycopgSchemaRunner()
-    steps = _install_steps(catalogues, gpu, installer, writer, schema_runner)
+    verifier = PsycopgConnectionVerifier()
+    steps = _install_steps(catalogues, gpu, installer, writer, schema_runner, verifier)
     wizard = RunInstallWizard(steps, prompter, FileExistingInstallDetector())
 
     try:
@@ -109,7 +103,15 @@ def main() -> None:
         prompter.info(str(exc))
         sys.exit(1)
 
-    prompter.info(f"Selected LLM: {plan.llm_model_id}")
+    start_cmd = r".venv\Scripts\memai-server" if sys.platform.startswith("win") else ".venv/bin/memai-server"
+    prompter.heading(
+        "Mémai setup complete!",
+        [
+            f"Selected LLM: {plan.llm_model_id}",
+            "Start the server with:",
+            f"  cd server && {start_cmd}",
+        ],
+    )
 
 
 if __name__ == "__main__":

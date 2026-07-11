@@ -53,6 +53,16 @@ class PgvectorExtensionHealthCheck:
         )
 
 
+class PsycopgConnectionVerifier:
+    """Concrete DatabaseConnectionVerifier — thin wrapper reusing
+    PostgresHealthCheck/PgvectorExtensionHealthCheck rather than duplicating
+    connection logic. Used by ConfigureDatabaseConnection to verify a
+    candidate database_url before committing to it."""
+
+    def verify(self, database_url: str) -> tuple[HealthCheckResult, HealthCheckResult]:
+        return PostgresHealthCheck(database_url).check(), PgvectorExtensionHealthCheck(database_url).check()
+
+
 class OllamaHealthCheck:
     name = "Ollama"
 
@@ -76,7 +86,14 @@ class ServerWebSocketHealthCheck:
     server package's own venv/entry point from setup/ — deferred, needs the
     GPU server to verify meaningfully anyway. For now this only checks whether
     something is already listening on the configured port — enough to catch
-    "forgot to start the server" but not "server crashed during model load"."""
+    "forgot to start the server" but not "server crashed during model load".
+
+    Not currently wired into any wizard step: right after a fresh install the
+    server was never started, so this would always report failure there —
+    misleading, not useful (see cli.py's health_checks comment). A candidate
+    reuse is the not-yet-implemented `memai-setup --client` flow, where
+    "is the (already-running, remote) server's WebSocket reachable" is exactly
+    the right question to ask."""
 
     name = "Server WebSocket"
 

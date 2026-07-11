@@ -48,6 +48,7 @@ class FakeWizardPrompter:
         self._select_many_answers = list(select_many_answers or [])
         self._confirm_answers = list(confirm_answers or [])
         self.info_messages: list[str] = []
+        self.confirm_messages: list[str] = []
         self.headings: list[tuple[str, list[str]]] = []
 
     def select(self, message: str, choices: list[PromptChoice]) -> str:
@@ -57,6 +58,7 @@ class FakeWizardPrompter:
         return self._select_many_answers.pop(0)
 
     def confirm(self, message: str, default: bool = True) -> bool:
+        self.confirm_messages.append(message)
         return self._confirm_answers.pop(0) if self._confirm_answers else default
 
     def text(self, message: str, default: str = "") -> str:
@@ -129,6 +131,26 @@ class FakeSchemaRunner:
 
     def apply_schema(self, database_url: str) -> None:
         self.applied_to.append(database_url)
+
+
+class FakeConnectionVerifier:
+    """Scripted DatabaseConnectionVerifier — no real Postgres involved.
+    Defaults to both checks passing; override per-test via the constructor."""
+
+    def __init__(
+        self,
+        postgres_ok: bool = True,
+        postgres_message: str = "reachable",
+        pgvector_ok: bool = True,
+        pgvector_message: str = "installed",
+    ) -> None:
+        self._postgres_result = HealthCheckResult("Postgres", postgres_ok, postgres_message)
+        self._pgvector_result = HealthCheckResult("pgvector extension", pgvector_ok, pgvector_message)
+        self.verified_urls: list[str] = []
+
+    def verify(self, database_url: str) -> tuple[HealthCheckResult, HealthCheckResult]:
+        self.verified_urls.append(database_url)
+        return self._postgres_result, self._pgvector_result
 
 
 class FakeHealthCheck:

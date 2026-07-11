@@ -16,7 +16,12 @@ ws_port = 8765
 log_dir = "logs/sessions"
 
 [database]
-# Standard libpq DSN — adjust host/port/credentials as needed.
+# Standard libpq DSN. memai-setup defaults to peer auth (Linux/macOS) — no
+# password stored anywhere, since Postgres and the server always run on the
+# same machine: postgresql:///memai?user=memai (empty host = local Unix
+# socket; requires a one-time pg_ident.conf mapping, see docs/INSTALL_SERVER.md).
+# Falls back to a password DSN below for remote Postgres or Windows (which has
+# no `peer` auth — its equivalent, `sspi`, isn't yet supported here).
 url = "postgresql://memai:changeme@localhost:5432/memai"
 
 [stt]

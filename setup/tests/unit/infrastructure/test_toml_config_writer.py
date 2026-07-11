@@ -1,3 +1,4 @@
+import stat
 import tomllib
 from pathlib import Path
 
@@ -36,3 +37,22 @@ def test_writes_tts_section_with_matching_device(tmp_path: Path):
     config = _write_and_read(tmp_path, plan)
 
     assert config["tts"]["device"] == "cpu"
+
+
+def test_written_config_is_only_readable_by_owner(tmp_path: Path):
+    # database.url may carry a plaintext password (password-auth fallback) —
+    # this file must never be group/world-readable.
+    path = tmp_path / "memai.toml"
+    TomlConfigWriter(path).write_server_config(InstallationPlan())
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_permissions_tightened_even_on_a_pre_existing_looser_file(tmp_path: Path):
+    path = tmp_path / "memai.toml"
+    path.write_text("")
+    path.chmod(0o644)
+
+    TomlConfigWriter(path).write_server_config(InstallationPlan())
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600

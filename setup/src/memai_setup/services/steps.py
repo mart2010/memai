@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 from __future__ import annotations
 
+import getpass
 import subprocess
 from typing import Protocol
 
@@ -13,6 +14,7 @@ from .errors import WizardAborted
 from .ports import (
     CatalogueRepository,
     ConfigWriter,
+    DatabaseConnectionVerifier,
     GPUDetector,
     HealthCheck,
     ModelInstaller,
@@ -51,7 +53,10 @@ class ShowWelcome:
     constraint — see CLAUDE.md)."""
 
     _PREREQUISITES = (
-        "PostgreSQL 15+ with the pgvector extension installed (not just Postgres running)",
+        "PostgreSQL 15+ with the pgvector extension installed (not just Postgres running), "
+        "and a 'memai' role/database created — see docs/INSTALL_SERVER.md. The next step "
+        "prefers passwordless peer auth (Linux/macOS): if your OS user isn't yet mapped to "
+        "the 'memai' role in pg_ident.conf, that step will show you the exact lines to add",
         "Ollama installed and running",
         "(Optional) A GPU speeds things up. NVIDIA (CUDA 12 + cuDNN 9) accelerates "
         "STT, TTS, and the LLM. AMD GPUs are auto-detected by Ollama and accelerate "
@@ -99,12 +104,87 @@ class SelectTopology:
         plan.set_topology(Topology.SINGLE_HOST if choice == "single_host" else Topology.SPLIT_HOST)
 
 
+class ConfigureDatabaseConnection:
+    """Flow step 3. Collects and verifies a real Postgres connection —
+    fills a long-documented gap where plan.database_url was always the class
+    default (postgresql://memai:changeme@...), decoupled from whatever the
+    wizard's health checks/SetupSchema actually needed (see docs/PLAN.md
+    "Known gaps"). Never creates the role/database itself — Postgres+pgvector
+    installation and the memai role/database are documented manual
+    prerequisites (see ShowWelcome), same as today. Safe to re-run: this step
+    only collects+verifies, so a pre-existing memai role/database (from a
+    prior wizard run) is the normal case, not a special one.
+
+    Peer auth (Unix socket, no password) is the default/recommended path on
+    Linux/macOS — psycopg/libpq treats an empty host as "use the default
+    local socket", so the DSN only needs an explicit `user=` (the fixed
+    "memai" role) to route around peer auth's default "OS username == role
+    name" behavior; that requires a one-time pg_ident.conf mapping this step
+    documents on failure. Falls back to host+password for remote/non-standard
+    setups. Windows has no `peer` auth at all (its equivalent, `sspi`, is a
+    documented future follow-up) — this step's peer-auth path is Linux/macOS
+    only, matching where `server/` currently runs (CLAUDE.md)."""
+
+    _PEER_AUTH_URL = "postgresql:///memai?user=memai"
+
+    def __init__(self, verifier: DatabaseConnectionVerifier) -> None:
+        self._verifier = verifier
+
+    def run(self, plan: InstallationPlan, prompter: WizardPrompter) -> None:
+        choice = prompter.select(
+            "How should Mémai connect to PostgreSQL?",
+            [
+                PromptChoice("peer", "Local peer authentication (recommended) — no password stored"),
+                PromptChoice("password", "Host + password (remote or custom Postgres setup)"),
+            ],
+        )
+        if choice == "peer":
+            database_url = self._PEER_AUTH_URL
+            failure_hint = self._peer_auth_hint()
+        else:
+            host = prompter.text("Postgres host:", default="localhost")
+            port = prompter.text("Postgres port:", default="5432")
+            dbname = prompter.text("Database name:", default="memai")
+            user = prompter.text("Database user:", default="memai")
+            password = prompter.text("Database password:", default="")
+            database_url = f"postgresql://{user}:{password}@{host}:{port}/{dbname}"
+            failure_hint = ""
+
+        postgres_result, pgvector_result = self._verifier.verify(database_url)
+        if not postgres_result.ok:
+            proceed = prompter.confirm(
+                f"Could not connect to Postgres ({postgres_result.message}).{failure_hint} "
+                "Continue anyway (fix it later and re-run memai-setup)?",
+                default=False,
+            )
+            if not proceed:
+                raise WizardAborted("Installation cancelled — fix the Postgres connection and re-run memai-setup.")
+        elif not pgvector_result.ok:
+            prompter.info(f"pgvector: {pgvector_result.message}")
+
+        plan.database_url = database_url
+
+    def _peer_auth_hint(self) -> str:
+        os_user = getpass.getuser()
+        return (
+            " This usually means the 'memai' role isn't mapped to your OS user "
+            f"('{os_user}') yet — add to pg_ident.conf:\n"
+            f"  memai_map    {os_user}    memai\n"
+            "and to pg_hba.conf (before the general 'local all all peer' line):\n"
+            "  local   memai   memai   peer map=memai_map\n"
+            "then reload Postgres (`sudo systemctl reload postgresql`) and re-run memai-setup."
+        )
+
+
 class CheckPrerequisites:
-    """Flow step 3. Warn-and-confirm, not hard-block: reports every check's
+    """Flow step 4. Warn-and-confirm, not hard-block: reports every check's
     result, and if anything failed, asks whether to continue anyway (e.g. the
-    user knows Postgres will be up by the time SetupSchema runs) rather than
-    refusing outright. Raises WizardAborted if the user declines — caught at
-    the CLI boundary for a clean exit instead of a raw traceback."""
+    user knows Ollama will be up by the time SelectLLM needs to pull a model)
+    rather than refusing outright. Raises WizardAborted if the user declines
+    — caught at the CLI boundary for a clean exit instead of a raw traceback.
+    Postgres/pgvector are checked separately by ConfigureDatabaseConnection
+    (step 3, just before this one), which needs the connection details it
+    just collected — not a fixed check this step can hold up front."""
 
     def __init__(self, checks: list[HealthCheck]) -> None:
         self._checks = checks
@@ -130,7 +210,7 @@ class CheckPrerequisites:
 
 
 class DetectComputeDevice:
-    """Flow step 3b. Sets plan.compute_device — the single source of truth
+    """Flow step 5. Sets plan.compute_device — the single source of truth
     GenerateConfig/TomlConfigWriter reads to write [stt].device/compute_type
     and [tts].device. Distinct from SelectLLM's and ResolveSTTEngine's own
     gpu.detect_vram_gb() calls, which are about VRAM-amount fit hints for a
@@ -161,7 +241,7 @@ class DetectComputeDevice:
 
 
 class SelectLLM:
-    """Flow steps 4-5. Presents every catalogue entry with a plain-English fit
+    """Flow steps 6-7. Presents every catalogue entry with a plain-English fit
     hint — never filters the list, per CLAUDE.md ("user always sees all
     options, never a filtered list"). Pulls the chosen model via Ollama before
     returning, matching the original flow doc's step 5 ("LLM selection +
@@ -214,7 +294,7 @@ class SelectLLM:
 
 
 class SelectLanguages:
-    """Flow step 6. Offers languages covered by at least one installable STT
+    """Flow step 8. Offers languages covered by at least one installable STT
     engine and at least one TTS engine (see domain/language_coverage.py).
     Multi-select — this is deliberately "which languages should Mémai support,"
     covering both your main language and any optional/secondary ones in one
@@ -242,7 +322,7 @@ class SelectLanguages:
 
 
 class ResolveSTTEngine:
-    """Flow step 7. Mainly a Whisper model-size choice today (VRAM vs.
+    """Flow step 9. Mainly a Whisper model-size choice today (VRAM vs.
     accuracy/latency tradeoff — see large-v3-turbo in stt_catalogue.toml), not
     an engine choice, since faster-whisper covers ~99 languages
     unconditionally. Engines without `has_adapter` (e.g. whisper.cpp) are
@@ -290,7 +370,7 @@ class ResolveSTTEngine:
 
 
 class ResolveTTSEngines:
-    """Flow step 8. Per selected language, if only one engine covers it,
+    """Flow step 10. Per selected language, if only one engine covers it,
     install that one; if multiple engines cover it (e.g. both Kokoro and Piper
     offer English), let the user pick rather than silently defaulting to one —
     voice variety/quality is a stated goal, not just coverage. Bundled engines
@@ -341,7 +421,7 @@ class ResolveTTSEngines:
 
 
 class GenerateConfig:
-    """Flow step 9. Single-host also writes the client config (step 10b in the
+    """Flow step 11. Single-host also writes the client config (step 10b in the
     original flow doc — see project_wizard_brainstorm memory); split-host
     defers client config to a separate `memai-setup --client` run on the
     client machine (not yet wired into cli.py). Writes a couple of fields
@@ -362,7 +442,7 @@ class GenerateConfig:
 
 
 class SetupSchema:
-    """Flow step 10. Delegates to SchemaRunner, which must apply
+    """Flow step 12. Delegates to SchemaRunner, which must apply
     migrations/001_initial_schema.sql idempotently — the SQL itself uses
     `IF NOT EXISTS`/`ON CONFLICT DO NOTHING` throughout, so a straightforward
     re-apply is safe with no migration framework needed."""
@@ -376,10 +456,16 @@ class SetupSchema:
 
 
 class RunHealthChecks:
-    """Flow step 11. Runs a list of HealthCheck instances (Postgres reachable,
-    Ollama running, WebSocket answers, ...) and reports pass/fail via
-    prompter. The concrete checks live in infrastructure/health_checks.py —
-    this step is just the aggregator, unit-testable with Fake HealthChecks."""
+    """Flow step 13. Runs a list of HealthCheck instances (currently just
+    Ollama) and reports pass/fail via prompter. Postgres isn't re-checked
+    here — ConfigureDatabaseConnection already verified it thoroughly, and
+    SetupSchema (just before this step) would have failed loudly if the
+    connection broke in between. No server-WebSocket check either — the
+    wizard never starts memai-server itself, so that would always fail right
+    after a fresh install (see cli.py's health_checks comment); main() tells
+    the user how to start it instead. The concrete checks live in
+    infrastructure/health_checks.py — this step is just the aggregator,
+    unit-testable with Fake HealthChecks."""
 
     def __init__(self, checks: list[HealthCheck]) -> None:
         self._checks = checks

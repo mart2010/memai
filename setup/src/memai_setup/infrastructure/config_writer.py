@@ -35,6 +35,11 @@ class TomlConfigWriter:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         with open(self._path, "wb") as f:
             tomli_w.dump(config, f)
+        # This file carries database.url (and, for TCP/password connections,
+        # a plaintext credential) — tighten permissions on every write, not
+        # just first creation, so a config written before this existed (or
+        # under a looser umask) also gets corrected on the next wizard run.
+        self._path.chmod(0o600)
 
     def write_server_config(self, plan: InstallationPlan) -> None:
         config = self._read_existing()

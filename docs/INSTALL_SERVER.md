@@ -229,19 +229,67 @@ below — then continue with the User record seed.
 
 ### System apt setup
 
-If you used the system apt path, create the database and user manually:
+If you used the system apt path, create the database and role manually. The `memai-setup`
+wizard (`memai-setup` command in `setup/`) will collect and verify the connection for you
+interactively — this section documents what it expects to already exist.
 
 ```bash
 sudo -u postgres psql <<'SQL'
 CREATE DATABASE memai;
-CREATE USER memai WITH PASSWORD 'changeme';
+CREATE USER memai;
 GRANT ALL PRIVILEGES ON DATABASE memai TO memai;
 \c memai
 GRANT ALL ON SCHEMA public TO memai;
 SQL
 ```
 
-Replace `changeme` with a password of your choice and update `DATABASE_URL` in step 8.
+Note this creates the `memai` role with **no password** — see below for why.
+
+#### Recommended: peer authentication (Linux/macOS, no password stored anywhere)
+
+Since Postgres and the server process always run on the same machine (split-host only
+separates *client* from *server* — the database always lives with the server), there's no
+need to store a password at all. Postgres can instead trust the OS-authenticated identity
+of whoever connects over the local Unix socket (`peer` auth).
+
+Most distributions (confirmed on Ubuntu's PGDG packages) already ship
+`local all all peer` in `pg_hba.conf` by default — but bare `peer` auth requires the
+connecting OS username to exactly match the Postgres role name, and `memai` is a fixed
+role name (not tied to whichever OS user happens to run the server). So map your OS user
+to the `memai` role explicitly:
+
+1. Add to `pg_ident.conf` (find its path via `sudo -u postgres psql -c "SHOW ident_file;"`):
+   ```
+   # MAPNAME    SYSTEM-USERNAME    PG-USERNAME
+   memai_map    <your-os-username>    memai
+   ```
+2. Add to `pg_hba.conf`, **above** the general `local all all peer` line (first match wins):
+   ```
+   local   memai   memai   peer map=memai_map
+   ```
+3. Reload Postgres: `sudo systemctl reload postgresql`
+4. Connection string: `postgresql:///memai?user=memai` — empty host tells libpq to use the
+   default local Unix socket instead of TCP.
+
+`memai-setup` offers this as the default option and will print these exact instructions
+(with your actual OS username filled in) if the mapping isn't there yet.
+
+**Windows**: `peer` authentication doesn't exist on Windows at all (confirmed against
+PostgreSQL's own docs). Its equivalent is `sspi` authentication, which also avoids storing
+a password for local connections but is configured differently (`pg_ident.conf` mapping +
+`sspi` method instead of `peer`). Not yet supported by `memai-setup` — `server/` is
+currently developed on Ubuntu only (see CLAUDE.md) — but worth revisiting if Windows
+becomes a real server target.
+
+#### Alternative: password authentication (remote Postgres, or if you'd rather not set up peer auth)
+
+```bash
+sudo -u postgres psql -c "ALTER USER memai WITH PASSWORD 'changeme';"
+```
+
+Replace `changeme` with a password of your choice and update `DATABASE_URL` in step 8
+accordingly (`postgresql://memai:<password>@<host>:5432/memai`). This is the only option
+for a Postgres instance on a different machine (peer auth is inherently local-only).
 
 ### Run the schema migration
 
@@ -307,7 +355,9 @@ LLM_MODEL=aya-expanse
 # OLLAMA_HOST=http://localhost:11434   # uncomment if Ollama runs on another host
 
 # ── Database (PostgreSQL) ──────────────────────────────────────────────────
-# Standard libpq DSN; adjust host/port/password as needed.
+# Standard libpq DSN. Peer auth (recommended, Linux/macOS, no password —
+# see step 7): postgresql:///memai?user=memai
+# Password auth (remote Postgres, or Windows): adjust host/port/password.
 DATABASE_URL=postgresql://memai:changeme@localhost:5432/memai
 
 # ── Session logs ───────────────────────────────────────────────────────────
