@@ -49,6 +49,15 @@ than working around it silently.
 
 ## Code style
 
+Ruff isn't a dependency of any package venv (it lints across all three at
+once from the repo root config) — install it once as a standalone tool:
+
+```bash
+uv tool install ruff
+```
+
+Then, from the repo root:
+
 ```bash
 ruff check .
 ruff format .

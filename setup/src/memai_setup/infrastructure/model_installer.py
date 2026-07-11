@@ -6,6 +6,11 @@ import subprocess
 from huggingface_hub import hf_hub_download, snapshot_download
 
 _PIPER_VOICES_REPO = "rhasspy/piper-voices"
+# Must match SentenceTransformerEmbeddingService's default in
+# server/src/memai_server/infrastructure/embedding.py — the embedding model is a
+# hardcoded invariant of Mémai (CLAUDE.md: not voice-configurable, not swappable via
+# GA conversation), so there is no plan field to drive this from, unlike Whisper/Piper.
+_EMBEDDING_MODEL_REPO = "intfloat/multilingual-e5-large"
 
 
 class OllamaModelInstaller:
@@ -33,3 +38,10 @@ class OllamaModelInstaller:
         base_path = f"{lang}/{lang_region}/{voice_name}/{quality}/{voice_id}"
         hf_hub_download(repo_id=_PIPER_VOICES_REPO, filename=f"{base_path}.onnx")
         hf_hub_download(repo_id=_PIPER_VOICES_REPO, filename=f"{base_path}.onnx.json")
+
+    def download_embedding_model(self) -> None:
+        # Same rationale as download_whisper_model: SentenceTransformerEmbeddingService
+        # sets HF_HUB_OFFLINE=1 so the live server never touches the network for it (see
+        # its docstring) — so if the wizard doesn't pre-download it, first server startup
+        # fails outright (offline mode, no cached model) instead of just being slower.
+        snapshot_download(repo_id=_EMBEDDING_MODEL_REPO)

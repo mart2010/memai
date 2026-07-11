@@ -26,6 +26,7 @@ dependencies = [
     "openai>=1.30",
     "num2words>=0.5.13",
     "en-core-web-sm",
+    "truststore>=0.9",
 ]
 
 [project.optional-dependencies]

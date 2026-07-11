@@ -43,6 +43,9 @@ cd client
 ## Linting
 
 Ruff is configured at the monorepo root with `line-length = 120`. Test files are excluded from linting.
+It's not a dependency of any package venv — install it once with `uv tool install ruff` (use
+`--system-certs` if that fails behind a TLS-inspecting proxy, same cause as the truststore fix
+in `server/`/`setup/`).
 
 ```bash
 ruff check .

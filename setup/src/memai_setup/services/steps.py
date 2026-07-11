@@ -420,6 +420,32 @@ class ResolveTTSEngines:
                     )
 
 
+class DownloadEmbeddingModel:
+    """Flow step 10b. Pre-downloads the embedding model used for memory
+    consolidation (`intfloat/multilingual-e5-large`, hardcoded in
+    SentenceTransformerEmbeddingService). Unlike the LLM/Whisper/TTS steps
+    above, there is nothing to choose here — the embedding model is a fixed
+    invariant of Mémai (CLAUDE.md: not voice-configurable, not swappable),
+    so this step takes no user input and doesn't touch the plan. It exists
+    only so first server startup doesn't have to hit the network for it:
+    SentenceTransformerEmbeddingService forces HF_HUB_OFFLINE=1 on the live
+    server, so an un-pre-downloaded model fails outright there instead of
+    just being slower."""
+
+    def __init__(self, installer: ModelInstaller) -> None:
+        self._installer = installer
+
+    def run(self, plan: InstallationPlan, prompter: WizardPrompter) -> None:
+        try:
+            self._installer.download_embedding_model()
+        except Exception as exc:  # noqa: BLE001 — network calls can fail in many ways
+            prompter.info(
+                f"Could not pre-download the embedding model ({exc}). The server will fail "
+                "to start until it's downloaded — re-run memai-setup later to retry, or "
+                "download it manually before starting the server."
+            )
+
+
 class GenerateConfig:
     """Flow step 11. Single-host also writes the client config (step 10b in the
     original flow doc — see project_wizard_brainstorm memory); split-host

@@ -9,6 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 import psycopg
+import truststore
 import websockets
 
 from .domain.model import DEFAULT_VOICE_ROLE, Language, SUPPORTED_LANGUAGES, User
@@ -262,6 +263,14 @@ def _ensure_user_exists(user_repo: PSUserRepository) -> None:
 
 
 def main() -> None:
+    # Same fix as the setup wizard (memai_setup.cli): patches ssl.SSLContext to verify
+    # against the OS's native trust store instead of certifi's bundled CA list. The live
+    # server itself shouldn't need network for model loading (see embedding.py's
+    # HF_HUB_OFFLINE guard and the wizard's pre-download steps), but this is cheap
+    # insurance against any adapter that still touches the network — e.g. a model the
+    # wizard didn't have a chance to pre-download — behind a TLS-inspecting proxy.
+    truststore.inject_into_ssl()
+
     cfg = load_config()
 
     print("Connecting to database…")

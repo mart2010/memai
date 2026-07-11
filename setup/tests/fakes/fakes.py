@@ -87,13 +87,16 @@ class FakeModelInstaller:
         fail_pull_llm: bool = False,
         fail_download_whisper_model: bool = False,
         fail_download_piper_voice: bool = False,
+        fail_download_embedding_model: bool = False,
     ) -> None:
         self.pulled_llms: list[str] = []
         self.downloaded_whisper_models: list[str] = []
         self.downloaded_piper_voices: list[str] = []
+        self.downloaded_embedding_models: int = 0
         self._fail_pull_llm = fail_pull_llm
         self._fail_download_whisper_model = fail_download_whisper_model
         self._fail_download_piper_voice = fail_download_piper_voice
+        self._fail_download_embedding_model = fail_download_embedding_model
 
     def pull_llm(self, model_id: str) -> None:
         if self._fail_pull_llm:
@@ -109,6 +112,11 @@ class FakeModelInstaller:
         if self._fail_download_piper_voice:
             raise RuntimeError("simulated network failure")
         self.downloaded_piper_voices.append(voice_id)
+
+    def download_embedding_model(self) -> None:
+        if self._fail_download_embedding_model:
+            raise RuntimeError("simulated network failure")
+        self.downloaded_embedding_models += 1
 
 
 class FakeConfigWriter:
