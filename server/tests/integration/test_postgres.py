@@ -272,7 +272,7 @@ class TestPSConversationRepository:
         persona_repo.save(persona)
         conv_repo.save_new(Conversation(id=None, started_at=_NOW, persona_id=persona.id), session_id=uuid4())
 
-        with pytest.raises(psycopg.errors.ForeignKeyViolation):
+        with pytest.raises(psycopg.errors.RestrictViolation):
             persona_repo.delete(persona.id)
 
 

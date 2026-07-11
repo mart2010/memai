@@ -1360,19 +1360,18 @@ review pass are all explicitly out of Phase 11 scope (see brief's Non-goals).
       records calls. 21 new unit tests (6 upserter contract incl. short-circuit,
       15 installer) → 147 green on laptop; `PSBundleInstallLog` integration test +
       `bundle_installs` added to conftest truncate list, queued for the workstation run.
-- [~] `memai-bundle install <path>` console script on the server package (needs
+- [x] `memai-bundle install <path>` console script on the server package (needs
       embedding model + DB + config); documented run-while-idle caveat
       (2026-07-11) — `bundle_cli.py` + `[project.scripts]` entry written and ruff-clean;
       thin composition root mirroring `server.py`'s `main()` (truststore inject,
       `load_config`, `postgres.connect`, `SentenceTransformerEmbeddingService`,
       Ollama disambiguator/synthesizer, `KOKORO_DEFAULT_VOICES`-based
       `default_voice_for` — same derivation as onboarding). Exit 1 with a clean message
-      on `BundleFormatError`/`BundleInstallError`. **Marked [~] not [x]: the entry point
-      only registers via `uv sync`, impossible on this laptop (numpy lock) — live
-      verification is part of the workstation checklist below.**
-- [~] Hand-written mini-bundle fixture + unit tests + integration test (real Postgres,
+      on `BundleFormatError`/`BundleInstallError`. Live-verified on the GPU workstation,
+      see below.
+- [x] Hand-written mini-bundle fixture + unit tests + integration test (real Postgres,
       GPU workstation)
-      (2026-07-11, laptop half done) — committed fixture
+      (2026-07-11, laptop half done, workstation half same day) — committed fixture
       `server/tests/integration/fixtures/spanish_mini/` (persona_key
       `memai-test/spanish-mini`, `[persona]` with voices omitting "default" to exercise
       derivation, 2 lessons / 5 items, es content) — parse verified live against the real
@@ -1385,25 +1384,52 @@ review pass are all explicitly out of Phase 11 scope (see brief's Non-goals).
       Covers: fresh install (persona created, voices/languages/settings, curriculum order
       as ascending SERIAL ids, `unseen` in DB, real search round-trip) and reinstall
       (0 inserted / 5 merged, zero synthesis calls, persona untouched + notice, two
-      append-only `bundle_installs` rows). Remaining: run it on the workstation.
+      append-only `bundle_installs` rows).
 
-      **Workstation checklist (in order):**
-      1. `git status` first (dirty-tree risk, see Phase 10), then `git pull`
-      2. `uv lock --upgrade-package numpy` (pending from Phase 10 — un-freezes the laptop)
-      3. `uv sync --system-certs` (registers `memai-bundle`; `--native-tls` is deprecated)
-      4. Dev-DB schema: `ALTER TABLE personas ADD COLUMN persona_key TEXT UNIQUE, ADD
-         COLUMN settings JSONB;` (CREATE TABLE IF NOT EXISTS won't add columns), then
-         re-run `001_initial_schema.sql` (creates `bundle_installs`, confirms
-         idempotency). `memai_test` needs nothing — conftest recreates it.
-      5. Full suite: 147 unit + `test_config.py` + all integration (6 new
-         `test_postgres.py` tests, 2 new `test_bundle_install.py` tests, 5 known
-         voice-pack skips)
-      6. Live smoke: `memai-bundle install server/tests/integration/fixtures/spanish_mini`
-         against the dev DB (real embedding + Ollama), then re-run → expect 0 inserted /
-         5 merged, near-instant. No proxy env vars on the process. Cleanup: delete the
-         `memai-test/spanish-mini` persona (cascade removes its items; `bundle_installs`
-         rows survive by design).
-      7. Update PLAN.md markers, push back
+      **Workstation run (2026-07-11)** — deviated from the plan below in a few places,
+      recorded for next time:
+      1. `git status`/`git pull`: tree was already clean and up to date with
+         `origin/master` at `d19b9d0` — no pull needed.
+      2. `uv lock --upgrade-package numpy` turned out moot here: `uv sync` had already
+         been run on this box before this session (numpy 1.26.4 matches the lock,
+         `memai-bundle`/`memai-server` both already registered in `.venv/bin`) — the
+         laptop's frozen-lock problem is Windows/cp313-specific and doesn't reproduce
+         on this Linux box.
+      3. Skipped — already synced (see above).
+      4. **Dropped and recreated the whole `public` schema instead of `ALTER TABLE`**
+         (explicitly OK'd — dev DB held only 1 trivial bootstrap user, 0 conversations).
+         Two things this surfaced that the plan didn't anticipate: (a) the `memai` role
+         isn't superuser, so `CREATE EXTENSION vector` fails on a fresh schema — fixed by
+         marking pgvector `trusted = true` in `vector.control` (one-time, standard fix for
+         non-superuser app roles; `CREATE EXTENSION` as superuser was still needed once
+         for the already-partially-applied dev DB before the control-file fix took
+         effect); (b) since a full schema drop wipes the bootstrap user too, had to
+         re-insert one with `primary_language` set (via `PSUserRepository`, matching
+         `_ensure_user_exists`'s shape) before the fresh-install smoke test, since persona
+         creation from a bundle requires an onboarded user.
+      5. Full suite: **150 unit tests green** (up from 147 — includes `test_config.py`,
+         fine on this box) and **67 integration tests green, 7 skipped** (5 known
+         voice-pack gaps + 2 no-CUDA STT skips — this box's CUDA driver doesn't match the
+         installed runtime; unrelated to Phase 11). Integration DB (`memai_test`) needed
+         the same pgvector-trusted fix, plus a password set on the `memai` role
+         (`ALTER ROLE memai WITH PASSWORD 'memai'`) since `conftest.py`'s hardcoded
+         default test DSN connects over TCP (scram-sha-256), not the peer-auth socket the
+         app itself uses. **Found and fixed one real, pre-existing test bug** (not a
+         Phase 11 regression): `test_persona_delete_restricted_once_referenced_by_a_conversation`
+         asserted `psycopg.errors.ForeignKeyViolation`, but Postgres raises the distinct
+         `RestrictViolation` (SQLSTATE 23001) for `ON DELETE RESTRICT` specifically —
+         confirmed against real Postgres 18, not version-specific behavior. Fixed the
+         assertion in `test_postgres.py`.
+      6. Live smoke, exactly as planned: fresh install → persona created,
+         5 inserted / 0 merged; re-run → 0 inserted / 5 merged, ~instant (dominated by
+         embedding-model load, no LLM synthesis calls). Verified in DB directly: 2
+         append-only `bundle_installs` rows, 5 `unseen` items (3 concepts + 2 procedures)
+         in curriculum order. Ambient `HTTP_PROXY`/`HTTPS_PROXY` were set in the shell but
+         didn't need clearing — no network calls hit them (embedding model loaded from
+         local cache). Cleanup: deleted the `memai-test/spanish-mini` persona — cascade
+         removed its concepts/procedures, the 2 `bundle_installs` rows survived as
+         designed.
+      7. This update.
 - [x] Authoring guide doc (replaces the former "multi-pass LLM authoring strategy" code
       item): roster workflow, no-two-unknowns, ephemeral-generation, MEO-BR
       lesson-ordering template — doubles as the seed requirements doc for the future
