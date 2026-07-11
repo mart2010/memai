@@ -122,17 +122,22 @@ ssh <user>@<server-address> echo ok
 
 ---
 
-## 5. Configure environment variables
+## 5. Configure the client
 
-Create a `.env` file in `memai/client/`:
+Create `~/.config/memai/memai.toml` on Linux/macOS (`%LOCALAPPDATA%\memai\memai.toml`
+on Windows) — same layout as `client/config/memai.example.toml` in the repo:
 
-```dotenv
-# Required — SSH target for the tunnel (user@hostname or user@ip)
-SSH_USER_HOST=<user>@<server-address>
-
-# Optional — must match WS_PORT on the server (default: 8765)
-# WS_PORT=8765
+```toml
+[server]
+ws_port = 8765
+ssh_host = "<user>@<server-address>"
 ```
+
+`ssh_host` is what tells the client to tunnel — required for split-host (this guide).
+`ws_port` only needs setting if the server uses a non-default port. This is the same
+file the server reads its own settings from, so a single-host install (where
+`memai-setup` writes it for you — see docs/INSTALL_SERVER.md) shares one file with
+`ssh_host` simply omitted.
 
 ---
 
@@ -158,7 +163,8 @@ language is configured on the server, a language selection prompt appears in the
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `SSH_USER_HOST` not set | Missing `.env` | Create `.env` with `SSH_USER_HOST=...` |
+| `FileNotFoundError: Client config not found` | `memai.toml` missing | Create it as shown in step 5 |
+| Client connects to `localhost` instead of tunneling | `ssh_host` missing/blank in `memai.toml` | Set `ssh_host` in `memai.toml` (step 5) |
 | `Connection refused` on WebSocket | Server not running or tunnel failed | Start the server; check SSH key auth |
 | SSH prompts for password | No key auth | Run `ssh-copy-id` (step 4) |
 | No audio input detected | Wrong microphone or permissions | Check OS audio settings; grant mic permission |

@@ -94,15 +94,20 @@ Microphone → [VAD] → WebSocket → [STT] → [LLM stream] → [TTS] → WebS
 **Requirements:** Python 3.13+, a GPU server with CUDA, PostgreSQL with pgvector.
 
 ```bash
-# Server (GPU machine — Linux/Ubuntu)
+# Server (GPU machine — Linux/Ubuntu; assumes Postgres/pgvector + Ollama are already
+# set up, see docs/INSTALL_SERVER.md)
 cd server && uv sync
-.venv/bin/memai-server
+cd ../setup && uv sync && .venv/bin/memai-setup   # interactive: picks LLM/models, writes config, applies DB schema
+cd ../server && .venv/bin/memai-server
 
 # Client (your machine — Windows, macOS, or Linux)
 uv tool install "git+<repo-url>#subdirectory=client"
 # Copy client/config/memai.example.toml to your platform config dir (see docs/INSTALL_CLIENT.md) and set ssh_host
 memai-client
 ```
+
+Client and server on the same machine? `./scripts/run-local.sh` starts the server, waits
+for it to be ready, then launches the client in the same terminal — no `ssh_host` needed.
 
 On first launch, Memai guides you through language selection. After that, everything is configured by voice — no CLI arguments, no config files to edit.
 
