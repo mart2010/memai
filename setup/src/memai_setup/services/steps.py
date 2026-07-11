@@ -45,7 +45,8 @@ class ShowWelcome:
     _PREREQUISITES = (
         "PostgreSQL 15+ with the pgvector extension installed (not just Postgres running)",
         "Ollama installed and running",
-        "NVIDIA driver + CUDA 12 + cuDNN 9 (for GPU-accelerated STT/TTS)",
+        "(Optional) NVIDIA driver + CUDA 12 + cuDNN 9 — enables GPU-accelerated STT/TTS; "
+        "without it, Mémai automatically falls back to CPU (slower but fully functional)",
         "SSH server + key auth on the server machine — only if you'll use split-host "
         "(see below); not needed for single-host",
         "PortAudio — macOS/Linux client only (`brew install portaudio` / `apt install "
@@ -113,6 +114,37 @@ class CheckPrerequisites:
         )
         if not proceed:
             raise WizardAborted("Installation cancelled — fix the prerequisites above and re-run memai-setup.")
+
+
+class DetectComputeDevice:
+    """Flow step 3b. Sets plan.compute_device — the single source of truth
+    GenerateConfig/TomlConfigWriter reads to write [stt].device/compute_type
+    and [tts].device. Distinct from SelectLLM's and ResolveSTTEngine's own
+    gpu.detect_vram_gb() calls, which are about VRAM-amount fit hints for a
+    given model choice, not this CUDA-presence fact — cheap enough to call
+    nvidia-smi more than once rather than thread this step's result through
+    every later step's fit-hint logic.
+
+    NvidiaSmiGPUDetector only ever recognizes NVIDIA/CUDA (see
+    infrastructure/gpu.py), so None here covers both "no GPU" and "GPU
+    present but not NVIDIA" (e.g. AMD) — ROCm/Metal remain long-term goals
+    per CLAUDE.md, not wired into any adapter yet, so anything non-CUDA is
+    treated the same as no GPU: CPU fallback, not a failure."""
+
+    def __init__(self, gpu: GPUDetector) -> None:
+        self._gpu = gpu
+
+    def run(self, plan: InstallationPlan, prompter: WizardPrompter) -> None:
+        vram_gb = self._gpu.detect_vram_gb()
+        if vram_gb is None:
+            plan.compute_device = "cpu"
+            prompter.info(
+                "No CUDA GPU detected — Mémai will run STT and TTS on CPU "
+                "(slower, but fully functional). Ollama's LLM inference is "
+                "unaffected — it detects and uses any available GPU acceleration on its own."
+            )
+        else:
+            plan.compute_device = "cuda"
 
 
 class SelectLLM:

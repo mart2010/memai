@@ -23,6 +23,7 @@ from .services.ports import SchemaRunner
 from .services.run_wizard import RunInstallWizard
 from .services.steps import (
     CheckPrerequisites,
+    DetectComputeDevice,
     GenerateConfig,
     ResolveSTTEngine,
     ResolveTTSEngines,
@@ -63,6 +64,7 @@ def _install_steps(
         ShowWelcome(),
         SelectTopology(),
         CheckPrerequisites(prerequisite_checks),
+        DetectComputeDevice(gpu),
         SelectLLM(catalogues, gpu, installer),
         SelectLanguages(catalogues),
         ResolveSTTEngine(catalogues, gpu, installer),

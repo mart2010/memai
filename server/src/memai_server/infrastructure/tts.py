@@ -47,15 +47,16 @@ class KokoroTTSService:
     from Kokoro's native 24 kHz to the client's expected 16 kHz.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, device: str | None = None) -> None:
         self._pipelines: dict[str, object] = {}
+        self._device = device
 
     def _pipeline(self, voice: str):
         prefix = voice[0]
         if prefix not in self._pipelines:
             from kokoro import KPipeline
             lang_code = _PREFIX_TO_LANG.get(prefix, prefix)
-            self._pipelines[prefix] = KPipeline(lang_code=lang_code)
+            self._pipelines[prefix] = KPipeline(lang_code=lang_code, device=self._device)
         return self._pipelines[prefix]
 
     def synthesise(self, text: str, voice: str, speed: float = 1.0) -> bytes:

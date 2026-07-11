@@ -23,9 +23,19 @@ url = "postgresql://memai:changeme@localhost:5432/memai"
 # Path to a pre-downloaded faster-whisper model directory, or a model name
 # that faster-whisper will download on first run (e.g. "small", "medium").
 # Avoid large models — they compete for VRAM with the LLM and TTS.
+# memai-setup sets device/compute_type automatically based on whether a CUDA
+# GPU was detected. device = "cuda" or "cpu" (no other backend is supported —
+# see CLAUDE.md). compute_type = "float16" pairs with cuda; "int8" with cpu
+# (faster-whisper/CTranslate2 doesn't support float16 compute on most CPUs).
 model_path = "~/models/faster-whisper-small"
 device = "cuda"
-compute_type = "float16"  # use int8 if VRAM is tight
+compute_type = "float16"
+
+[tts]
+# device = "cuda" or "cpu", same rule as [stt].device above — memai-setup sets
+# this automatically. Omitting this section entirely falls back to Kokoro's
+# own torch.cuda.is_available() auto-detection.
+device = "cuda"
 
 [llm]
 # Avoid large (~70B-class) models — they don't fit in VRAM alongside Whisper +

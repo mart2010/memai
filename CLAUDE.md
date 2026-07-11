@@ -54,8 +54,8 @@ ruff format .
 - **Voice-only configuration (GeneralAssistant scope only)** — this constraint applies to the
   GeneralAssistant's own settings, not to persona creation or extension. `memai.toml` holds
   only bootstrap-before-DB-exists settings (`ws_port`, `database.url`,
-  `stt.model_path/device/compute_type`, `llm.model/ollama_host`, `log_dir`) — nothing voice-
-  configurable lives there. Every voice-configurable or domain-meaningful setting is instead a
+  `stt.model_path/device/compute_type`, `tts.device`, `llm.model/ollama_host`, `log_dir`) —
+  nothing voice-configurable lives there. Every voice-configurable or domain-meaningful setting is instead a
   DB-backed attribute of whichever entity owns it — `User` (e.g. `idle_consolidation_minutes`)
   or `AssistantPersona` (e.g. `voices`, `speaking_rate`) — never a global toml scalar.
   Because Memai is single-user, "global setting" and "User attribute" are the same thing, so
@@ -133,7 +133,8 @@ Audio is sent as raw binary WebSocket frames; control messages use JSON text fra
   on the next turn. Avoid reasoning models like `qwen3` — their `<think>...</think>` block
   is not suppressed by `think: false` on thinking-tuned models, so the assistant ends up
   speaking its internal reasoning out loud.
-- **TTS**: `Kokoro` — single multilingual model, CUDA-accelerated, ~9 languages
+- **TTS**: `Kokoro` — single multilingual model, GPU-accelerated when a CUDA GPU
+  is available, CPU fallback otherwise, ~9 languages
 - Session log files written to `logs/sessions/YYYY-MM-DD_<session_id>.jsonl`;
   one JSON line per turn plus inline boundary markers
 

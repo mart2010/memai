@@ -54,3 +54,16 @@ def test_lists_all_other_prerequisites():
     assert "pgvector" in joined
     assert "Ollama" in joined
     assert "CUDA" in joined
+
+
+def test_cuda_prerequisite_is_framed_as_optional_with_cpu_fallback():
+    step = ShowWelcome()
+    prompter = FakeWizardPrompter()
+    plan = InstallationPlan()
+
+    step.run(plan, prompter)
+
+    _title, lines = prompter.headings[0]
+    cuda_line = next(line for line in lines if "CUDA" in line)
+    assert "optional" in cuda_line.lower()
+    assert "CPU" in cuda_line

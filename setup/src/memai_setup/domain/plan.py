@@ -27,6 +27,11 @@ class InstallationPlan:
     languages: list[LanguageCode] = field(default_factory=list)
     whisper_model: str | None = None
     tts_engine_by_language: dict[LanguageCode, str] = field(default_factory=dict)
+    # "cuda" | "cpu". Defaults to the fail-safe "cpu" — same "never assume the
+    # optimistic case" philosophy as NvidiaSmiGPUDetector returning None on any
+    # failure. Set once by DetectComputeDevice; GenerateConfig/TomlConfigWriter
+    # is the only other reader.
+    compute_device: str = "cpu"
     # No wizard step collects Postgres connection details yet (the original
     # flow's "3. Prerequisites check" step isn't implemented) — defaults to
     # the same local connection string shipped in

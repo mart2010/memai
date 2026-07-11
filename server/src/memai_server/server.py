@@ -275,7 +275,7 @@ def main() -> None:
     print("Loading Whisper model…")
     stt = FasterWhisperSTTService(cfg.stt_model_path, device=cfg.stt_device, compute_type=cfg.stt_compute_type)
     llm = OllamaLLMService(model=cfg.llm_model, host=cfg.llm_ollama_host)
-    tts = KokoroTTSService()
+    tts = KokoroTTSService(device=cfg.tts_device)
     print("Loading embedding model…")
     embedding_service = SentenceTransformerEmbeddingService()
     print("Services ready.")

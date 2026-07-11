@@ -7,7 +7,10 @@ import subprocess
 class NvidiaSmiGPUDetector:
     """CUDA-only, matching the current GPU backend (CLAUDE.md: ROCm/Metal are
     long-term goals). Returns None on any failure — GPUDetector's contract —
-    rather than raising, so the wizard can still proceed with a warning."""
+    rather than raising, so the wizard can still proceed with a warning. None
+    therefore also covers a non-NVIDIA GPU (e.g. AMD) being present but
+    undetectable by this CUDA-only check — DetectComputeDevice treats that
+    the same as no GPU at all: CPU fallback, not an error."""
 
     def detect_vram_gb(self) -> float | None:
         try:

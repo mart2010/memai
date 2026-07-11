@@ -40,11 +40,13 @@ class TomlConfigWriter:
         config = self._read_existing()
         config.setdefault("server", {}).update({"ws_port": _DEFAULT_WS_PORT, "log_dir": _DEFAULT_LOG_DIR})
         config["database"] = {"url": plan.database_url}
+        device = plan.compute_device
         config["stt"] = {
             "model_path": plan.whisper_model or "small",
-            "device": "cuda",
-            "compute_type": "float16",
+            "device": device,
+            "compute_type": "float16" if device == "cuda" else "int8",
         }
+        config["tts"] = {"device": device}
         config["llm"] = {"model": plan.llm_model_id or "aya-expanse"}
         self._write(config)
 

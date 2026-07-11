@@ -18,6 +18,7 @@ class ServerConfig:
     stt_model_path: str
     stt_device: str
     stt_compute_type: str
+    tts_device: str | None
     llm_model: str
     llm_ollama_host: str | None
     memory_merge_threshold: float
@@ -37,6 +38,7 @@ def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
     server = raw.get("server", {})
     db = raw.get("database", {})
     stt = raw.get("stt", {})
+    tts = raw.get("tts", {})
     llm = raw.get("llm", {})
     memory = raw.get("memory", {})
 
@@ -45,8 +47,11 @@ def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
         log_dir=Path(server.get("log_dir", "logs/sessions")),
         database_url=db.get("url", "postgresql://memai:changeme@localhost:5432/memai"),
         stt_model_path=str(Path(stt.get("model_path", "~/models/faster-whisper-small")).expanduser()),
-        stt_device=stt.get("device", "cuda"),
-        stt_compute_type=stt.get("compute_type", "float16"),
+        stt_device=stt.get("device", "cpu"),
+        stt_compute_type=stt.get("compute_type", "int8"),
+        # None when [tts] is absent — preserves Kokoro's own torch.cuda.is_available()
+        # auto-detect for configs written before this setting existed.
+        tts_device=tts.get("device"),
         llm_model=llm.get("model", "aya-expanse"),
         llm_ollama_host=llm.get("ollama_host") or None,
         memory_merge_threshold=float(memory.get("merge_threshold", 0.93)),
