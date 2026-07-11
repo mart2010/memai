@@ -88,6 +88,31 @@ class TestAssistantPersonaGuards:
         assert persona.system_prompt == "You are a helpful assistant."
         assert persona.speaking_rate == 1.0
         assert persona.is_active is True
+        assert persona.persona_key is None
+        assert persona.settings is None
+
+    def test_persona_key_and_settings_default_to_none(self):
+        now = datetime.now(UTC)
+        persona = AssistantPersona(
+            id=uuid4(), name="Tutor", system_prompt="Teach me.",
+            languages=[], response_language=Language("en"), voices={"default": "af_heart"},
+            is_system=False, created_at=now, updated_at=now,
+        )
+        assert persona.persona_key is None
+        assert persona.settings is None
+
+    def test_bundle_installed_persona_carries_key_and_settings(self):
+        now = datetime.now(UTC)
+        persona = AssistantPersona(
+            id=uuid4(), name="Profesora Sofía", system_prompt="Teach Spanish.",
+            languages=[Language("es")], response_language=Language("es"),
+            voices={"default": "ff_siwis", "target_teacher": "ef_dora"},
+            is_system=False, created_at=now, updated_at=now,
+            persona_key="meo/spanish-tutor",
+            settings={"elicitation_cap": 2, "pair_difficulty": {"en": 1.0, "*": 1.5}},
+        )
+        assert persona.persona_key == "meo/spanish-tutor"
+        assert persona.settings["elicitation_cap"] == 2
 
     def test_non_system_persona_can_be_deactivated_and_reactivated(self):
         now = datetime.now(UTC)

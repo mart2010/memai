@@ -1,4 +1,5 @@
 from datetime import datetime, UTC
+from pathlib import Path
 from uuid import UUID
 
 from memai_server.domain.events import ConversationBoundaryType, RecallTriggered
@@ -16,12 +17,14 @@ from memai_server.domain.model import (
     User,
 )
 from memai_server.services.ports import (
+    BundleInstallRecord,
     ConsolidationExtractor,
     ExtractionResult,
     ItemAssessment,
     MemoryItem,
     MemoryItemDraft,
     Message,
+    PersonaBundle,
     SelectedItem,
     SessionInfo,
     SessionLine,
@@ -198,6 +201,9 @@ class FakePersonaRepository:
     def get(self, persona_id: UUID) -> AssistantPersona | None:
         return self._personas.get(persona_id)
 
+    def get_by_key(self, persona_key: str) -> AssistantPersona | None:
+        return next((p for p in self._personas.values() if p.persona_key == persona_key), None)
+
     def list_all(self) -> list[AssistantPersona]:
         return list(self._personas.values())
 
@@ -208,14 +214,39 @@ class FakePersonaRepository:
         self._personas.pop(persona_id, None)
 
 
+class FakePersonaBundleSource:
+    def __init__(self, bundle: PersonaBundle) -> None:
+        self._bundle = bundle
+        self.loaded_paths: list[Path] = []
+
+    def load(self, path: Path) -> PersonaBundle:
+        self.loaded_paths.append(path)
+        return self._bundle
+
+
 class FakeUnitOfWork:
-    """No-op: fakes have no transactional storage to demarcate, unlike PSUnitOfWork."""
+    """No-op: fakes have no transactional storage to demarcate, unlike PSUnitOfWork.
+    Records enter/exit counts so tests can assert transaction granularity (per
+    conversation in consolidation, per lesson in bundle install)."""
+
+    def __init__(self) -> None:
+        self.enter_count = 0
+        self.exit_count = 0
 
     def __enter__(self) -> "FakeUnitOfWork":
+        self.enter_count += 1
         return self
 
     def __exit__(self, exc_type: object, exc_value: object, traceback: object) -> None:
-        pass
+        self.exit_count += 1
+
+
+class FakeBundleInstallLog:
+    def __init__(self) -> None:
+        self.records: list[BundleInstallRecord] = []
+
+    def append(self, record: BundleInstallRecord) -> None:
+        self.records.append(record)
 
 
 class FakeMemoryBriefRepository:
@@ -354,13 +385,21 @@ class FakeDisambiguationEvaluator:
 
 
 class FakeMemorySynthesizer:
+    def __init__(self) -> None:
+        self.episode_calls: list[tuple[str, str]] = []
+        self.concept_calls: list[tuple[Concept, str]] = []
+        self.procedure_calls: list[tuple[Procedure, str, list[str]]] = []
+
     def synthesize_episode(self, existing_summary: str, new_summary: str) -> str:
+        self.episode_calls.append((existing_summary, new_summary))
         return new_summary
 
     def synthesize_concept(self, existing: Concept, new_description: str) -> str:
+        self.concept_calls.append((existing, new_description))
         return new_description
 
     def synthesize_procedure(
         self, existing: Procedure, new_description: str, new_steps: list[str]
     ) -> tuple[str, list[str]]:
+        self.procedure_calls.append((existing, new_description, new_steps))
         return new_description, new_steps

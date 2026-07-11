@@ -37,6 +37,7 @@ tts = ["TTS>=0.22.0"]
 
 [project.scripts]
 memai-server = "memai_server.server:main"
+memai-bundle = "memai_server.bundle_cli:main"
 
 [dependency-groups]
 dev = [

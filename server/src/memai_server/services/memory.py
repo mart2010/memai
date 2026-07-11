@@ -1,9 +1,8 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 from datetime import datetime
-from enum import Enum
 from uuid import UUID
 
-from ..domain.model import EngagementLevel, MemoryBrief, MemoryType
+from ..domain.model import MemoryBrief, MemoryType
 from ..domain.protocols import WorthinessEvaluator
 from .ports import (
     ConsolidationExtractor,
@@ -20,48 +19,7 @@ from .ports import (
     UnitOfWork,
     UserRepository,
 )
-
-def _max_engagement(a: EngagementLevel, b: EngagementLevel) -> EngagementLevel:
-    return a if a >= b else b
-
-# Defaults match the values documented in CLAUDE.md's "Upsert similarity threshold"
-# section — placeholders pending calibration against real usage data. Real values are
-# read from [memory] in memai.toml (see infrastructure/config.py) and passed in by callers.
-DEFAULT_MERGE_THRESHOLD = 0.93
-DEFAULT_DISAMBIGUATE_THRESHOLD = 0.75
-
-
-class _MergeAction(Enum):
-    AUTO_MERGE = "auto_merge"
-    DISAMBIGUATE = "disambiguate"
-    AUTO_INSERT = "auto_insert"
-
-
-def _merge_action(similarity: float, merge_threshold: float, disambiguate_threshold: float) -> _MergeAction:
-    if similarity >= merge_threshold:
-        return _MergeAction.AUTO_MERGE
-    if similarity >= disambiguate_threshold:
-        return _MergeAction.DISAMBIGUATE
-    return _MergeAction.AUTO_INSERT
-
-
-def _existing_to_merge(
-    candidates: list[tuple[float, MemoryItem]],
-    candidate: MemoryItem,
-    disambiguator: DisambiguationEvaluator,
-    merge_threshold: float,
-    disambiguate_threshold: float,
-) -> MemoryItem | None:
-    """Returns the existing record to merge into, or None to insert as new."""
-    if not candidates:
-        return None
-    similarity, best = candidates[0]
-    action = _merge_action(similarity, merge_threshold, disambiguate_threshold)
-    if action == _MergeAction.AUTO_INSERT:
-        return None
-    if action == _MergeAction.AUTO_MERGE:
-        return best
-    return best if disambiguator.is_same(best, candidate) else None
+from .upsert import DEFAULT_DISAMBIGUATE_THRESHOLD, DEFAULT_MERGE_THRESHOLD, MemoryUpserter
 
 
 class TriggerRecall:
@@ -92,17 +50,18 @@ class ConsolidateMemory:
     ) -> None:
         self._conversation_repo = conversation_repo
         self._memory_repo = memory_repo
-        self._embedding_service = embedding_service
         self._extractor = extractor
         self._worthiness_evaluator = worthiness_evaluator
-        self._disambiguator = disambiguator
-        self._synthesizer = synthesizer
         self._unit_of_work = unit_of_work
         self._user_repo = user_repo
         # persona_id -> assessment strategy; personas without one (e.g. GA) are skipped.
         self._assessment_strategies = assessment_strategies or {}
-        self._merge_threshold = merge_threshold
-        self._disambiguate_threshold = disambiguate_threshold
+        # Shared merge-or-insert pipeline, also used by InstallPersonaBundle — bundle
+        # content and extracted content deduplicate through the exact same path.
+        self._upserter = MemoryUpserter(
+            memory_repo, embedding_service, disambiguator, synthesizer,
+            merge_threshold, disambiguate_threshold,
+        )
 
     def execute(self) -> int:
         """Synchronous by design: every step here (LLM extraction/evaluation/synthesis,
@@ -126,57 +85,13 @@ class ConsolidateMemory:
                 # unconditionally: knowledge is worth keeping regardless of conversation quality.
                 if worthy:
                     for episode in extraction.episodes:
-                        episode.embedding = self._embedding_service.embed(episode.summary)
-                        candidates = self._memory_repo.search(episode.embedding, (MemoryType.EPISODE,), top_n=1)
-                        existing = _existing_to_merge(
-                            candidates, episode, self._disambiguator,
-                            self._merge_threshold, self._disambiguate_threshold,
-                        )
-                        if existing is not None:
-                            episode.summary = self._synthesizer.synthesize_episode(existing.summary, episode.summary)
-                            episode.embedding = self._embedding_service.embed(episode.summary)
-                            episode.id = existing.id
-                        episode.id = self._memory_repo.upsert_episode(episode)
+                        self._upserter.upsert_episode(episode)
 
                 for concept in extraction.concepts:
-                    concept.embedding = self._embedding_service.embed(f"{concept.name}: {concept.description}")
-                    candidates = self._memory_repo.search(
-                        concept.embedding, (MemoryType.CONCEPT,), top_n=1,
-                        persona_id=conversation.persona_id,
-                    )
-                    existing = _existing_to_merge(
-                        candidates, concept, self._disambiguator,
-                        self._merge_threshold, self._disambiguate_threshold,
-                    )
-                    if existing is not None:
-                        concept.description = self._synthesizer.synthesize_concept(existing, concept.description)
-                        concept.embedding = self._embedding_service.embed(f"{concept.name}: {concept.description}")
-                        concept.engagement_level = _max_engagement(existing.engagement_level, concept.engagement_level)
-                        # An existing category (curated bundle content or an earlier
-                        # extraction) wins; the new extraction only fills a gap.
-                        concept.category = existing.category or concept.category
-                        concept.id = existing.id
-                    concept.id = self._memory_repo.upsert_concept(concept)
+                    self._upserter.upsert_concept(concept, conversation.persona_id)
 
                 for procedure in extraction.procedures:
-                    procedure.embedding = self._embedding_service.embed(f"{procedure.name}: {procedure.description}")
-                    candidates = self._memory_repo.search(
-                        procedure.embedding, (MemoryType.PROCEDURE,), top_n=1,
-                        persona_id=conversation.persona_id,
-                    )
-                    existing = _existing_to_merge(
-                        candidates, procedure, self._disambiguator,
-                        self._merge_threshold, self._disambiguate_threshold,
-                    )
-                    if existing is not None:
-                        procedure.description, procedure.steps = self._synthesizer.synthesize_procedure(
-                            existing, procedure.description, procedure.steps
-                        )
-                        procedure.embedding = self._embedding_service.embed(f"{procedure.name}: {procedure.description}")
-                        procedure.engagement_level = _max_engagement(existing.engagement_level, procedure.engagement_level)
-                        procedure.category = existing.category or procedure.category
-                        procedure.id = existing.id
-                    procedure.id = self._memory_repo.upsert_procedure(procedure)
+                    self._upserter.upsert_procedure(procedure, conversation.persona_id)
 
                 # Persona assessment hook — runs AFTER upsert so newly inserted items have
                 # ids and their first exposure is assessable. The returned persona_state

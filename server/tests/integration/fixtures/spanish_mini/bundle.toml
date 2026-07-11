@@ -1,0 +1,33 @@
+# Hand-written mini bundle for integration testing (and the workstation
+# `memai-bundle install` smoke run). 2 lessons, 5 items.
+format_version = 1
+persona_key = "memai-test/spanish-mini"
+
+[bundle]
+name = "spanish-mini"
+version = "1.0.0"
+author = "memai-tests"
+description = "Hand-written mini bundle for integration testing — 2 lessons, 5 items."
+
+[provenance]
+generator_model = "hand-written"
+generated_at = 2026-07-11
+
+[persona]
+name = "Profesora Mini"
+system_prompt = "You are a friendly Spanish tutor for absolute beginners. Speak slowly and simply, and never use markdown."
+languages = ["es"]
+response_language = "es"
+
+# "default" (native-teacher anchor) deliberately omitted — the installer must
+# derive it from User.primary_language (pair-independence rule).
+[persona.voices]
+target_teacher = "ef_dora"
+
+[persona.settings]
+elicitation_cap = 2
+
+[persona.settings.pair_difficulty]
+en = 1.0
+fr = 1.2
+"*" = 1.5

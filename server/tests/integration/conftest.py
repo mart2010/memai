@@ -21,7 +21,8 @@ _TEST_DB_URL = os.environ.get(
 # Dedicated database, never the dev `memai` database — integration tests truncate all
 # tables between runs, which would destroy real conversation history if pointed there.
 _TABLES_TO_TRUNCATE = (
-    "turns", "conversations", "episodes", "concepts", "procedures", "memory_brief", "personas", "users"
+    "turns", "conversations", "episodes", "concepts", "procedures", "memory_brief",
+    "personas", "users", "bundle_installs",
 )
 
 

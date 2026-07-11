@@ -1,0 +1,23 @@
+title = "Greetings"
+
+[[items]]
+type = "concept"
+name = "hola"
+category = "function_word"
+language = "es"
+description = "'Hola' is the universal Spanish greeting, usable at any time of day in both formal and informal situations."
+
+[[items]]
+type = "concept"
+name = "buenos días"
+category = "function_word"
+language = "es"
+description = "'Buenos días' means 'good morning' and is used until roughly midday; slightly more formal than 'hola'."
+
+[[items]]
+type = "procedure"
+name = "greeting someone politely"
+category = "construction"
+language = "es"
+description = "A polite greeting exchange: greet, ask how the other person is doing, then answer the same question when it is returned."
+steps = ["hola / buenos días", "¿cómo está usted?", "bien, gracias, ¿y usted?"]

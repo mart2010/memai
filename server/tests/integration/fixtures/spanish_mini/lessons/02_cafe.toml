@@ -1,0 +1,16 @@
+title = "Ordering at a café"
+
+[[items]]
+type = "concept"
+name = "el café"
+category = "noun"
+language = "es"
+description = "'El café' names both the drink (coffee) and the place (a café); it is a masculine noun."
+
+[[items]]
+type = "procedure"
+name = "ordering a coffee"
+category = "construction"
+language = "es"
+description = "Ordering politely: attract the waiter's attention, order using 'quisiera' (I would like), and thank them."
+steps = ["perdone", "quisiera un café, por favor", "gracias"]

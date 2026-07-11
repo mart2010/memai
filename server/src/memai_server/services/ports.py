@@ -2,6 +2,7 @@
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import AsyncIterator, Protocol
 from uuid import UUID
 
@@ -180,6 +181,100 @@ class PersonaAssessmentPort(Protocol):
     ) -> Sequence[ItemAssessment]: ...
 
 
+# ---------------------------------------------------------------------------
+# Persona bundle port — Phase 11. The bundle FILE FORMAT is the contract between
+# memai and any external authoring tool (see docs/BRIEF_phase11_bundle_format.md):
+# memai owns this envelope schema, authors own all content vocabulary. These value
+# objects are the parsed in-memory form of that format.
+# ---------------------------------------------------------------------------
+
+# The bundle-format contract version this memai release can read.
+BUNDLE_FORMAT_VERSION = 1
+
+
+class BundleFormatError(ValueError):
+    """A bundle failed parse-and-reject validation (missing manifest, unsupported
+    format_version, malformed lesson/item). Phase 11's only validation layer — the
+    standalone `memai-bundle validate` CLI is a deferred non-goal."""
+
+
+@dataclass(frozen=True)
+class BundleItemSpec:
+    """One [[items]] entry from a lesson file. Deliberately NOT a domain entity yet:
+    persona_id is resolved by the installer (the persona may not exist until install),
+    engagement_level is always forced to UNSEEN (a bundle cannot claim the user knows
+    things), and the embedding is computed at install time."""
+    memory_type: MemoryType  # CONCEPT or PROCEDURE only — bundles never contain episodes
+    name: str
+    description: str
+    language: Language  # language of first introduction (existing invariant)
+    category: str | None = None  # persona-interpreted free text
+    steps: tuple[str, ...] = ()  # procedures only
+
+
+@dataclass(frozen=True)
+class BundleLesson:
+    """A lesson is ordering only: filename sort order defines curriculum order, which
+    survives import as ascending SERIAL id (insertion order is the contract). No other
+    lesson structure is persisted; `title` inside the file is authoring metadata."""
+    filename: str
+    items: tuple[BundleItemSpec, ...]
+
+
+@dataclass(frozen=True)
+class BundlePersonaDefinition:
+    """The optional [persona] table — required only when the persona may not exist yet;
+    content-only bundles (e.g. cognate accelerators) omit it. `voices` MAY omit the
+    "default" role: the installer derives it from User.primary_language (the native-
+    teacher anchor is pair-dependent, so the bundle stays pair-independent)."""
+    name: str
+    system_prompt: str
+    languages: tuple[Language, ...]
+    response_language: Language
+    voices: dict[str, str]
+    settings: dict | None = None  # copied VERBATIM to AssistantPersona.settings
+
+
+@dataclass(frozen=True)
+class PersonaBundle:
+    persona_key: str  # author-namespaced, e.g. "meo/spanish-tutor"
+    name: str
+    version: str
+    author: str
+    description: str
+    # The manifest's [bundle] + [provenance] tables verbatim (JSON-safe) — persisted
+    # as-is to the bundle_installs provenance log, never read by any code path.
+    manifest: dict
+    persona: BundlePersonaDefinition | None
+    lessons: tuple[BundleLesson, ...]  # already in lesson-filename sort order
+
+
+class PersonaBundleSource(Protocol):
+    def load(self, path: Path) -> PersonaBundle:
+        """Parses and validates a bundle directory; raises BundleFormatError on any
+        malformation. Read-only — memai never writes bundles."""
+        ...
+
+
+@dataclass(frozen=True)
+class BundleInstallRecord:
+    """One append-only provenance row per install run. Nothing reads it in any code
+    path (same rationale as episodes.origin_conversation_id); deliberately NOT a
+    reinstall guard — reinstalls are idempotent by merge."""
+    persona_key: str
+    bundle_name: str
+    bundle_version: str
+    bundle_author: str
+    installed_at: datetime
+    items_inserted: int
+    items_merged: int
+    manifest: dict  # the bundle's [bundle] + [provenance] tables, verbatim
+
+
+class BundleInstallLog(Protocol):
+    def append(self, record: BundleInstallRecord) -> None: ...
+
+
 class DisambiguationEvaluator(Protocol):
     def is_same(self, existing: MemoryItem, candidate: MemoryItem) -> bool: ...
 
@@ -192,6 +287,7 @@ class MemorySynthesizer(Protocol):
 
 class PersonaRepository(Protocol):
     def get(self, persona_id: UUID) -> AssistantPersona | None: ...
+    def get_by_key(self, persona_key: str) -> AssistantPersona | None: ...
     def list_all(self) -> list[AssistantPersona]: ...
     def save(self, persona: AssistantPersona) -> None: ...
     def delete(self, persona_id: UUID) -> None: ...

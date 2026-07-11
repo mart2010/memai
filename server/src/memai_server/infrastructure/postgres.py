@@ -28,7 +28,7 @@ from ..domain.model import (
     Turn,
     User,
 )
-from ..services.ports import MemoryItem
+from ..services.ports import BundleInstallRecord, MemoryItem
 
 
 def connect(dsn: str) -> psycopg.Connection:
@@ -65,9 +65,15 @@ class PSUnitOfWork:
 # Internal helpers
 # ---------------------------------------------------------------------------
 
+_PERSONA_COLUMNS = (
+    "id, name, system_prompt, languages, response_language, voices, is_system, "
+    "created_at, updated_at, speaking_rate, is_active, persona_key, settings"
+)
+
+
 def _row_to_persona(row: tuple) -> AssistantPersona:
     (id_, name, system_prompt, languages, response_language, voices, is_system,
-     created_at, updated_at, speaking_rate, is_active) = row
+     created_at, updated_at, speaking_rate, is_active, persona_key, settings) = row
     return AssistantPersona(
         id=id_,
         name=name,
@@ -80,6 +86,8 @@ def _row_to_persona(row: tuple) -> AssistantPersona:
         updated_at=updated_at,
         speaking_rate=speaking_rate,
         is_active=is_active,
+        persona_key=persona_key,
+        settings=settings,
     )
 
 
@@ -145,12 +153,15 @@ class PSPersonaRepository:
 
     def get(self, persona_id: UUID) -> AssistantPersona | None:
         with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, system_prompt, languages, response_language, voices, is_system, "
-                "created_at, updated_at, speaking_rate, is_active "
-                "FROM personas WHERE id = %s",
-                (persona_id,),
-            )
+            cur.execute(f"SELECT {_PERSONA_COLUMNS} FROM personas WHERE id = %s", (persona_id,))
+            row = cur.fetchone()
+            if row is None:
+                return None
+            return _row_to_persona(row)
+
+    def get_by_key(self, persona_key: str) -> AssistantPersona | None:
+        with self._conn.cursor() as cur:
+            cur.execute(f"SELECT {_PERSONA_COLUMNS} FROM personas WHERE persona_key = %s", (persona_key,))
             row = cur.fetchone()
             if row is None:
                 return None
@@ -158,20 +169,19 @@ class PSPersonaRepository:
 
     def list_all(self) -> list[AssistantPersona]:
         with self._conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, name, system_prompt, languages, response_language, voices, is_system, "
-                "created_at, updated_at, speaking_rate, is_active FROM personas"
-            )
+            cur.execute(f"SELECT {_PERSONA_COLUMNS} FROM personas")
             return [_row_to_persona(row) for row in cur.fetchall()]
 
     def save(self, persona: AssistantPersona) -> None:
+        # persona_key is deliberately absent from the UPDATE branch: like is_system, it is
+        # identity set at creation (by the bundle installer) and never reassigned.
         with self._conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO personas
                     (id, name, system_prompt, languages, response_language, voices, is_system,
-                     created_at, updated_at, speaking_rate, is_active)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     created_at, updated_at, speaking_rate, is_active, persona_key, settings)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     name = EXCLUDED.name,
                     system_prompt = EXCLUDED.system_prompt,
@@ -180,7 +190,8 @@ class PSPersonaRepository:
                     voices = EXCLUDED.voices,
                     updated_at = EXCLUDED.updated_at,
                     speaking_rate = EXCLUDED.speaking_rate,
-                    is_active = EXCLUDED.is_active
+                    is_active = EXCLUDED.is_active,
+                    settings = EXCLUDED.settings
                 """,
                 (
                     persona.id,
@@ -194,6 +205,8 @@ class PSPersonaRepository:
                     persona.updated_at,
                     persona.speaking_rate,
                     persona.is_active,
+                    persona.persona_key,
+                    Jsonb(persona.settings) if persona.settings is not None else None,
                 ),
             )
 
@@ -613,4 +626,37 @@ class PSMemoryBriefRepository:
                     updated_at = EXCLUDED.updated_at
                 """,
                 (brief.content, brief.created_at, brief.updated_at),
+            )
+
+
+# ---------------------------------------------------------------------------
+# PSBundleInstallLog
+# ---------------------------------------------------------------------------
+
+class PSBundleInstallLog:
+    """Append-only — no read methods by design; the table exists for provenance
+    queries by hand ("which installed content came from where/what generator")."""
+
+    def __init__(self, conn: psycopg.Connection) -> None:
+        self._conn = conn
+
+    def append(self, record: BundleInstallRecord) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO bundle_installs
+                    (persona_key, bundle_name, bundle_version, bundle_author,
+                     installed_at, items_inserted, items_merged, manifest)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    record.persona_key,
+                    record.bundle_name,
+                    record.bundle_version,
+                    record.bundle_author,
+                    record.installed_at,
+                    record.items_inserted,
+                    record.items_merged,
+                    Jsonb(record.manifest),
+                ),
             )

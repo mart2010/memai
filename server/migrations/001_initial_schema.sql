@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS personas (
     created_at        TIMESTAMPTZ      NOT NULL,
     updated_at        TIMESTAMPTZ      NOT NULL,
     speaking_rate     DOUBLE PRECISION NOT NULL DEFAULT 1.0,
-    is_active         BOOLEAN          NOT NULL DEFAULT TRUE
+    is_active         BOOLEAN          NOT NULL DEFAULT TRUE,
+    persona_key       TEXT             UNIQUE,                 -- author-namespaced bundle identity (e.g. 'meo/spanish-tutor'); NULL for GA and user-created personas
+    settings          JSONB                                    -- opaque persona-owned tunables; read only by the persona's own strategies (same leak-prevention contract as persona_state)
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -99,6 +101,22 @@ CREATE TABLE IF NOT EXISTS procedures (
     created_at       TIMESTAMPTZ NOT NULL,
     updated_at       TIMESTAMPTZ NOT NULL,
     embedding        vector(1024)
+);
+
+-- Append-only provenance log: one row per bundle install ("which installed content came
+-- from where/what generator" — same rationale as episodes.origin_conversation_id).
+-- Nothing reads it in any code path, and it is deliberately NOT a reinstall guard.
+-- persona_key is a plain TEXT, not an FK: the log must survive persona deletion.
+CREATE TABLE IF NOT EXISTS bundle_installs (
+    id             BIGSERIAL   PRIMARY KEY,
+    persona_key    TEXT        NOT NULL,
+    bundle_name    TEXT        NOT NULL,
+    bundle_version TEXT        NOT NULL,
+    bundle_author  TEXT        NOT NULL,
+    installed_at   TIMESTAMPTZ NOT NULL,
+    items_inserted INTEGER     NOT NULL,
+    items_merged   INTEGER     NOT NULL,
+    manifest       JSONB       NOT NULL   -- the bundle's [bundle] + [provenance] tables, verbatim
 );
 
 CREATE TABLE IF NOT EXISTS memory_brief (

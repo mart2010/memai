@@ -1285,19 +1285,52 @@ the port** between memai and any (external, future, possibly commercial) authori
 authoring tool itself, the standalone validator CLI, and the content quality/safety
 review pass are all explicitly out of Phase 11 scope (see brief's Non-goals).
 
-- [ ] Schema + domain: `personas.persona_key TEXT NULL UNIQUE` (author-namespaced
+- [x] Schema + domain: `personas.persona_key TEXT NULL UNIQUE` (author-namespaced
       identity, e.g. `meo/spanish-tutor`, convention-enforced — no registry),
       `personas.settings JSONB NULL` (opaque persona-owned tunables, e.g. the
       learner-language-keyed `pair_difficulty` map; same leak-prevention contract as
       `persona_state`), new `bundle_installs` append-only provenance log
-- [ ] Refactor: extract the merge-or-insert upsert machinery
+      (2026-07-11) — `001_initial_schema.sql` edited in place; `AssistantPersona` gained
+      `persona_key`/`settings` (both default `None`; GA seed untouched);
+      `PersonaRepository.get_by_key()` added to port + `PSPersonaRepository` + Fake.
+      **`persona_key` is excluded from the save() UPDATE branch** (like `is_system`):
+      identity set at creation by the installer, structurally never reassigned.
+      `bundle_installs.persona_key` is plain TEXT, no FK — the provenance log must
+      survive persona deletion. Unit tests green (105 passed on laptop; the separate
+      `test_config.py` collection error is just this laptop's frozen venv missing
+      `platformdirs`, a declared dep — runs on the workstation). New integration tests
+      (round-trip, `get_by_key`, unique violation, key-not-reassigned) written but
+      pending the workstation run + schema re-apply, tracked with the step-6 item.
+- [x] Refactor: extract the merge-or-insert upsert machinery
       (`_merge_action`/`_existing_to_merge` + embedding + synthesis) from
       `ConsolidateMemory` into a shared upserter used by both consolidation and the
-      installer — pure move, no behavior change
-- [ ] `PersonaBundleSource` port + TOML reader adapter — bundle = directory
+      installer — pure move, no behavior change (2026-07-11) — new
+      `services/upsert.py`: `MemoryUpserter.upsert_episode/upsert_concept/upsert_procedure`
+      (mutate item in place, return True on merge — the merged-flag return is the one
+      API addition, for the installer's inserted/merged provenance counts; consolidation
+      ignores it). Thresholds/`_MergeAction`/`_existing_to_merge`/`_max_engagement`
+      moved there; `ConsolidateMemory`'s constructor signature is unchanged (it builds
+      the upserter internally from its already-injected ports), so no construction
+      site — server.py or tests — changed. 105 unit tests green, ruff clean (same 2
+      pre-existing E741s only).
+- [x] `PersonaBundleSource` port + TOML reader adapter — bundle = directory
       (`bundle.toml` manifest + `lessons/*.toml`, ~15–40 `[[items]]` per lesson file);
       stdlib `tomllib`, read-only; `format_version = 1` from day one
-- [ ] `InstallPersonaBundle` use case — one-shot, session loop never calls it; persona
+      (2026-07-11) — port + parsed-form value objects in `services/ports.py`
+      (`PersonaBundle`, `BundleLesson`, `BundleItemSpec`, `BundlePersonaDefinition`,
+      `BundleFormatError`, `BUNDLE_FORMAT_VERSION`); adapter
+      `infrastructure/bundle_toml.py` (`TomlPersonaBundleSource`). Items are format-level
+      specs, NOT domain entities — persona_id doesn't exist at parse time (the installer
+      resolves/creates the persona), engagement_level/embedding are installer-owned.
+      Parse-and-reject enforces the spec's negative rules via an item-key allowlist:
+      a bundle shipping `engagement_level`/`persona_state`/`embedding` is rejected
+      loudly, as are steps-on-a-concept, unknown item types, empty lessons, and missing
+      required fields. `[persona]` may omit `voices["default"]` (installer derives it).
+      Manifest `[bundle]`+`[provenance]` kept verbatim for the provenance log, with TOML
+      dates coerced to ISO strings (JSONB-safe). `FakePersonaBundleSource` added.
+      21 new unit tests (happy paths incl. filename-sort ordering + 15 rejection cases);
+      126 unit tests green on laptop, ruff clean.
+- [x] `InstallPersonaBundle` use case — one-shot, session loop never calls it; persona
       exists (by `persona_key`) → attach content, absent → create from `[persona]`
       (upgrade/overwrite semantics deferred); per-lesson `UnitOfWork`; recovery =
       re-run (idempotent by merge; exact-duplicate short-circuit optimization); items
@@ -1306,14 +1339,84 @@ review pass are all explicitly out of Phase 11 scope (see brief's Non-goals).
       order; Phase 12 selection tiebreaks UNSEEN by ascending id); pair-independence
       rules: `voices["default"]` derived from `User.primary_language` when omitted,
       pair-specific content ships in per-pair accelerator bundles
-- [ ] `memai-bundle install <path>` console script on the server package (needs
+      (2026-07-11) — `services/bundle_install.py`: `InstallPersonaBundle`,
+      `BundleInstallResult` (persona_id, persona_created, counts, notices),
+      `BundleInstallError` (well-formed bundle, install can't proceed — distinct from
+      `BundleFormatError`). Voice derivation comes in as a `default_voice_for:
+      Callable[[Language], str]` constructor param (composition root wires the same
+      `KOKORO_DEFAULT_VOICES` lookup onboarding uses — the use case can't import
+      infrastructure). **Open question resolved — `languages` union semantics**: bundle's
+      target list in bundle order, `User.primary_language` appended iff not already
+      present. Persona creation requires an onboarded user (primary_language set) —
+      clear error otherwise; the attach path needs no user at all. Existing-persona +
+      `[persona]` in bundle → definition ignored with a notice in the result (upgrade
+      deferred). Exact-duplicate short-circuit implemented in `MemoryUpserter` (same
+      name+description — steps included for procedures — skips LLM synthesis and
+      re-embed; max-engagement/category rules still apply, so a reinstall can't
+      downgrade knowledge). Provenance via new `BundleInstallLog` port +
+      `BundleInstallRecord` VO (ports.py), `PSBundleInstallLog` (postgres.py, append-only,
+      no read methods by design), `FakeBundleInstallLog`; `FakeUnitOfWork` now counts
+      enter/exit so tests assert per-lesson granularity; `FakeMemorySynthesizer` now
+      records calls. 21 new unit tests (6 upserter contract incl. short-circuit,
+      15 installer) → 147 green on laptop; `PSBundleInstallLog` integration test +
+      `bundle_installs` added to conftest truncate list, queued for the workstation run.
+- [~] `memai-bundle install <path>` console script on the server package (needs
       embedding model + DB + config); documented run-while-idle caveat
-- [ ] Hand-written mini-bundle fixture + unit tests + integration test (real Postgres,
+      (2026-07-11) — `bundle_cli.py` + `[project.scripts]` entry written and ruff-clean;
+      thin composition root mirroring `server.py`'s `main()` (truststore inject,
+      `load_config`, `postgres.connect`, `SentenceTransformerEmbeddingService`,
+      Ollama disambiguator/synthesizer, `KOKORO_DEFAULT_VOICES`-based
+      `default_voice_for` — same derivation as onboarding). Exit 1 with a clean message
+      on `BundleFormatError`/`BundleInstallError`. **Marked [~] not [x]: the entry point
+      only registers via `uv sync`, impossible on this laptop (numpy lock) — live
+      verification is part of the workstation checklist below.**
+- [~] Hand-written mini-bundle fixture + unit tests + integration test (real Postgres,
       GPU workstation)
-- [ ] Authoring guide doc (replaces the former "multi-pass LLM authoring strategy" code
+      (2026-07-11, laptop half done) — committed fixture
+      `server/tests/integration/fixtures/spanish_mini/` (persona_key
+      `memai-test/spanish-mini`, `[persona]` with voices omitting "default" to exercise
+      derivation, 2 lessons / 5 items, es content) — parse verified live against the real
+      `TomlPersonaBundleSource` on the laptop, including the TOML-date→ISO coercion.
+      `tests/integration/test_bundle_install.py`: real TOML reader + real repos/UoW/
+      pgvector, Fakes only for LLM ports, and a **hash-seeded deterministic
+      `HashEmbeddingService`** (distinct texts → near-orthogonal vectors → insert;
+      identical text → identical vector → similarity 1.0 → exact-duplicate merge) — a
+      constant-vector fake would falsely auto-merge distinct items through real pgvector.
+      Covers: fresh install (persona created, voices/languages/settings, curriculum order
+      as ascending SERIAL ids, `unseen` in DB, real search round-trip) and reinstall
+      (0 inserted / 5 merged, zero synthesis calls, persona untouched + notice, two
+      append-only `bundle_installs` rows). Remaining: run it on the workstation.
+
+      **Workstation checklist (in order):**
+      1. `git status` first (dirty-tree risk, see Phase 10), then `git pull`
+      2. `uv lock --upgrade-package numpy` (pending from Phase 10 — un-freezes the laptop)
+      3. `uv sync --system-certs` (registers `memai-bundle`; `--native-tls` is deprecated)
+      4. Dev-DB schema: `ALTER TABLE personas ADD COLUMN persona_key TEXT UNIQUE, ADD
+         COLUMN settings JSONB;` (CREATE TABLE IF NOT EXISTS won't add columns), then
+         re-run `001_initial_schema.sql` (creates `bundle_installs`, confirms
+         idempotency). `memai_test` needs nothing — conftest recreates it.
+      5. Full suite: 147 unit + `test_config.py` + all integration (6 new
+         `test_postgres.py` tests, 2 new `test_bundle_install.py` tests, 5 known
+         voice-pack skips)
+      6. Live smoke: `memai-bundle install server/tests/integration/fixtures/spanish_mini`
+         against the dev DB (real embedding + Ollama), then re-run → expect 0 inserted /
+         5 merged, near-instant. No proxy env vars on the process. Cleanup: delete the
+         `memai-test/spanish-mini` persona (cascade removes its items; `bundle_installs`
+         rows survive by design).
+      7. Update PLAN.md markers, push back
+- [x] Authoring guide doc (replaces the former "multi-pass LLM authoring strategy" code
       item): roster workflow, no-two-unknowns, ephemeral-generation, MEO-BR
       lesson-ordering template — doubles as the seed requirements doc for the future
       authoring app
+      (2026-07-11) — `docs/AUTHORING_BUNDLES.md`: format ground rules (installer-enforced
+      negatives, ~300-word cap, insertion-order contract, persona_key namespacing),
+      pair-independence + accelerator guidance, the settled category taxonomy tables,
+      the 4-pass roster workflow (roster → no-two-unknowns ordering validation →
+      descriptions → review + provenance stamping), ephemeral-generation, the MEO-BR
+      lesson-ordering template (with the Zipf token-coverage caveat), and the
+      requirements-seed checklist for the future authoring app (no-two-unknowns
+      validator flagged as the highest-value automation; format-is-the-only-coupling
+      restated; knowledge-profile export as the per-user path).
 
 ---
 

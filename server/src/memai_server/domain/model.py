@@ -69,6 +69,13 @@ class AssistantPersona:
     updated_at: datetime
     speaking_rate: float = 1.0  # persona-scoped TTS rate, e.g. a language tutor may want it slower than GA
     is_active: bool = True
+    # Author-namespaced bundle identity (e.g. "meo/spanish-tutor"), unique by convention;
+    # None for GA and user-created personas. Set once at bundle install, never reassigned.
+    persona_key: str | None = None
+    # Opaque persona-owned tunables, copied verbatim from a bundle's [persona.settings].
+    # Read only by the owning persona's own strategies; generic code never branches on
+    # its contents (same leak-prevention contract as persona_state, one level up).
+    settings: dict | None = None
 
     def __post_init__(self) -> None:
         if DEFAULT_VOICE_ROLE not in self.voices:

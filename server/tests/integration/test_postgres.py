@@ -21,6 +21,7 @@ from memai_server.domain.model import (
     User,
 )
 from memai_server.infrastructure.postgres import (
+    PSBundleInstallLog,
     PSConversationRepository,
     PSMemoryBriefRepository,
     PSMemoryRepository,
@@ -28,6 +29,7 @@ from memai_server.infrastructure.postgres import (
     PSUnitOfWork,
     PSUserRepository,
 )
+from memai_server.services.ports import BundleInstallRecord
 
 _NOW = datetime.now(UTC)
 _DIM = 1024
@@ -129,6 +131,44 @@ class TestPSPersonaRepository:
         loaded = repo.get(persona.id)
         assert loaded.voices == {"default": "ff_siwis", "target_teacher": "ef_dora"}
         assert loaded.default_voice == "ff_siwis"
+
+    def test_persona_key_and_settings_round_trip(self, pg_conn: psycopg.Connection) -> None:
+        """Phase 11: bundle-installed personas carry persona_key + opaque settings."""
+        repo = PSPersonaRepository(pg_conn)
+        settings = {"elicitation_cap": 2, "pair_difficulty": {"en": 1.0, "*": 1.5}}
+        persona = _persona(persona_key="meo/spanish-tutor", settings=settings)
+        repo.save(persona)
+        loaded = repo.get(persona.id)
+        assert loaded.persona_key == "meo/spanish-tutor"
+        assert loaded.settings == settings
+
+    def test_get_by_key(self, pg_conn: psycopg.Connection) -> None:
+        repo = PSPersonaRepository(pg_conn)
+        persona = _persona(persona_key="meo/spanish-tutor")
+        repo.save(persona)
+        repo.save(_persona())  # keyless persona must not match
+        loaded = repo.get_by_key("meo/spanish-tutor")
+        assert loaded is not None
+        assert loaded.id == persona.id
+        assert repo.get_by_key("meo/absent") is None
+
+    def test_persona_key_is_unique(self, pg_conn: psycopg.Connection) -> None:
+        """Uniqueness only has to hold within one installation (convention-enforced
+        namespace, no registry) — but within it, the DB constraint is the guard."""
+        repo = PSPersonaRepository(pg_conn)
+        repo.save(_persona(persona_key="meo/spanish-tutor"))
+        with pytest.raises(psycopg.errors.UniqueViolation):
+            repo.save(_persona(persona_key="meo/spanish-tutor"))
+
+    def test_save_conflict_does_not_reassign_persona_key(self, pg_conn: psycopg.Connection) -> None:
+        """persona_key is identity set at creation (like is_system): the upsert UPDATE
+        branch structurally excludes it, so a later save cannot reassign it."""
+        repo = PSPersonaRepository(pg_conn)
+        persona = _persona(persona_key="meo/spanish-tutor")
+        repo.save(persona)
+        persona.persona_key = "meo/renamed-tutor"
+        repo.save(persona)
+        assert repo.get(persona.id).persona_key == "meo/spanish-tutor"
 
 
 class TestPSConversationRepository:
@@ -350,6 +390,45 @@ class TestPSMemoryRepository:
         memory_repo = PSMemoryRepository(pg_conn)
         with pytest.raises(ValueError, match="episode"):
             memory_repo.update_persona_state(MemoryType.EPISODE, 1, {"x": 1})
+
+
+class TestPSBundleInstallLog:
+    def test_append_persists_provenance_row(self, pg_conn: psycopg.Connection) -> None:
+        """Phase 11: append-only provenance log — no read path in code, so verify via
+        raw cursor. persona_key deliberately has no FK (log survives persona deletion)."""
+        log = PSBundleInstallLog(pg_conn)
+        log.append(BundleInstallRecord(
+            persona_key="meo/spanish-tutor",
+            bundle_name="spanish-a1",
+            bundle_version="1.0.0",
+            bundle_author="meo",
+            installed_at=_NOW,
+            items_inserted=598,
+            items_merged=2,
+            manifest={"bundle": {"name": "spanish-a1"}, "provenance": {"generated_at": "2026-07-15"}},
+        ))
+        log.append(BundleInstallRecord(
+            persona_key="meo/spanish-tutor",
+            bundle_name="spanish-a1",
+            bundle_version="1.0.0",
+            bundle_author="meo",
+            installed_at=_NOW,
+            items_inserted=0,
+            items_merged=600,
+            manifest={"bundle": {}, "provenance": {}},
+        ))
+
+        with pg_conn.cursor() as cur:
+            cur.execute(
+                "SELECT persona_key, bundle_name, items_inserted, items_merged, manifest "
+                "FROM bundle_installs ORDER BY id"
+            )
+            rows = cur.fetchall()
+        # Two rows: append-only, deliberately NOT a reinstall guard.
+        assert len(rows) == 2
+        assert rows[0][:4] == ("meo/spanish-tutor", "spanish-a1", 598, 2)
+        assert rows[0][4]["provenance"]["generated_at"] == "2026-07-15"
+        assert rows[1][2:4] == (0, 600)
 
     def test_procedure_category_and_persona_state_round_trip(self, pg_conn: psycopg.Connection) -> None:
         persona_repo = PSPersonaRepository(pg_conn)
