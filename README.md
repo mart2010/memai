@@ -2,29 +2,48 @@
 
 **Your personal AI voice assistant — 100% private, 100% local, never leaves your home network.**
 
-No cloud. No subscriptions. No data ever sent to a third party. Memai runs entirely on your own hardware, using open-source models, and keeps every conversation, memory, and learned insight locked inside your home network.
+No cloud. No subscriptions. No data ever sent to a third party. Memai runs entirely on
+your own hardware, using open-source models, and keeps every conversation, memory, and
+learned insight locked inside your home network.
 
 ---
 
 ## What it does
 
-Memai is a real-time voice assistant that listens, thinks, and speaks — and actually gets to know you over time.
+Memai is a real-time voice assistant that listens, thinks, and speaks — and actually
+gets to know you over time.
 
-- **Talk naturally.** Speak into your microphone; Memai transcribes, reasons, and responds with synthesised speech in under a second.
-- **Remembers everything that matters.** After each session, Memai consolidates your conversations into structured long-term memory: episodic events, domain knowledge (Concepts), and how-to knowledge (Procedures). It recalls relevant memories when you need them.
-- **Grows with you.** Engagement levels track how well you know a subject — from first mention to full integration. Memory briefs keep the assistant grounded in your personal context at every session start.
-- **Multiple personas.** Switch between specialised assistants (language tutor, study partner, general assistant…) by voice, each with its own knowledge scope.
-- **Speaks your language.** Supports 17 languages out of the box: `en fr es de it pt pl tr ru nl cs ar zh-cn ja ko hu hi`.
+- **Talk naturally.** Speak into your microphone; Memai transcribes, reasons, and
+  responds with synthesised speech in under a second.
+- **Remembers what matters.** After each session, Memai consolidates your conversations
+  into structured long-term memory — the events of your life, the knowledge you've
+  explored, the know-how you've picked up — and recalls it when it's relevant.
+- **Grows with you.** Engagement levels track how deeply you know each subject, from
+  first mention to full integration. A fresh memory brief grounds the assistant in your
+  personal context at every session start.
+- **Becomes whoever you need.** Switch between specialised [**personas**](docs/PERSONAS.md)
+  by voice — each with its own knowledge scope, its own voice cast, and its own way of
+  working with you. The first specialist to ship: a research-grounded
+  [**language tutor**](docs/PERSONAS.md#the-language-tutor).
+- **Speaks your language.** Seven languages fully supported end-to-end: English, French,
+  Spanish, Italian, Portuguese, Japanese, and Mandarin Chinese. (Speech recognition
+  understands ~99 languages; the local TTS voices are the limiting factor, and the
+  supported set grows as they do.)
 
 ---
 
-## Cognitive inspiration
+## Built on how human memory actually works
 
-Memai's memory architecture is modelled on how human memory actually works, drawing from decades of cognitive science research and modern AI memory frameworks. The goal is not to simulate a brain — it is to make an assistant that *behaves* like one: remembering what matters, forgetting what does not, and deepening its understanding of you over time.
+Memai's memory architecture is modelled on decades of cognitive science research. The
+goal is not to simulate a brain — it is to make an assistant that *behaves* like one:
+remembering what matters, forgetting what does not, and deepening its understanding of
+you over time.
 
 ### Short-term memory — the working context
 
-Human short-term memory (STM) is a limited-capacity workspace that holds only what is immediately relevant. The LLM context window is its computational analogue — bounded, precious, and actively managed:
+Human short-term memory is a limited-capacity workspace that holds only what is
+immediately relevant. The LLM context window is its computational analogue — bounded,
+precious, and actively managed:
 
 - A **memory brief** (distilled persona and recurring themes) is injected at every session start
 - A **session tail** carries the most recent turns from the previous session when continuing a conversation
@@ -33,7 +52,8 @@ Human short-term memory (STM) is a limited-capacity workspace that holds only wh
 
 ### Long-term memory — three distinct subsystems
 
-Cognitive research distinguishes three types of long-term memory, each with different structure and retrieval characteristics. Memai implements all three:
+Cognitive research distinguishes three types of long-term memory, each with different
+structure and retrieval characteristics. Memai implements all three:
 
 | Human memory type | What it stores | Memai equivalent |
 |---|---|---|
@@ -41,25 +61,51 @@ Cognitive research distinguishes three types of long-term memory, each with diff
 | **Semantic** | Conceptual knowledge about the world | `Concept` — domain knowledge, persona-scoped, synthesised over time |
 | **Procedural** | How to do things | `Procedure` — step-by-step or heuristic know-how |
 
-All three types are stored as 1024-dimensional vector embeddings alongside their structured fields, enabling semantic similarity search at recall time.
+All three types are stored as 1024-dimensional vector embeddings alongside their
+structured fields, enabling semantic similarity search at recall time.
 
 ### Memory consolidation — the feedback loop
 
-In humans, memories are consolidated during sleep: the hippocampus replays recent experiences and integrates them into long-term cortical storage. Memai mirrors this with an **offline consolidation pass** triggered after each session ends:
+In humans, memories are consolidated during sleep: the hippocampus replays recent
+experiences and integrates them into long-term cortical storage. Memai mirrors this with
+an **offline consolidation pass** triggered after each session ends:
 
 1. Raw conversation turns are fed to an LLM, which extracts candidate Episodes, Concepts, and Procedures
 2. Each candidate is embedded and compared against existing long-term memory via vector similarity — merging with known memories above the threshold, or inserting as new ones below it
 3. A fresh memory brief is generated, ready for the next session
 
-This boundary between live conversation (read-only, low-latency) and offline consolidation (write-heavy, async) is a hard architectural invariant — keeping the real-time voice loop fast while ensuring nothing is ever lost.
+This boundary between live conversation (read-only, low-latency) and offline
+consolidation (write-heavy, async) is a hard architectural invariant — keeping the
+real-time voice loop fast while ensuring nothing is ever lost.
 
 ### Engagement levels — depth of learning
 
-Inspired by learning science (spaced repetition, the Ebbinghaus forgetting curve), Memai tracks how deeply each concept has been absorbed across sessions:
+Inspired by learning science (spaced repetition, the Ebbinghaus forgetting curve), Memai
+tracks how deeply each concept has been absorbed across sessions:
 
-`unseen → mentioned → explored → practiced → integrated`
+`unseen → mentioned → explored → integrated`
 
-A specialised persona uses this to calibrate responses to the user's actual level — introducing a concept gently the first time, and going deep once it is integrated. Concepts loaded from injected reference documents start as `unseen`; the progression unfolds naturally through conversation.
+A specialised persona uses this to calibrate responses to your actual level —
+introducing a concept gently the first time, and going deep once it is integrated.
+Concepts installed from a curated content bundle start as `unseen`; the progression
+unfolds naturally through conversation.
+
+---
+
+## Personas — one assistant, many specialists
+
+A persona is more than a system prompt: it is a specialist with its **own scoped
+long-term memory**, its own voice cast, and — for advanced personas — its own selection,
+assessment, and enrichment strategies plugged into the memory engine. "Big bang" means
+one thing to an astronomy tutor and another to a pop-culture companion; Memai keeps them
+apart by design.
+
+The first shipped specialist is a **language tutor** built on second-language-acquisition
+research: two teacher voices (a fixed native-language anchor and a rotating
+target-language voice for phoneme variety), spaced repetition driven by your actual
+retrieval performance, and vocabulary anchored to your own memories.
+
+**[Read the full personas story →](docs/PERSONAS.md)**
 
 ---
 
@@ -91,25 +137,27 @@ Microphone → [VAD] → WebSocket → [STT] → [LLM stream] → [TTS] → WebS
 
 ## Getting started
 
-**Requirements:** Python 3.13+, a GPU server with CUDA, PostgreSQL with pgvector.
+**Requirements:** Python 3.13+, a machine with an NVIDIA GPU for the server, PostgreSQL
+with pgvector, Ollama.
 
 ```bash
-# Server (GPU machine — Linux/Ubuntu; assumes Postgres/pgvector + Ollama are already
-# set up, see docs/INSTALL_SERVER.md)
+# Server (GPU machine — see docs/INSTALLATION.md for the full walkthrough)
 cd server && uv sync
-cd ../setup && uv sync && .venv/bin/memai-setup   # interactive: picks LLM/models, writes config, applies DB schema
+cd ../setup && uv sync && .venv/bin/memai-setup   # interactive wizard: picks models, writes config, applies DB schema
 cd ../server && .venv/bin/memai-server
 
 # Client (your machine — Windows, macOS, or Linux)
 uv tool install "git+<repo-url>#subdirectory=client"
-# Copy client/config/memai.example.toml to your platform config dir (see docs/INSTALL_CLIENT.md) and set ssh_host
 memai-client
 ```
 
 Client and server on the same machine? `./scripts/run-local.sh` starts the server, waits
-for it to be ready, then launches the client in the same terminal — no `ssh_host` needed.
+for it to be ready, then launches the client in the same terminal — no SSH tunnel needed.
 
-On first launch, Memai guides you through language selection. After that, everything is configured by voice — no CLI arguments, no config files to edit.
+On first launch, Memai guides you through language selection. After that, everything is
+configured by voice — no CLI arguments, no config files to edit.
+
+**[Full installation guide →](docs/INSTALLATION.md)**
 
 ---
 
@@ -124,7 +172,10 @@ On first launch, Memai guides you through language selection. After that, everyt
 
 ## Deployment alternatives
 
-The default setup above is fully local and air-gapped. But every inference service in Memai is a swappable adapter — there is no lock-in. If you are comfortable trading some privacy for convenience (or simply do not have a GPU), each component can be replaced independently:
+The default setup above is fully local and air-gapped. But every inference service in
+Memai is a swappable adapter behind a clean port — there is no lock-in. If you are
+comfortable trading some privacy for convenience (or simply do not have a GPU), each
+component can be replaced independently:
 
 | Component | Local (default) | Cloud alternative |
 |---|---|---|
@@ -134,7 +185,9 @@ The default setup above is fully local and air-gapped. But every inference servi
 | Embeddings | `multilingual-e5-large` on CPU/GPU | OpenAI Embeddings API |
 | Memory store | PostgreSQL on your machine | Managed cloud PostgreSQL + pgvector |
 
-OpenRouter support is already built in — set `OPENROUTER_API_KEY` and pick your model. Everything else stays local.
+An OpenRouter LLM adapter already ships in the codebase as the first cloud
+implementation of the LLM port; making it a selectable option in the setup wizard is on
+the roadmap. Everything else stays local.
 
 **On the privacy spectrum**, the components are not equally sensitive:
 
@@ -143,16 +196,23 @@ OpenRouter support is already built in — set `OPENROUTER_API_KEY` and pick you
 - **Embeddings** — the most sensitive to outsource. Every Episode, Concept, and Procedure you have ever stored gets fingerprinted by the embedding provider if you swap this out. The local default keeps your entire long-term memory index private.
 - **Memory store** — the crown jewel. Hosting PostgreSQL on a cloud VM is reasonable (you own the instance); using a fully managed third-party DB-as-a-service means your accumulated personal knowledge lives on someone else's disk.
 
-The fully local setup is the recommended default. Everything else is an explicit trade-off that you make with full awareness.
+The fully local setup is the recommended default. Everything else is an explicit
+trade-off that you make with full awareness.
 
 ---
 
-## Contributing
+## Documentation
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, architecture conventions, and PR guidelines.
+| Page | What it covers |
+|---|---|
+| [Personas](docs/PERSONAS.md) | The persona concept, the language tutor, and the research behind them |
+| [Installation](docs/INSTALLATION.md) | Topologies, requirements, and step-by-step guides for [server](docs/INSTALL_SERVER.md) and [client](docs/INSTALL_CLIENT.md) |
+| [Authoring bundles](docs/AUTHORING_BUNDLES.md) | How to write curriculum content for a persona |
+| [Contributing](CONTRIBUTING.md) | Setup, architecture conventions, and PR guidelines |
 
 ---
 
 ## License
 
-This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. See the [LICENSE](LICENSE) file for details.
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**.
+See the [LICENSE](LICENSE) file for details.
