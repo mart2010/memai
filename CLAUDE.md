@@ -6,10 +6,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AI voice assistant that runs entirely on local, open-source infrastructure — no cloud services. It is a monorepo with two independent Python packages:
 
-- **`client/`** — runs on the user's machine; captures microphone audio and plays back synthesized speech. Currently developed on Windows; multi-OS support is planned but not yet implemented (approach TBD).
+- **`client/`** — runs on the user's machine (Windows, macOS, Linux); captures microphone audio and plays back synthesized speech. Currently developed on Windows.
 - **`server/`** — runs on any GPU-equipped machine; handles STT, LLM, and TTS. Currently developed on Ubuntu; other GPU-capable OS are in scope.
 
-The assistant is **language-agnostic**: any primary language is supported as long as it is covered by both faster-whisper (~99 languages) and Kokoro TTS (~9 languages — the limiting factor). Development is not French-specific.
+The assistant is **language-agnostic**: any primary language is supported as long as it is covered by both faster-whisper (~99 languages) and Kokoro TTS (the limiting factor). The current set is the 7 languages in `SUPPORTED_LANGUAGES` (`server/src/memai_server/domain/model.py`): en fr es it pt ja zh-cn (`ko` was dropped — Kokoro has no Korean voice). Development is not French-specific.
 
 ## Environment Setup
 
@@ -34,7 +34,7 @@ cd server
 .venv/bin/memai-server          # Linux/macOS
 # .venv/Scripts/memai-server   # Windows
 
-# Start client — SSH tunnel to server is started automatically
+# Start client — SSH tunnel to server is started automatically when ssh_host is configured
 cd client
 .venv/Scripts/memai-client      # Windows (current)
 # .venv/bin/memai-client        # Linux/macOS (planned)
@@ -57,8 +57,8 @@ ruff format .
 - **Voice-only configuration (GeneralAssistant scope only)** — this constraint applies to the
   GeneralAssistant's own settings, not to persona creation or extension. `memai.toml` holds
   only bootstrap-before-DB-exists settings (`ws_port`, `database.url`,
-  `stt.model_path/device/compute_type`, `tts.device`, `llm.model/ollama_host`, `log_dir`) —
-  nothing voice-configurable lives there. Every voice-configurable or domain-meaningful setting is instead a
+  `stt.model_path/device/compute_type`, `tts.device`, `llm.model/ollama_host`, `log_dir`,
+  `memory.merge_threshold/disambiguate_threshold`) — nothing voice-configurable lives there. Every voice-configurable or domain-meaningful setting is instead a
   DB-backed attribute of whichever entity owns it — `User` (e.g. `idle_consolidation_minutes`)
   or `AssistantPersona` (e.g. `voices`, `speaking_rate`) — never a global toml scalar.
   Because Memai is single-user, "global setting" and "User attribute" are the same thing, so
@@ -120,8 +120,8 @@ Audio is sent as raw binary WebSocket frames; control messages use JSON text fra
 - `webrtcvad` (aggressiveness=2) determines if a frame contains speech
 - Accumulates speech frames; after 10 consecutive silent frames sends `end_utterance`
 - Suppresses VAD from playback start until `speaking_end` received (mic muting)
-- Auto-establishes an SSH tunnel (`localhost:{WS_PORT} → {SSH_USER_HOST}:{WS_PORT}`) before connecting; both values come from env vars (`SSH_USER_HOST` required, `WS_PORT` defaults to 8765)
-- Stateless — no local config or persistent state of any kind
+- Reads `memai.toml` from the platform config dir (`~/.config/memai/` or `%LOCALAPPDATA%\memai\`): `[server].ws_port` (defaults to 8765) and optional `[server].ssh_host` — when `ssh_host` is set (split-host), it auto-establishes an SSH tunnel (`localhost:{ws_port} → {ssh_host}:{ws_port}`) before connecting; when omitted (single-host), it connects to the local server directly
+- No persistent state beyond that one config file
 - On connect: if server sends `select_language`, renders a `questionary` terminal dropdown
   listing supported languages; user selects once; result sent as `language_selected`
 
@@ -137,7 +137,7 @@ Audio is sent as raw binary WebSocket frames; control messages use JSON text fra
   is not suppressed by `think: false` on thinking-tuned models, so the assistant ends up
   speaking its internal reasoning out loud.
 - **TTS**: `Kokoro` — single multilingual model, GPU-accelerated when a CUDA GPU
-  is available, CPU fallback otherwise, ~9 languages
+  is available, CPU fallback otherwise; the limiting factor for `SUPPORTED_LANGUAGES` (7)
 - Session log files written to `logs/sessions/YYYY-MM-DD_<session_id>.jsonl`;
   one JSON line per turn plus inline boundary markers
 
@@ -147,7 +147,7 @@ Audio is sent as raw binary WebSocket frames; control messages use JSON text fra
 server/src/memai_server/
   domain/       — entities, value objects, events, protocols (no external imports)
   services/     — use cases / application logic; defines abstract ports
-  infrastructure/  — concrete adapters (Phase 3+)
+  infrastructure/  — concrete adapters (Postgres, Ollama/OpenRouter, STT/TTS, language_tutor strategies)
 ```
 
 ### Key Constants
@@ -190,13 +190,33 @@ discussion — the cascade is load-bearing behaviour, not an oversight.
 **`GeneralAssistant`** acts as the cross-domain catch-all for concepts that do not belong
 to a specialised persona.
 
+### Consolidation gates for strategy personas
+
+Generic consolidation is gated for any persona with a registered assessment strategy
+(the signal is `assessment_strategies.get(persona_id) is not None` — no persona-specific
+vocabulary in the shared extractor/upserter, only plain booleans):
+
+1. **No episode extraction** (`extract_episodes=False`) — a lesson's drills and role-play
+   stories are not real events; Episodes come only from GA-side conversation.
+2. **No inserts** (`allow_insert=False`) — a similarity miss is discarded, not inserted;
+   new persona content comes only from bundles and `propose_items`.
+3. **No description rewrites** (`update_description=False`) — a match still bumps
+   `engagement_level` / fills a `category` gap, but never touches
+   description/steps/embedding: one conversation's phrasing must not drift a curated
+   definition.
+
+Rationale and live-test evidence: `docs/BRIEF_phase12_tutor.md` ("Consolidation scope
+for the tutor").
+
 ### Concept.description invariant
 
 `description` is a tight LLM synthesis — the best current understanding of what the user
 knows about this concept within its persona context. It is not an append log: old details
 are absorbed into the synthesis on each upsert. Hard cap ~300 words, chosen to stay
 safely within the 512-token input limit of `multilingual-e5-large`. Both `description`
-and `embedding` are always updated together on every enrichment.
+and `embedding` are always updated together on every enrichment — except under the
+strategy-persona consolidation gates above, where generic consolidation never rewrites
+either.
 
 ### Language field (Concept and Procedure)
 
@@ -282,4 +302,5 @@ A procedure has both `description` (NOT NULL) and `steps` (defaults to `{}`):
   into discrete sequential actions. Left empty for heuristics, principles, or any
   procedural knowledge that does not have a natural step structure.
 
-Both `description` and `embedding` are updated together on every upsert.
+Both `description` and `embedding` are updated together on every upsert — same
+strategy-persona exception as `Concept.description` above.
