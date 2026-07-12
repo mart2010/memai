@@ -1605,18 +1605,85 @@ All tutor runtime machinery, buildable once Phase 11 provides content. Full desi
       nouns, numbers, il/la `rules`, per-me construction). No-two-unknowns ordering
       respected; descriptions in Italian (pair-independent). Parses through
       `TomlPersonaBundleSource` (verified). **Install + live smoke = workstation.**
-- [ ] Workstation run (Phase 12 verification):
-      1. `git pull`; `ALTER TABLE personas ADD COLUMN strategy TEXT;`
-      2. Full test suite including integration + the config tests the laptop can't
-         collect (`platformdirs` missing from the frozen laptop venv — pre-existing).
-      3. `memai-bundle install bundles/italian-a0-starter` — expect persona created
-         with strategy `language_tutor`, 46 inserted / 0 merged; re-run → 0 / 46.
-      4. Live smoke: start server, switch to "Tutor Italiano"; verify (a) selection
-         batch injected on the tutor's first turn (watch server log for the
-         list_items query / injected item in a debug transcript), (b) two voices
-         audibly alternate on [SPEAKER:] tags and rotate target voice across two
-         sessions, (c) "just review old words" mid-session → [FOCUS:] marker, spoken
-         acknowledgment, steered batch next turns, (d) response-language watch item
-         from the prompt-pack entry above, (e) after disconnect+idle: consolidation
-         writes persona_state (check concepts.persona_state in DB) and enrichment
-         no-ops gracefully (no user-initiated cluster yet).
+- [x] Workstation run (Phase 12 verification, part 1 — 2026-07-12, tx940107):
+      1. Repo already up to date at `c0974e1` (no pull needed); `ALTER TABLE personas
+         ADD COLUMN strategy TEXT;` applied.
+      2. Full suite: 272 passed / 7 skipped (2 STT-CUDA + 5 known missing-voice-pack
+         skips — this box is AMD Strix Halo, CPU fallback per the current CUDA-only
+         scope, not `tx940094`'s NVIDIA GPU; ROCm stays out of scope per CLAUDE.md).
+      3. `memai-bundle install bundles/italian-a0-starter`: first attempt produced
+         30 inserted / 16 merged (not the expected 46/0), and a reinstall gave
+         7 inserted / 39 merged with real duplicate rows and blended descriptions
+         (`parlare`/`mangiare`, `uno`/`due` conflated by the LLM disambiguator) — a
+         genuine, reproducible bug (2/2 fresh installs), not calibration noise. Fixed
+         (see the sibling-exclusion entry below); reinstalled clean afterward:
+         46 inserted / 0 merged fresh, 0 inserted / 46 merged reinstall, matching the
+         original expectation exactly.
+      4. Live smoke (step 4 below) deferred to a later session — needs the laptop
+         client + real mic/speakers, not available from this shell.
+- [x] Bundle installer same-run sibling exclusion fix (2026-07-12) —
+      `MemoryUpserter.upsert_concept`/`upsert_procedure` gained
+      `exclude_ids: frozenset[int] = frozenset()` (default empty — no behavior change
+      for live consolidation); candidate lookup bumped from `top_n=1` to `top_n=5` so an
+      excluded sibling can't hide a real pre-existing match behind it.
+      `InstallPersonaBundle` tracks ids it inserts during the current run (separately
+      for concepts/procedures — independent id sequences) and excludes them from
+      matching: a bundle's own items can now only merge into content that predates the
+      run (an earlier install, an earlier bundle, or live-conversation extraction),
+      never into a sibling authored in the same run. Root cause: bundle authors write
+      short, structurally similar but deliberately distinct items (two one-line
+      "regular -are verb" definitions); the shared upsert pipeline had no notion of
+      "this install run" and let such siblings cross the disambiguation threshold
+      against each other. 6 new unit tests (`test_upsert.py::TestExcludeIds`,
+      `test_bundle_install.py::TestSameRunSiblingExclusion`). Verified against the real
+      workstation DB/Ollama (see above): fresh install 46/0, reinstall 0/46, content
+      confirmed clean.
+- [x] Consolidation scope for personas with a registered assessment strategy
+      (2026-07-12) — design discussion surfaced that generic offline consolidation
+      (`ConsolidateMemory`) was treating tutor conversations exactly like GA's:
+      extracting episodes and freely inserting/blending concepts/procedures from raw
+      transcript text, even though a language lesson's drills/role-play aren't real
+      events and the tutor already owns its own content pipeline (bundles,
+      `propose_items`) and engagement tracking (`persona_state`). Live-tested against
+      real `aya-expanse`: a mundane "practice ordering a coffee" drill was extracted as
+      real episodes; a TPRS cat-burglar story fabricated a literal "how to break into a
+      restaurant" Procedure with real steps; a prompt-engineering attempt to have the
+      model judge genuine-story-vs-drill made results worse, not better — not a wording
+      problem, a reliability ceiling on this local model. Three gates added, all keyed
+      off the same existing generic signal
+      (`assessment_strategies.get(persona_id) is not None` — no tutor-specific
+      vocabulary leaks into the shared extractor/upserter, only plain booleans):
+      1. `ConsolidationExtractor.extract()` gained `extract_episodes: bool = True`
+         (Ollama + OpenRouter); `_extraction_system_prompt` omits the episodes schema
+         section entirely when False, rather than asking then discarding.
+      2. `MemoryUpserter.upsert_concept`/`upsert_procedure` gained
+         `allow_insert: bool = True` — a miss is discarded (item `id` stays `None`, the
+         "discarded" sentinel), not inserted; new tutor content only comes from
+         bundles/`propose_items`.
+      3. `MemoryUpserter.upsert_concept`/`upsert_procedure` gained
+         `update_description: bool = True` — a match still bumps `engagement_level`/
+         fills a `category` gap, but never calls the synthesizer or touches
+         description/steps/embedding: a single conversation's phrasing must never drift
+         a curated definition, even on a legitimate match.
+      `ConsolidateMemory.execute()` computes `allow_insert = (strategy is None)` once per
+      conversation and passes it as both `allow_insert` and `update_description`;
+      `touched` (fed to `assess_items`) is filtered to items that actually got an id
+      (discarded misses excluded). 11 new/updated unit tests across
+      `test_consolidation.py` and `test_upsert.py`. `docs/BRIEF_phase12_tutor.md`
+      updated: the ephemeral-generation principle's "organically resurfaces... picked
+      up by extraction" exception is retired (now unconditional); the
+      episodic-anchoring section corrected (elicitation is production practice
+      anchored to *existing* GA-side episodes, never seeds new ones); TPRS
+      cross-session story recap flagged as an open gap (no longer persists — no
+      replacement mechanism built, deliberately not solved here). 287 passed /
+      7 skipped, `ruff check` clean.
+- [ ] Live smoke (Phase 12 verification, part 2 — deferred to a later session): start
+      server, switch to "Tutor Italiano"; verify (a) selection batch injected on the
+      tutor's first turn (watch server log for the list_items query / injected item in
+      a debug transcript), (b) two voices audibly alternate on [SPEAKER:] tags and
+      rotate target voice across two sessions, (c) "just review old words" mid-session
+      → [FOCUS:] marker, spoken acknowledgment, steered batch next turns, (d)
+      response-language watch item from the prompt-pack entry above, (e) after
+      disconnect+idle: consolidation writes persona_state (check concepts.persona_state
+      in DB) and enrichment no-ops gracefully (no user-initiated cluster yet). Needs the
+      laptop client + real mic/speakers — not doable from this shell.

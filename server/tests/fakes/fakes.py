@@ -365,9 +365,16 @@ class FakeConsolidationExtractor:
     def __init__(self, result: ExtractionResult | None = None) -> None:
         self.result = result or ExtractionResult(episodes=[], concepts=[], procedures=[])
         self.primary_languages: list[Language | None] = []
+        self.extract_episodes_calls: list[bool] = []
 
-    def extract(self, conversation: Conversation, primary_language: Language | None = None) -> ExtractionResult:
+    def extract(
+        self,
+        conversation: Conversation,
+        primary_language: Language | None = None,
+        extract_episodes: bool = True,
+    ) -> ExtractionResult:
         self.primary_languages.append(primary_language)
+        self.extract_episodes_calls.append(extract_episodes)
         return self.result
 
 

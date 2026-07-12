@@ -79,7 +79,16 @@ class ConsolidateMemory:
             # so it's safely reprocessed in full on the next run.
             with self._unit_of_work:
                 worthy = self._worthiness_evaluator.evaluate(conversation)
-                extraction = self._extractor.extract(conversation, primary_language)
+                # A persona with its own registered assessment strategy (today, only the
+                # language tutor) owns its content's engagement tracking end to end: new
+                # items only come from bundles/propose_items, and its conversations are
+                # lesson practice, not genuine autobiography — so this pass must only
+                # recognize touches against existing content, never author anything new.
+                strategy = self._assessment_strategies.get(conversation.persona_id)
+                allow_insert = strategy is None
+                extraction = self._extractor.extract(
+                    conversation, primary_language, extract_episodes=allow_insert,
+                )
 
                 # Episodes require a worthy conversation — trivial exchanges shouldn't
                 # generate episodic memories. Concepts and procedures are extracted
@@ -88,23 +97,31 @@ class ConsolidateMemory:
                     for episode in extraction.episodes:
                         self._upserter.upsert_episode(episode)
 
+                touched: list[MemoryItem] = []
                 for concept in extraction.concepts:
-                    self._upserter.upsert_concept(concept, conversation.persona_id)
+                    self._upserter.upsert_concept(
+                        concept, conversation.persona_id,
+                        allow_insert=allow_insert, update_description=allow_insert,
+                    )
+                    if concept.id is not None:  # None means discarded (allow_insert=False, no match)
+                        touched.append(concept)
 
                 for procedure in extraction.procedures:
-                    self._upserter.upsert_procedure(procedure, conversation.persona_id)
+                    self._upserter.upsert_procedure(
+                        procedure, conversation.persona_id,
+                        allow_insert=allow_insert, update_description=allow_insert,
+                    )
+                    if procedure.id is not None:
+                        touched.append(procedure)
 
                 # Persona assessment hook — runs AFTER upsert so newly inserted items have
                 # ids and their first exposure is assessable. The returned persona_state
                 # dicts are persisted byte-for-byte; generic code never reads inside them.
-                strategy = self._assessment_strategies.get(conversation.persona_id)
-                if strategy is not None:
-                    touched: list[MemoryItem] = [*extraction.concepts, *extraction.procedures]
-                    if touched:
-                        for assessment in strategy.assess_items(conversation.persona_id, conversation, touched):
-                            self._memory_repo.update_persona_state(
-                                assessment.memory_type, assessment.item_id, assessment.persona_state
-                            )
+                if strategy is not None and touched:
+                    for assessment in strategy.assess_items(conversation.persona_id, conversation, touched):
+                        self._memory_repo.update_persona_state(
+                            assessment.memory_type, assessment.item_id, assessment.persona_state
+                        )
 
                 conversation.mark_consolidated(worthiness=worthy, summary=None)
                 self._conversation_repo.save_consolidation(conversation)

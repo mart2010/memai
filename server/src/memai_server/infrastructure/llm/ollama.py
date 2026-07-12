@@ -216,7 +216,12 @@ class OllamaConsolidationExtractor:
         self._client = ollama.Client(host=host)
         self._model = model
 
-    def extract(self, conversation: Conversation, primary_language: Language | None = None) -> ExtractionResult:
+    def extract(
+        self,
+        conversation: Conversation,
+        primary_language: Language | None = None,
+        extract_episodes: bool = True,
+    ) -> ExtractionResult:
         transcript = _format_conversation(conversation)
         persona_id = conversation.persona_id
         lang = _conversation_language(conversation)
@@ -226,7 +231,7 @@ class OllamaConsolidationExtractor:
             messages=[
                 {
                     "role": "system",
-                    "content": _extraction_system_prompt(conversation, primary_language),
+                    "content": _extraction_system_prompt(conversation, primary_language, extract_episodes),
                 },
                 {"role": "user", "content": transcript},
             ],

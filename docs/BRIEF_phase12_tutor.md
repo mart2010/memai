@@ -65,11 +65,57 @@ twice on combinatorial-growth grounds (complex sentences would need many-Concept
 ### Ephemeral-generation principle (load-bearing)
 
 The most pressure-tested decision across both stress-test sessions: when a Procedure
-generates a word/sentence/form, the instance is **never stored as its own memory item**
-unless it organically resurfaces in real conversation and gets picked up by ordinary
-consolidation extraction. Mastering a pattern does not auto-populate Concepts for every
-word/form it can produce. Keeps the DB lean and matches the "you already know thousands
-of words, no memorizing" pedagogy.
+generates a word/sentence/form, the instance is **never stored as its own memory item**.
+Mastering a pattern does not auto-populate Concepts for every word/form it can produce.
+Keeps the DB lean and matches the "you already know thousands of words, no memorizing"
+pedagogy.
+
+**Correction (2026-07-12, consolidation-scope decisions)**: this section originally
+allowed one exception — "unless it organically resurfaces in real conversation and gets
+picked up by ordinary consolidation extraction" — on the assumption that the generic
+extractor could be trusted to insert a genuinely new, organically-surfaced form as its
+own Concept. That assumption was wrong. Live testing against the actual local model
+(`aya-expanse`) doing tutor-conversation extraction showed it invents fictional content
+freely (a children's-story cat's actions turned into a literal "how to break into a
+restaurant" Procedure with real steps) and cannot reliably separate a genuine personal
+narrative from language-practice role-play when asked to judge after the fact — see
+"Consolidation scope for the tutor" below. The exception is retired: the ephemeral
+generation principle is now unconditional. Any word the learner needs tracked has to
+either already exist (bundle/`propose_items`) or be raised through explicit self-report
+("I already know X") — never through incidental resurfacing during a lesson.
+
+### Consolidation scope for the tutor (2026-07-12, settled)
+
+Generic offline consolidation (`ConsolidateMemory`) treats any persona with a registered
+`PersonaAssessmentPort` (today, only the language tutor) differently from GA or a
+fact-grounded persona like an astronomy tutor: it may **recognize**, never **author or
+edit**. Reasoning: a language lesson's drills and role-play are not real events or new
+facts, even when phrased in the first person, and the tutor already owns a dedicated,
+purpose-built pipeline for both new content (bundles, `propose_items` interest-cluster
+proposals) and engagement tracking (`persona_state` via the assessment strategy) — the
+generic extractor has no business independently authoring either.
+
+- **Episodes**: never requested at all for such a persona (`extract_episodes=False` —
+  the shared extraction prompt omits the episodes schema section entirely, rather than
+  asking then discarding). A prompt-engineering attempt to instead ask the model to
+  judge "genuine story vs. practiced drill" was tried and made results worse, not
+  better, on the same local model — not a wording problem, a reliability ceiling.
+  Genuinely memorable events surface through the *existing* episodic-anchoring design
+  instead (pairing a due item with an already-known GA-side Episode via similarity
+  search, or an elicitation hint) — anchoring already-known material, never learning
+  something new about the user's life from a lesson.
+- **Concepts/Procedures — miss**: discarded, not inserted (`allow_insert=False`). New
+  tutor vocabulary only ever comes from bundles or `propose_items`.
+- **Concepts/Procedures — match**: `engagement_level` (and a `category` gap-fill) still
+  updates as before — that's the legitimate "the user already knows/used this" signal,
+  matching Anki-style self-report in spirit — but `update_description=False`: the
+  synthesizer is never called and the description/steps are kept byte-for-byte from the
+  existing (curated) record. A single conversation's phrasing must never drift a curated
+  definition, regardless of how the match was reached.
+
+Both gates key off the exact same generic signal `ConsolidateMemory` already had
+(`assessment_strategies.get(persona_id) is not None`) — no tutor-specific vocabulary
+leaks into the shared extractor or upserter; they only ever see plain booleans.
 
 ## CEFR / curriculum bundling — resolved without new structure
 
@@ -170,33 +216,50 @@ several user-initiated Concepts sharing a theme. Bundles remain the curriculum b
 
 ## Episodic anchoring + elicitation
 
-The headline differentiator no standalone app can copy: the self-reference effect using
-the user's own `Episode` store.
+**Corrected 2026-07-12 — see "Consolidation scope for the tutor" above.** The headline
+differentiator no standalone app can copy: the self-reference effect using the user's
+own `Episode` store — but that store is populated exclusively from GA-side
+(native-language) conversation, never authored fresh during a tutor lesson. Episodes
+are never extracted from tutor conversations at all (`extract_episodes=False`), so the
+earlier framing below — that elicitation "seeds the Episode store" and "it becomes
+cross-session material via ordinary consolidation" — no longer holds and is retired.
 
-- The tutor **ELICITS** episodes ("tell me about a memorable meal") — the elicitation is
-  itself the lesson (self-reference at encoding + production practice), seeds the Episode
-  store, and reveals interests for `propose_items`. Triple duty.
-- Same-session anchoring needs NO DB write — the story lives in the LLM context window
-  (live working memory); it becomes cross-session material via ordinary consolidation.
-- The selection strategy pairs each due item with an Episode via the **existing
-  similarity search at session start** (consistent with fetch-once; lazy per-turn RAG
-  recall coexists for utterance-triggered lookups). On a similarity miss it emits an
-  **elicitation hint** in `SelectedItem.context` instead.
+- The selection strategy pairs each due item with an **already-existing** Episode via
+  the **existing similarity search at session start** (consistent with fetch-once; lazy
+  per-turn RAG recall coexists for utterance-triggered lookups). On a similarity miss it
+  emits an **elicitation hint** in `SelectedItem.context` instead.
+- The tutor still **ELICITS** ("tell me about a memorable meal") — but purely as
+  **production practice**: self-reference boosts recall of the vocabulary/construction
+  being practiced, and prompts genuine target-language output. Whatever the user says
+  stays in the LLM context window for that turn only and is never captured as a new
+  Episode or Concept — nothing new is *learned* about the user's life from a lesson, by
+  design (see the retired ephemeral-generation exception above). A genuinely new,
+  memorable thing the user mentions is for a future GA conversation, in their own
+  language, to capture as an Episode in the ordinary way — not this lesson.
+- Interest signals for `propose_items` come from user-initiated **Concepts** (the
+  assessment strategy's salience flag), not from Episode content — no change needed
+  here, this was already the actual implementation.
 - Guardrails: cap **1–2 elicitation hints per session batch** (an LLM given ten hints
   will interrogate the user); prefer piggybacking on naturally arising topics; ramp with
   level — A0 elicitation is seeding + interest detection, not practice.
-- **Extractor rule (implemented in Phase 10):** Episode summaries are ALWAYS written in
-  `User.primary_language` regardless of conversation language — Episodes are
-  persona-independent and carry no language field; months of tutoring must not turn the
-  user's life story into target-language documents.
+- Extractor rule (Phase 10): Episode summaries are always written in
+  `User.primary_language` — still true for GA and any persona that does extract
+  episodes; moot for the tutor, which never requests them.
 
 ## Prompt-level pedagogy pack (no data-model impact)
 
 - **Elicit-self-correction-then-recast** (Lyster & Ranta — prompts beat recasts for
   uptake): production before correction.
 - **Pretesting / cognate guessing** (generation effect).
-- **TPRS-style narrative co-construction** — story recap survives between sessions via
-  ordinary Episode extraction.
+- **TPRS-style narrative co-construction** within a single session — still valid as a
+  live technique. **Cross-session story recap is retired as of 2026-07-12**: it
+  previously relied on the co-constructed story surviving via ordinary Episode
+  extraction, which no longer runs for tutor conversations (see "Consolidation scope for
+  the tutor" above). No replacement persistence mechanism exists today — flagged as an
+  open gap, not silently dropped; a session-recap could be re-added later as its own
+  narrow, tutor-owned mechanism (e.g. persisted in `AssistantPersona.settings` or a
+  dedicated field) if this is judged worth it, rather than by reopening generic Episode
+  extraction.
 - **Interleaved session batches by `category`** (anti-blocking) — one rule in the
   selection strategy.
 - The production effect validates voice-only as a strength, not a limitation.
@@ -212,9 +275,12 @@ the user's own `Episode` store.
 - Pimsleur's anticipation-pause/output mechanic ≈ Swain's Output Hypothesis + the testing
   effect — pure live-conversation behavior, no data-model impact.
 - One acknowledged tension: the Noticing Hypothesis (Schmidt) says conscious exposure
-  should count toward acquisition, but the ephemeral-generation principle means a
-  rule-derived word can be noticed without being tracked — accepted tradeoff for DB
-  leanness.
+  should count toward acquisition, but the ephemeral-generation principle (now
+  unconditional, 2026-07-12) means ANY word — rule-derived or genuinely novel — can be
+  noticed in conversation without being tracked. Accepted tradeoff, widened from the
+  original DB-leanness rationale to also cover extraction reliability (see
+  "Consolidation scope for the tutor" above): explicit self-report ("I already know X")
+  is the sanctioned path for surfacing this kind of signal, not incidental resurfacing.
 
 ## Rejected — do not re-litigate without new evidence
 
@@ -223,7 +289,7 @@ the user's own `Episode` store.
 | Formal anchor/lesson/CEFR relationships (FKs, link tables) | combinatorial growth; tested and rejected twice |
 | Runtime LLM curriculum generation | no quality control, drifts between sessions — authoring-time bundles instead |
 | Two-LLM-agent teachers | doubles local-GPU latency; one LLM call role-plays both |
-| "Every word traced" absolutism (from the MEO BR) | ephemeral generation preserved — trace what surfaces in conversation |
+| "Every word traced" absolutism (from the MEO BR) | ephemeral generation preserved, now unconditional (2026-07-12) — nothing that merely surfaces in tutor conversation is traced |
 | Zipf-90% as bundle completeness criterion | token coverage ≠ comprehension |
 | Keyword mnemonics | retrieval practice beats them long-term; a spontaneous mnemonic can live in `description` |
 | True shadowing | impossible under no-barge-in mic muting; delayed echo-imitation is fine |

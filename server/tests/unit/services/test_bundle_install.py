@@ -277,6 +277,54 @@ class TestItemInstallation:
         assert result.items_inserted == 1
 
 
+class TestSameRunSiblingExclusion:
+    """Bundle authors write short, structurally similar but deliberately distinct items
+    (e.g. two one-line "regular -are verb" definitions) — a later item in the same run
+    must not be allowed to merge into an earlier item's row just inserted moments ago,
+    even when the (embedding, disambiguator) pipeline would otherwise call it a match.
+    """
+
+    def test_high_similarity_sibling_from_same_run_still_inserts_separately(self):
+        class _CannedSearch(FakeMemoryRepository):
+            """No existing content for the first item; from the second item onward,
+            returns whatever was inserted so far as an auto-merge-band match — simulating
+            the parlare/mangiare false positive if same-run exclusion didn't exist."""
+
+            def search(self, embedding, memory_types, top_n, persona_id=None):
+                if not self.concepts:
+                    return []
+                return [(0.95, self.concepts[-1])]
+
+        lessons = (
+            BundleLesson(filename="03_verbi.toml", items=(_concept_item("parlare"), _concept_item("mangiare"))),
+        )
+        harness = _Harness(_bundle(persona=_definition(), lessons=lessons), memory_repo=_CannedSearch())
+        result = harness.use_case.execute(BUNDLE_PATH)
+
+        assert result.items_inserted == 2
+        assert result.items_merged == 0
+        assert [c.name for c in harness.memory_repo.concepts] == ["parlare", "mangiare"]
+
+    def test_still_merges_against_content_predating_this_run(self):
+        """The exclusion only covers items inserted THIS run — a genuine pre-existing
+        match (an earlier install, an earlier bundle, live extraction) still merges."""
+
+        class _CannedSearch(FakeMemoryRepository):
+            def search(self, embedding, memory_types, top_n, persona_id=None):
+                return [(0.95, self._pre_existing)]
+
+        repo = _CannedSearch()
+        repo._pre_existing = Concept(
+            id=42, persona_id=uuid4(), name="hola", description="A description.", language=Language("es"),
+        )
+        lessons = (BundleLesson(filename="01_greetings.toml", items=(_concept_item("hola"),)),)
+        harness = _Harness(_bundle(persona=_definition(), lessons=lessons), memory_repo=repo)
+        result = harness.use_case.execute(BUNDLE_PATH)
+
+        assert result.items_inserted == 0
+        assert result.items_merged == 1
+
+
 class TestProvenanceLog:
     def test_appends_one_record_with_counts_and_manifest(self):
         harness = _Harness(_bundle(persona=_definition()))

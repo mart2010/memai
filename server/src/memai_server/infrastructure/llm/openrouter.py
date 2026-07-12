@@ -240,7 +240,12 @@ class OpenRouterConsolidationExtractor:
         self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
         self._model = model
 
-    def extract(self, conversation: Conversation, primary_language: Language | None = None) -> ExtractionResult:
+    def extract(
+        self,
+        conversation: Conversation,
+        primary_language: Language | None = None,
+        extract_episodes: bool = True,
+    ) -> ExtractionResult:
         transcript = _format_conversation(conversation)
         persona_id = conversation.persona_id
         lang = _conversation_language(conversation)
@@ -250,7 +255,7 @@ class OpenRouterConsolidationExtractor:
             messages=[
                 {
                     "role": "system",
-                    "content": _extraction_system_prompt(conversation, primary_language),
+                    "content": _extraction_system_prompt(conversation, primary_language, extract_episodes),
                 },
                 {"role": "user", "content": transcript},
             ],

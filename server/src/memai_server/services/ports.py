@@ -324,11 +324,22 @@ class TurnLogger(Protocol):
 
 
 class ConsolidationExtractor(Protocol):
-    def extract(self, conversation: Conversation, primary_language: Language | None = None) -> ExtractionResult:
+    def extract(
+        self,
+        conversation: Conversation,
+        primary_language: Language | None = None,
+        extract_episodes: bool = True,
+    ) -> ExtractionResult:
         """`primary_language` drives the episode-summary language rule: Episode summaries
         are always written in the user's primary language regardless of conversation
         language (Episodes are persona-independent; months of tutoring must not turn the
-        user's life story into target-language documents)."""
+        user's life story into target-language documents).
+
+        `extract_episodes=False` (set by ConsolidateMemory for personas with a registered
+        PersonaAssessmentPort — today, only the language tutor) skips asking for episodes
+        at all: a language lesson's role-play/drills are not real events, and no reliable
+        after-the-fact judgment call was found for a small local model to separate a
+        genuine story from a practiced one — so the request is simply never made."""
         ...
 
 

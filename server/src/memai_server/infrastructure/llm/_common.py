@@ -21,9 +21,20 @@ def _conversation_language(conversation: Conversation) -> Language:
     return Language("en")
 
 
-def _extraction_system_prompt(conversation: Conversation, primary_language: Language | None) -> str:
+def _extraction_system_prompt(
+    conversation: Conversation, primary_language: Language | None, extract_episodes: bool = True,
+) -> str:
     """Shared by the Ollama and OpenRouter extractors so the extraction contract
-    (JSON shape, episode-language rule) cannot drift between the two."""
+    (JSON shape, episode-language rule) cannot drift between the two.
+
+    `extract_episodes=False` (set by ConsolidateMemory for personas with a registered
+    PersonaAssessmentPort — today, only the language tutor) omits the "episodes" array
+    from the requested schema entirely, rather than asking then discarding: a language
+    lesson's role-play/drills are not real events, and asking a small local model to
+    judge genuine-story-vs-practiced-drill after the fact was tried and is not reliable —
+    better not to ask at all. This function stays persona-agnostic either way: it only
+    ever sees a plain bool, never anything tutor-specific.
+    """
     # Episodes are persona-independent and carry no language field — summaries are always
     # written in the user's primary language regardless of conversation language, so months
     # of tutoring don't turn the user's life story into target-language documents.
@@ -33,13 +44,18 @@ def _extraction_system_prompt(conversation: Conversation, primary_language: Lang
         if primary_language
         else ""
     )
-    return (
-        "Extract structured memories from this conversation. "
-        f"The conversation took place around {conversation.started_at.isoformat()}.\n"
-        "Return JSON with three arrays:\n"
+    episodes_section = (
         '- "episodes": personal events or experiences the user mentioned '
         '(each: {"summary": str, "happened_at": ISO8601 datetime or null}).'
         f"{episode_language_rule}\n"
+        if extract_episodes
+        else ""
+    )
+    return (
+        "Extract structured memories from this conversation. "
+        f"The conversation took place around {conversation.started_at.isoformat()}.\n"
+        "Return JSON with these arrays:\n"
+        f"{episodes_section}"
         '- "concepts": facts or knowledge the user learned or discussed '
         '(each: {"name": str, "description": str, "language": IETF code, '
         '"category": short lowercase classification label or null})\n'

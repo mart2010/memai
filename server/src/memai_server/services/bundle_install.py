@@ -97,11 +97,19 @@ class InstallPersonaBundle:
         # consolidation atomicity); a failed run is recovered by re-running the installer
         # — already-committed items merge into themselves via the exact-duplicate
         # short-circuit.
+        #
+        # new_concept_ids/new_procedure_ids track items freshly inserted earlier in THIS
+        # run (across all lessons) and are passed as exclude_ids to the upserter: a
+        # bundle's own items must never merge into each other (the author already meant
+        # them as distinct), only into content that predates this run (an earlier
+        # install, an earlier bundle, or live-conversation extraction).
         inserted = merged = 0
+        new_concept_ids: set[int] = set()
+        new_procedure_ids: set[int] = set()
         for lesson in bundle.lessons:
             with self._unit_of_work:
                 for item in lesson.items:
-                    if self._upsert_item(item, persona.id):
+                    if self._upsert_item(item, persona.id, new_concept_ids, new_procedure_ids):
                         merged += 1
                     else:
                         inserted += 1
@@ -126,35 +134,44 @@ class InstallPersonaBundle:
             notices=tuple(notices),
         )
 
-    def _upsert_item(self, item: BundleItemSpec, persona_id: UUID) -> bool:
+    def _upsert_item(
+        self,
+        item: BundleItemSpec,
+        persona_id: UUID,
+        new_concept_ids: set[int],
+        new_procedure_ids: set[int],
+    ) -> bool:
         # Always UNSEEN: a bundle cannot claim the user knows things. On merge with an
         # already-engaged item the upserter's max-engagement rule keeps the higher level.
         if item.memory_type is MemoryType.CONCEPT:
-            return self._upserter.upsert_concept(
-                Concept(
-                    id=None,
-                    persona_id=persona_id,
-                    name=item.name,
-                    description=item.description,
-                    language=item.language,
-                    category=item.category,
-                    engagement_level=EngagementLevel.UNSEEN,
-                ),
-                persona_id,
-            )
-        return self._upserter.upsert_procedure(
-            Procedure(
+            concept = Concept(
                 id=None,
                 persona_id=persona_id,
                 name=item.name,
                 description=item.description,
                 language=item.language,
-                steps=list(item.steps),
                 category=item.category,
                 engagement_level=EngagementLevel.UNSEEN,
-            ),
-            persona_id,
+            )
+            merged = self._upserter.upsert_concept(concept, persona_id, exclude_ids=frozenset(new_concept_ids))
+            if not merged:
+                new_concept_ids.add(concept.id)
+            return merged
+
+        procedure = Procedure(
+            id=None,
+            persona_id=persona_id,
+            name=item.name,
+            description=item.description,
+            language=item.language,
+            steps=list(item.steps),
+            category=item.category,
+            engagement_level=EngagementLevel.UNSEEN,
         )
+        merged = self._upserter.upsert_procedure(procedure, persona_id, exclude_ids=frozenset(new_procedure_ids))
+        if not merged:
+            new_procedure_ids.add(procedure.id)
+        return merged
 
     def _create_persona(self, bundle: PersonaBundle) -> AssistantPersona:
         definition = bundle.persona

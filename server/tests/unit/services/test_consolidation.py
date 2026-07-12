@@ -9,6 +9,7 @@ from memai_server.domain.model import (
     GENERAL_ASSISTANT_ID,
     Language,
     MemoryType,
+    Procedure,
     Speaker,
     Turn,
     User,
@@ -135,6 +136,30 @@ class TestRunConsolidation:
 
         assert extractor.primary_languages == [Language("fr")]
 
+    def test_extract_episodes_true_when_persona_has_no_strategy(self):
+        extractor = FakeConsolidationExtractor()
+        use_case, conversation_repo, _ = _make_consolidation(extractor=extractor)
+        _seed_ended_conversation(conversation_repo)
+
+        use_case.execute()
+
+        assert extractor.extract_episodes_calls == [True]
+
+    def test_extract_episodes_false_when_persona_has_registered_strategy(self):
+        """A persona with a registered assessment strategy (today, only the language
+        tutor) owns its own engagement tracking — its conversations are lesson
+        practice, not genuine autobiography, so episodes are never even requested."""
+        extractor = FakeConsolidationExtractor()
+        use_case, conversation_repo, _ = _make_consolidation(
+            extractor=extractor,
+            assessment_strategies={GENERAL_ASSISTANT_ID: FakePersonaAssessmentPort()},
+        )
+        _seed_ended_conversation(conversation_repo)
+
+        use_case.execute()
+
+        assert extractor.extract_episodes_calls == [False]
+
 
 class _CannedSearchMemoryRepository(FakeMemoryRepository):
     """Returns a fixed similarity-search result so merge paths can be exercised."""
@@ -194,11 +219,24 @@ class TestAssessmentHook:
         )
         return ExtractionResult(episodes=[], concepts=[concept], procedures=[])
 
+    def _memory_repo_with_existing_match(self) -> FakeMemoryRepository:
+        # A persona with a registered strategy only recognizes touches against existing
+        # content (allow_insert=False) — seed a pre-existing match so the touch actually
+        # lands, rather than being discarded as an unmatched extraction.
+        existing = Concept(
+            id=1, persona_id=GENERAL_ASSISTANT_ID, name="Recursion",
+            description="A function calling itself.", language=Language("en"),
+        )
+        repo = FakeMemoryRepository()
+        repo.search_results = [(0.95, existing)]  # auto-merge band
+        return repo
+
     def test_assessment_dispatched_after_upsert_with_ids(self):
         strategy = FakePersonaAssessmentPort()
         use_case, conversation_repo, _ = _make_consolidation(
             extraction=self._extraction(),
             assessment_strategies={GENERAL_ASSISTANT_ID: strategy},
+            memory_repo=self._memory_repo_with_existing_match(),
         )
         _seed_ended_conversation(conversation_repo)
 
@@ -219,6 +257,7 @@ class TestAssessmentHook:
                     assessments=[ItemAssessment(item_id=1, memory_type=MemoryType.CONCEPT, persona_state=state)]
                 )
             },
+            memory_repo=self._memory_repo_with_existing_match(),
         )
         _seed_ended_conversation(conversation_repo)
 
@@ -251,3 +290,77 @@ class TestAssessmentHook:
         use_case.execute()
 
         assert strategy.calls == []
+
+
+class TestDiscardUnmatchedForStrategyPersonas:
+    """A persona with a registered assessment strategy owns its own content pipeline
+    (bundles/propose_items) — an extraction with no existing match must be dropped,
+    not inserted, and must not reach the assessment strategy as a touched item."""
+
+    def _extraction(self) -> ExtractionResult:
+        concept = Concept(
+            id=None, persona_id=GENERAL_ASSISTANT_ID, name="mangiare",
+            description="A verb meaning to eat.", language=Language("it"),
+        )
+        procedure = Procedure(
+            id=None, persona_id=GENERAL_ASSISTANT_ID, name="How to break into a restaurant",
+            description="Fictional nonsense invented from a roleplay story.", language=Language("it"),
+        )
+        return ExtractionResult(episodes=[], concepts=[concept], procedures=[procedure])
+
+    def test_unmatched_concept_and_procedure_discarded(self):
+        strategy = FakePersonaAssessmentPort()
+        use_case, conversation_repo, memory_repo = _make_consolidation(
+            extraction=self._extraction(),
+            assessment_strategies={GENERAL_ASSISTANT_ID: strategy},
+            # Default empty FakeMemoryRepository: search() returns no candidates, so
+            # both items are unmatched misses.
+        )
+        _seed_ended_conversation(conversation_repo)
+
+        use_case.execute()
+
+        assert memory_repo.concepts == []
+        assert memory_repo.procedures == []
+        assert strategy.calls == []
+
+    def test_same_unmatched_items_still_inserted_without_a_strategy(self):
+        """Regression guard: GA and other strategy-less personas keep today's
+        behavior — knowledge is worth keeping regardless of conversation quality."""
+        use_case, conversation_repo, memory_repo = _make_consolidation(extraction=self._extraction())
+        _seed_ended_conversation(conversation_repo)
+
+        use_case.execute()
+
+        assert len(memory_repo.concepts) == 1
+        assert len(memory_repo.procedures) == 1
+
+
+class TestPreserveCuratedDescriptionForStrategyPersonas:
+    """A matched touch under a strategy-registered persona must bump engagement, never
+    let a single conversation's phrasing drift the curated description/steps."""
+
+    def test_matched_concept_keeps_curated_description(self):
+        existing = Concept(
+            id=1, persona_id=GENERAL_ASSISTANT_ID, name="mangiare",
+            description="Curated bundle definition.", language=Language("it"),
+            engagement_level=EngagementLevel.MENTIONED,
+        )
+        extracted = Concept(
+            id=None, persona_id=GENERAL_ASSISTANT_ID, name="mangiare",
+            description="A narrative-flavored extraction blurb about eating pizza.",
+            language=Language("it"), engagement_level=EngagementLevel.EXPLORED,
+        )
+        memory_repo = FakeMemoryRepository()
+        memory_repo.search_results = [(0.95, existing)]
+        use_case, conversation_repo, _ = _make_consolidation(
+            extraction=ExtractionResult(episodes=[], concepts=[extracted], procedures=[]),
+            assessment_strategies={GENERAL_ASSISTANT_ID: FakePersonaAssessmentPort()},
+            memory_repo=memory_repo,
+        )
+        _seed_ended_conversation(conversation_repo)
+
+        use_case.execute()
+
+        assert memory_repo.concepts[0].description == "Curated bundle definition."
+        assert memory_repo.concepts[0].engagement_level == EngagementLevel.EXPLORED  # still bumped
