@@ -9,6 +9,7 @@ from num2words import num2words
 
 from ..domain.events import ConversationBoundaryDetected, ConversationBoundaryType, PersonaSwitched
 from ..domain.model import (
+    DEFAULT_VOICE_ROLE,
     GENERAL_ASSISTANT_ID,
     AssistantPersona,
     MemoryBrief,
@@ -48,9 +49,12 @@ class WorkingMemory:
     rolling_summary: str | None = None
     total_turn_count: int = 0
     session_tail: list[Turn] = field(default_factory=list)
-    # Persona-selected items fetched once at session start (live path never writes to the
-    # DB, so re-querying mid-session cannot return anything new); consumed one per turn.
-    selection_batch: list[SelectedItem] = field(default_factory=list)
+    # Persona-selected items, keyed by persona id and consumed one per turn. Fetched
+    # lazily on the first turn a strategy-bearing persona is active (sessions start on
+    # GA; tutors arrive via mid-session switch) — key presence means "already fetched",
+    # so an exhausted batch is not re-queried. A [FOCUS: ...] marker replaces the active
+    # persona's batch with a focus-steered re-fetch.
+    selection_batches: dict[UUID, list[SelectedItem]] = field(default_factory=dict)
 
 
 @dataclass
@@ -114,37 +118,105 @@ def _resolve_boundary_marker(
     return buffer, None
 
 
-def _try_resolve_prefixes(
-    buffer: str, is_first_turn: bool
-) -> tuple[str, str | None, ConversationBoundaryType | None] | None:
-    """Incrementally resolve an optional [PERSONA:name] prefix followed by an optional
-    boundary marker from a streaming LLM response.
+def _resolve_tag(buffer: str, tag: str) -> tuple[str, str | None] | None:
+    """Resolve an optional '{tag}value]' prefix (e.g. '[PERSONA:name]', '[FOCUS: wish]').
 
-    Returns None while more tokens are needed to disambiguate a partial prefix;
-    otherwise (remaining_text, persona_name_or_None, boundary_type_or_None).
+    Returns None while `buffer` is still a proper prefix of `tag` or the closing ']' has
+    not arrived; otherwise (remaining_text, payload_or_None).
     """
-    if not buffer.startswith("["):
-        return buffer, None, None
-
-    if buffer.startswith("[PERSONA:"):
+    if buffer.startswith(tag):
         end = buffer.find("]")
         if end == -1:
             return None
-        name = buffer[9:end].strip()
-        boundary_result = _resolve_boundary_marker(buffer[end + 1:].lstrip(), is_first_turn)
-        if boundary_result is None:
-            return None
-        remaining, boundary = boundary_result
-        return remaining, name, boundary
+        return buffer[end + 1:].lstrip(), buffer[len(tag):end].strip()
+    if tag.startswith(buffer):
+        return None  # still disambiguating the tag itself
+    return buffer, None
 
-    if "[PERSONA:".startswith(buffer):
-        return None  # still disambiguating "[PERSONA:" itself
+
+def _try_resolve_prefixes(
+    buffer: str, is_first_turn: bool
+) -> tuple[str, str | None, str | None, ConversationBoundaryType | None] | None:
+    """Incrementally resolve the optional response-prefix markers [PERSONA:name],
+    [FOCUS: wish], and a boundary marker — in that order, each optional — from a
+    streaming LLM response.
+
+    Returns None while more tokens are needed to disambiguate a partial prefix;
+    otherwise (remaining_text, persona_name_or_None, focus_or_None, boundary_type_or_None).
+    """
+    if not buffer.startswith("["):
+        return buffer, None, None, None
+
+    persona_result = _resolve_tag(buffer, "[PERSONA:")
+    if persona_result is None:
+        return None
+    buffer, persona_name = persona_result
+
+    focus_result = _resolve_tag(buffer, "[FOCUS:")
+    if focus_result is None:
+        return None
+    buffer, focus = focus_result
 
     boundary_result = _resolve_boundary_marker(buffer, is_first_turn)
     if boundary_result is None:
         return None
     remaining, boundary = boundary_result
-    return remaining, None, boundary
+    return remaining, persona_name, focus, boundary
+
+
+_SPEAKER_TAG = "[SPEAKER:"
+
+
+class _SpeakerTagParser:
+    """Incrementally splits post-prefix response text into ("text", chunk) and
+    ("role", name) events from inline [SPEAKER:role] tags (multi-voice cast),
+    holding back partial tags until disambiguated."""
+
+    def __init__(self) -> None:
+        self._buffer = ""
+
+    def feed(self, token: str) -> list[tuple[str, str]]:
+        self._buffer += token
+        events: list[tuple[str, str]] = []
+        while self._buffer:
+            start = self._buffer.find("[")
+            if start == -1:
+                events.append(("text", self._buffer))
+                self._buffer = ""
+                break
+            if start > 0:
+                events.append(("text", self._buffer[:start]))
+                self._buffer = self._buffer[start:]
+            if self._buffer.startswith(_SPEAKER_TAG):
+                end = self._buffer.find("]")
+                if end == -1:
+                    break  # tag opened but not closed — wait for more tokens
+                events.append(("role", self._buffer[len(_SPEAKER_TAG):end].strip()))
+                self._buffer = self._buffer[end + 1:].lstrip()
+                continue
+            if _SPEAKER_TAG.startswith(self._buffer):
+                break  # still disambiguating a potential tag
+            # A '[' that is not a speaker tag — plain text.
+            events.append(("text", "["))
+            self._buffer = self._buffer[1:]
+        return events
+
+    def flush(self) -> str:
+        """Whatever remains at stream end (e.g. a dangling partial tag) is text."""
+        leftover, self._buffer = self._buffer, ""
+        return leftover
+
+
+def _session_voice(persona: AssistantPersona, role: str, session_id: UUID) -> str:
+    """Resolve a speaker role to one concrete voice for this session. Unknown roles
+    fall back to the default anchor. A '|'-separated value is a rotation pool: the
+    session id picks one deterministically — stable within a session, varying across
+    sessions (HVPT). Stateless by design: the live path never writes."""
+    raw = persona.voices.get(role, persona.default_voice)
+    options = [v.strip() for v in raw.split("|") if v.strip()]
+    if not options:
+        return persona.default_voice
+    return options[session_id.int % len(options)]
 
 
 _MARKDOWN_EMPHASIS = re.compile(r"(\*\*\*|\*\*|\*|___|__|_|`)")
@@ -265,7 +337,6 @@ class StartSession:
         persona_repo: PersonaRepository,
         memory_brief_repo: MemoryBriefRepository,
         session_log_reader: SessionLogReader,
-        selection_strategies: dict[UUID, PersonaSelectionPort] | None = None,
         session_tail_turns: int = 10,
         session_continuation_threshold_hours: float = 24.0,
     ) -> None:
@@ -273,8 +344,6 @@ class StartSession:
         self._persona_repo = persona_repo
         self._memory_brief_repo = memory_brief_repo
         self._session_log_reader = session_log_reader
-        # persona_id -> selection strategy; personas without one (e.g. GA) get no batch.
-        self._selection_strategies = selection_strategies or {}
         self._tail_turns = session_tail_turns
         self._threshold_hours = session_continuation_threshold_hours
 
@@ -297,12 +366,9 @@ class StartSession:
                         previous.session_id, self._tail_turns
                     )
 
-        # Persona-driven selection batch — fetched alongside the other session-start reads.
-        selection_batch: list[SelectedItem] = []
-        strategy = self._selection_strategies.get(persona.id)
-        if strategy is not None and not needs_onboarding:
-            selection_batch = list(strategy.select_items(persona.id))
-
+        # Selection batches are NOT fetched here: sessions always start on GA, which has
+        # no strategy — ProcessTurn fetches lazily on the first turn a strategy-bearing
+        # persona (switched to mid-session) is active.
         return WorkingMemory(
             session_id=session_id,
             started_at=started_at,
@@ -312,7 +378,6 @@ class StartSession:
             memory_brief=None if needs_onboarding else self._memory_brief_repo.get(),
             needs_onboarding=needs_onboarding,
             session_tail=session_tail,
-            selection_batch=selection_batch,
         )
 
 
@@ -327,6 +392,7 @@ class ProcessTurn:
         recall_detector: RecallIntentDetector,
         persona_repo: PersonaRepository,
         turn_logger: TurnLogger,
+        selection_strategies: dict[UUID, PersonaSelectionPort] | None = None,
         rolling_window_size: int = 50,
     ) -> None:
         self._stt = stt
@@ -337,8 +403,26 @@ class ProcessTurn:
         self._recall_detector = recall_detector
         self._persona_repo = persona_repo
         self._turn_logger = turn_logger
+        # persona_id -> selection strategy; personas without one (e.g. GA) get no batch.
+        self._selection_strategies = selection_strategies or {}
         self._rolling_window_size = rolling_window_size
         self._last_turn_end: float | None = None
+
+    def _next_selected_item(self, wm: WorkingMemory) -> SelectedItem | None:
+        """Lazily fetch the active persona's selection batch on its first active turn
+        (a live DB read, same standing as RAG recall), then consume one item per turn.
+        Key presence in selection_batches means "already fetched" — an exhausted batch
+        is not re-queried; only a [FOCUS: ...] marker replaces it."""
+        if wm.needs_onboarding:
+            return None
+        persona_id = wm.active_persona.id
+        strategy = self._selection_strategies.get(persona_id)
+        if strategy is None:
+            return None
+        if persona_id not in wm.selection_batches:
+            wm.selection_batches[persona_id] = list(strategy.select_items(persona_id))
+        batch = wm.selection_batches[persona_id]
+        return batch.pop(0) if batch else None
 
     async def execute(self, wm: WorkingMemory, audio: bytes, now: datetime) -> TurnResult | None:
         t_start = time.monotonic()
@@ -374,9 +458,10 @@ class ProcessTurn:
                 )
             ]
 
-        # 5. Persona-selected item (if any left in the session batch) — one per turn,
-        # injected via the same context-message mechanism as recall above.
-        selected_item = wm.selection_batch.pop(0) if wm.selection_batch else None
+        # 5. Persona-selected item — batch fetched lazily on the active persona's first
+        # turn, then one item per turn, injected via the same context-message mechanism
+        # as recall above.
+        selected_item = self._next_selected_item(wm)
 
         # 6. Stream the LLM response; resolve any leading [PERSONA:name]/boundary marker
         # as soon as enough tokens arrive, then synthesise each sentence via TTS as it
@@ -385,10 +470,12 @@ class ProcessTurn:
         wm.needs_onboarding = False
         response_language = wm.active_persona.response_language
         lang_code = response_language.code if response_language else None
-        # Per-segment speaker switching (multi-voice cast) is Phase 12 — the live path
-        # only ever uses the default role for now.
-        voice = wm.active_persona.default_voice
         speaking_rate = wm.active_persona.speaking_rate
+        # Multi-voice cast: inline [SPEAKER:role] tags switch the Kokoro voice per
+        # segment; untagged text speaks with the default anchor. Roles resolve to a
+        # concrete voice once per session (see _session_voice — HVPT rotation pools).
+        current_voice = _session_voice(wm.active_persona, DEFAULT_VOICE_ROLE, wm.session_id)
+        speaker_parser = _SpeakerTagParser()
 
         audio_chunks: list[bytes] = []
         content_parts: list[str] = []
@@ -396,9 +483,21 @@ class ProcessTurn:
         prefix_buffer = ""
         prefix_resolved = False
         detected_name: str | None = None
+        detected_focus: str | None = None
         boundary_marker: ConversationBoundaryType | None = None
         t_first_token: float | None = None
         t_first_audio: float | None = None
+
+        def _synthesise_segment(text: str) -> None:
+            nonlocal t_first_audio
+            processed = _spell_out_numbers(_strip_markdown(text), lang_code)
+            content_parts.append(processed)
+            t_segment_ready = time.monotonic()
+            audio_chunks.append(self._tts.synthesise(processed, current_voice, speaking_rate))
+            if t_first_audio is None:
+                t_first_audio = time.monotonic()
+                print(f"[latency] TTS first chunk: {t_first_audio - t_segment_ready:.2f}s")
+                print(f"[latency] Total to first audio: {t_first_audio - t_start:.2f}s")
 
         async for token in self._llm.complete(messages, system_prompt):
             if t_first_token is None:
@@ -410,32 +509,32 @@ class ProcessTurn:
                 resolved = _try_resolve_prefixes(prefix_buffer, is_first_turn)
                 if resolved is None:
                     continue
-                token, detected_name, boundary_marker = resolved
+                token, detected_name, detected_focus, boundary_marker = resolved
                 prefix_resolved = True
 
-            sentence_buffer += token
-            if _is_sentence_end(sentence_buffer.rstrip()):
-                processed = _spell_out_numbers(_strip_markdown(sentence_buffer), lang_code)
-                content_parts.append(processed)
-                t_sentence_ready = time.monotonic()
-                audio_chunks.append(self._tts.synthesise(processed, voice, speaking_rate))
-                if t_first_audio is None:
-                    t_first_audio = time.monotonic()
-                    print(f"[latency] TTS first chunk: {t_first_audio - t_sentence_ready:.2f}s")
-                    print(f"[latency] Total to first audio: {t_first_audio - t_start:.2f}s")
-                sentence_buffer = ""
+            for kind, value in speaker_parser.feed(token):
+                if kind == "role":
+                    # A speaker switch is a natural break — flush the open segment
+                    # with the outgoing voice before switching.
+                    if sentence_buffer.strip():
+                        _synthesise_segment(sentence_buffer)
+                    sentence_buffer = ""
+                    current_voice = _session_voice(wm.active_persona, value, wm.session_id)
+                    continue
+                sentence_buffer += value
+                if _is_sentence_end(sentence_buffer.rstrip()):
+                    _synthesise_segment(sentence_buffer)
+                    sentence_buffer = ""
 
         if not prefix_resolved:
             # Response ended mid-prefix (e.g. a stray "[" with no closing marker) —
             # treat whatever was buffered as plain content rather than dropping it.
             sentence_buffer = prefix_buffer
+        else:
+            # A dangling partial speaker tag at stream end is plain content too.
+            sentence_buffer += speaker_parser.flush()
         if sentence_buffer.strip():
-            processed = _spell_out_numbers(_strip_markdown(sentence_buffer), lang_code)
-            content_parts.append(processed)
-            audio_chunks.append(self._tts.synthesise(processed, voice, speaking_rate))
-            if t_first_audio is None:
-                t_first_audio = time.monotonic()
-                print(f"[latency] Total to first audio: {t_first_audio - t_start:.2f}s")
+            _synthesise_segment(sentence_buffer)
 
         assistant_content = "".join(content_parts).strip()
         print(f"[latency] Total turn: {time.monotonic() - t_start:.2f}s")
@@ -456,6 +555,17 @@ class ProcessTurn:
                     to_persona_id=match.id,
                 )
                 wm.active_persona = match
+
+        # 8b. Focus marker → re-fetch the active persona's batch steered by the user's
+        # expressed wish, replacing whatever remained. Resolved AFTER the persona switch
+        # so a combined [PERSONA:X][FOCUS: ...] applies to X. The payload is passed
+        # verbatim — only the strategy interprets it.
+        if detected_focus:
+            strategy = self._selection_strategies.get(wm.active_persona.id)
+            if strategy is not None:
+                wm.selection_batches[wm.active_persona.id] = list(
+                    strategy.select_items(wm.active_persona.id, focus=detected_focus)
+                )
 
         # 9. Log assistant turn + update working memory
         # Fresh timestamp captures when the LLM finished — gap from `now` reflects response time.

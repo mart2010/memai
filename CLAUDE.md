@@ -226,15 +226,25 @@ target-language documents.
   coarse tier, written only by generic consolidation.
 
 Three optional persona strategy ports (`services/ports.py`; GA registers none):
-`PersonaSelectionPort.select_items` (live — proactive batch fetched once at session
-start, consumed one item per turn via the RAG-style context injection),
+`PersonaSelectionPort.select_items(persona_id, focus, limit)` (live — batch fetched
+lazily on the first turn the persona is active, consumed one item per turn via the
+RAG-style context injection; a `[FOCUS: ...]` LLM response marker re-fetches the batch
+with the user's session wish passed verbatim, `focus=None` = default curriculum path),
 `PersonaEnrichmentPort.propose_items` (offline — proposes new drafts), and
 `PersonaAssessmentPort.assess_items` (offline — runs in consolidation after upsert,
 returns `ItemAssessment(item_id, memory_type, persona_state)` persisted byte-for-byte).
+Personas bind to strategy implementations via `AssistantPersona.strategy` (nullable
+name, e.g. `"language_tutor"`, set from the bundle's `[persona]` table), resolved
+against the composition root's registry in `server.py`; unknown names warn and bind
+nothing.
 
 `AssistantPersona.voices` is a speaker-role → Kokoro-voice map that must always contain
-the `"default"` role; generic code only reads `default_voice`. Additional roles (e.g. the
-tutor's two-teacher cast) are persona-defined — per-segment voice switching is Phase 12.
+the `"default"` role. Additional roles (e.g. the tutor's two-teacher cast) are
+persona-defined: inline `[SPEAKER:role]` tags in the LLM response switch the Kokoro
+voice per segment in the streaming path (unknown roles fall back to default). A
+non-default role's value may be a `"|"`-separated rotation pool (`"ef_dora|em_alex"`)
+resolved to one voice per session from the session id (HVPT, stateless); the
+`"default"` role is the fixed anchor and must be a single voice (entity invariant).
 
 ### Upsert similarity threshold
 

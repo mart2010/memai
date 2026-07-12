@@ -1450,27 +1450,173 @@ review pass are all explicitly out of Phase 11 scope (see brief's Non-goals).
 
 All tutor runtime machinery, buildable once Phase 11 provides content. Full design in
 `docs/BRIEF_phase12_tutor.md` (consolidated from the language-tutor design record,
-2026-06-29 → 2026-07-10).
+2026-06-29 → 2026-07-10; wiring decisions below settled 2026-07-12).
 
-- [ ] Tutor selection strategy — due-ness ranking derived from `persona_state`
+- [x] Wiring foundation (2026-07-12) — three gaps closed before any tutor code:
+      1. **Strategy binding**: new nullable `AssistantPersona.strategy` column/field
+         (e.g. `"language_tutor"`), set from the bundle's optional `[persona] strategy`
+         key (additive, format_version still 1) and passed through by
+         `InstallPersonaBundle`; creation-time identity like `persona_key` (absent from
+         the repo's UPDATE branch). Composition-root registry in `server.py`
+         (`SELECTION_STRATEGY_FACTORIES`, empty until the tutor strategy lands) resolves
+         names per connection via `_build_selection_strategies`; unknown names warn and
+         bind nothing.
+      2. **Lazy, focus-aware selection batches** (the Phase 10 eager fetch would never
+         have fired for a tutor: sessions always start on GA, tutors arrive via
+         mid-session `[PERSONA:]` switch). `select_items(persona_id, focus, limit)` —
+         the Phase 10 `category`/`engagement_level` params dropped (generic callers had
+         no basis to fill them); `focus` is the user's session wish carried VERBATIM
+         ("just review old vocabulary today"), interpreted only by the strategy;
+         `focus=None` = default curriculum. `ProcessTurn` owns the batches now
+         (`WorkingMemory.selection_batches: dict[persona_id, list]`, key presence =
+         fetched, exhausted batch never re-queried): fetch-if-missing at turn start for
+         the active persona; new `[FOCUS: ...]` response marker (generic prefix parser,
+         between `[PERSONA:]` and boundary markers) re-fetches and REPLACES the active
+         persona's batch after switch resolution, so `[PERSONA:X][FOCUS: ...]` applies
+         to X. `StartSession` no longer touches selection. Re-fetching is legal live
+         (DB read, same standing as RAG recall) and doesn't violate fetch-once: a
+         focused query is a different question, not the same one re-asked.
+      3. **`MemoryRepository.list_items(persona_id, memory_types, category,
+         engagement_levels, limit)`** — non-similarity listing ordered by ascending id
+         within each type (curriculum-order/UNSEEN-tiebreak contract), concepts and
+         procedures only (episodes raise ValueError). PG impl + Fake.
+      150 unit tests green (laptop, `uv run --no-sync`). Docs updated: CLAUDE.md ports
+      paragraph, Phase 11 brief + AUTHORING_BUNDLES.md (`strategy` key),
+      BRIEF_phase12_tutor.md wiring section.
+      **Workstation catch-up**: `ALTER TABLE personas ADD COLUMN strategy TEXT;`
+      (laptop venv note: `tests/unit/infrastructure/test_config.py` currently fails
+      collection on the frozen laptop venv — `platformdirs` missing; pre-existing,
+      run with `--ignore`, verify on workstation.)
+- [x] Tutor selection strategy — due-ness ranking derived from `persona_state`
       (exponential decay from `last_practiced_at` with `half_life_days`; mastery/next-due
       derived at selection time, never stored); interleaved by `category` (anti-blocking);
       Episode pairing via existing similarity search at session start; elicitation hint in
       `SelectedItem.context` on similarity miss, capped at 1–2 per batch
-- [ ] Tutor assessment strategy — retrievals (successful only) / errors / response
+      (2026-07-12) — new `infrastructure/language_tutor/` package (all tutor vocabulary
+      lives here; generic code never imports it): `selection.py`
+      (`LanguageTutorSelectionStrategy`, registered as `"language_tutor"` in server.py's
+      registry — one entry serves every language-tutor persona, any target language) +
+      `focus_ollama.py` (`OllamaFocusInterpreter`: live LLM call mapping the verbatim
+      focus text to `TutorFocus(mode: review|new|mixed, category, topic)` — recall-
+      detector precedent; runs post-stream, not on the hot path; fails open to mixed).
+      Batch composition: review pool ranked least-known-then-stalest by default —
+      retention ranking (`2^(-days/half_life)`, no-state = most due) is CODED but gated
+      behind `settings["ranking"]="retention"` per the instrument-now-calibrate-later
+      posture; new pool in cross-type curriculum order (`created_at` then id — two
+      SERIAL sequences, so raw id doesn't order across concepts/procedures); mixed
+      default = `batch_review_share` (0.5) with mutual backfill; focus can restrict
+      mode/category (unmatched category falls back rather than zeroing the session) or
+      rank by topic-embedding similarity. Category round-robin interleave. Episode
+      pairing per batch item via `search(item.embedding, EPISODE, top_n=1)`:
+      anchor context at similarity ≥ `episode_anchor_threshold` (0.6 placeholder),
+      else elicitation hint capped by `elicitation_cap` (default 2). New tutor settings
+      keys (all opaque, in `AssistantPersona.settings`): `ranking`,
+      `batch_review_share`, `episode_anchor_threshold`, `elicitation_cap`.
+      20 unit tests (`test_tutor_selection.py`); 170 total green.
+- [x] Tutor assessment strategy — retrievals (successful only) / errors / response
       latency (from `Turn.timestamp` deltas, weighted low) / `user_initiated` salience;
       day-granularity `last_practiced_at` (sleep-gated spacing); half-life update rule
-- [ ] Tutor enrichment strategy (`propose_items`) — interest-cluster proposals once
+      (2026-07-12) — `language_tutor/assessment.py` + `judge_ollama.py` + shared
+      `state.py` (persona_state field names, read by selection / written here).
+      `OllamaPracticeJudge`: one offline LLM call per conversation judging each touched
+      item (retrievals = successful PRODUCTION only, errors, user_initiated); fails
+      open to exposure-only (day anchor + session count move, counts don't). Current
+      stored state is read back via `list_items` — touched extraction items always
+      carry `persona_state=None` (upserts structurally exclude the column). Half-life
+      rule: initial = `initial_half_life_days` (1.0) × `user_initiated_boost` (2.0 when
+      user-initiated) ÷ pair difficulty (resolved from `settings["pair_difficulty"]`
+      against `User.primary_language`, "*" fallback); on a NEW day (sleep gate),
+      errors × `half_life_shrink` (0.5, floor 0.5d) win over successes, else
+      retrievals × `half_life_growth` (2.0); same-day repetition updates counts only.
+      Latency = mean assistant→user turn-timestamp delta per conversation, folded into
+      a sessions-weighted running average (stored for calibration; selection doesn't
+      rank on it yet). Wired: `ASSESSMENT_STRATEGY_FACTORIES` in server.py (offline
+      repos + shared `_build_strategies` resolver), passed to `ConsolidateMemory`.
+      11 unit tests (`test_tutor_assessment.py`); 181 total green.
+- [x] Tutor enrichment strategy (`propose_items`) — interest-cluster proposals once
       consolidation shows several user-initiated Concepts sharing a theme
-- [ ] Two-teacher cast — speaker-tagged LLM output parsing + per-segment Kokoro voice
+      (2026-07-12) — two halves. Generic: new `EnrichMemory` use case
+      (`services/memory.py`) closes the Phase 10 "port + Fake only" gap — dispatches
+      each persona's optional enrichment strategy AFTER consolidation (fresh
+      persona_state visible), forces drafts UNSEEN (a proposal cannot claim knowledge;
+      max-engagement keeps earned levels on merge), feeds them through the shared
+      `MemoryUpserter` (dedup = the same merge path as bundles/extraction), one
+      transaction per persona batch; wired into `_run_offline_pipeline` between
+      consolidate and brief. Tutor: `language_tutor/enrichment.py` +
+      `cluster_ollama.py` — seeds = user-initiated Concepts (assessment's salience
+      flag) with embeddings; greedy cosine clustering
+      (`interest_cluster_threshold` 0.55); a cluster of ≥ `interest_cluster_min_size`
+      (3) triggers ONE proposal per run (largest cluster — enrichment stays a trickle
+      beside the bundle backbone); `OllamaClusterProposer` proposes ≤
+      `enrichment_batch_size` (5) surrounding vocabulary items in the cluster's
+      majority language; prompt excludes only seed names — full exclusion is the
+      upsert-merge dedup, per the port's strategy-internal-exclusions contract.
+      11 unit tests (`test_tutor_enrichment.py` + `test_enrichment.py`); 192 total green.
+- [x] Two-teacher cast — speaker-tagged LLM output parsing + per-segment Kokoro voice
       switching in the streaming path; target-teacher voice rotates across sessions
       (HVPT), native-teacher voice fixed; ONE persona, ONE LLM call (two-agent design
       rejected on latency)
-- [ ] Tutor persona prompt pack — production-before-correction as elicit-self-repair-
+      (2026-07-12) — inline `[SPEAKER:role]` tags anywhere in the response (not just
+      the prefix): new `_SpeakerTagParser` in `services/session.py` incrementally
+      splits the post-prefix token stream into text chunks and role switches, holding
+      back partial tags; a switch flushes the open segment with the outgoing voice (a
+      natural break even mid-sentence); non-tag `[` text and dangling partial tags
+      pass through as spoken content; tags never reach the transcript. Roles resolve
+      via `_session_voice`: unknown role → default anchor; **HVPT rotation is a
+      generic voices-map semantic, not a settings key** (settings opacity would be
+      violated by generic code reading `target_voice_pool` — that sketch is
+      superseded): a non-default role value may be a `"|"`-separated pool, resolved
+      deterministically from `session_id` (stable within a session, varies across —
+      stateless, live path never writes). New entity invariant: the `"default"` voice
+      must be a single voice (validated in `AssistantPersona` + bundle parser).
+      10 unit tests (cast + domain guards); 202 total green.
+- [x] Tutor persona prompt pack — production-before-correction as elicit-self-repair-
       then-recast; pretesting/cognate guessing; TPRS-style narrative co-construction;
       episode-elicitation behaviour with ramp-up (A0 elicitation = seeding, not practice)
-- [ ] Half-life function calibration — assessment strategy writes `persona_state` from
+      (2026-07-12) — authored as the `[persona] system_prompt` of the first real bundle
+      (below): two-teacher cast rules ([SPEAKER:] tagging, target teacher
+      Italian-only), [FOCUS:] emission + spoken acknowledgment of the fetch delay,
+      elicit-self-repair-then-recast, pretesting/cognate guessing, TPRS story recap,
+      elicitation ramp (A0 = seeding/interest detection), self-assessment gating
+      (assistant-initiated weighed vs evidence; user-volunteered accepted), short
+      turns for no-barge-in, no-markdown/numbers-as-words. **Live-test watch item**:
+      generic `_compose_working_context` appends "Always respond in '<response_language>',
+      never switch" — the prompt pack claims precedence for the cast's bilingual rules,
+      but verify on the workstation that the LLM respects it; if not, the generic
+      response-language line may need a persona-level opt-out (design discussion).
+- [x] Half-life function calibration — assessment strategy writes `persona_state` from
       day one; selection keeps ranking by `engagement_level` until real data justifies
       switching to retention ranking (same posture as the 0.93/0.75 upsert thresholds)
-- [ ] First real bundle authored via the Phase 11 pipeline (target language TBD;
-      French↔English cognate accelerator is the natural first pair given the MEO user)
+      (2026-07-12) — this posture is implemented in the two strategies (assessment
+      always writes; retention ranking coded behind `settings["ranking"]="retention"`,
+      default engagement). The actual calibration on real usage data remains open by
+      definition — revisit once sessions accumulate.
+- [x] First real bundle authored via the Phase 11 pipeline
+      (2026-07-12) — **`bundles/italian-a0-starter/`** (target language: Italian —
+      Martin's pick; the French↔Italian cognate accelerator is a natural follow-up
+      bundle, not authored yet): persona_key `memai/italian-tutor`,
+      `strategy = "language_tutor"`, target-teacher HVPT pool `"if_sara|im_nicola"`,
+      default anchor derived at install, `pair_difficulty` keyed by learner language
+      (fr/es/pt 0.8, en 1.0, * 1.3). 4 lessons / 46 items per the authoring guide:
+      01 saluti (greetings + mi chiamo/come ti chiami), 02 io-tu-essere (irregular
+      essere form-by-form as atomic verbs + negation `rules` + sono-di construction),
+      03 verbi frequenti (-are `morphological_pattern` with steps, vorrei
+      construction, tu-vs-Lei `contrast_pair`, survival idioms), 04 al caffè (gendered
+      nouns, numbers, il/la `rules`, per-me construction). No-two-unknowns ordering
+      respected; descriptions in Italian (pair-independent). Parses through
+      `TomlPersonaBundleSource` (verified). **Install + live smoke = workstation.**
+- [ ] Workstation run (Phase 12 verification):
+      1. `git pull`; `ALTER TABLE personas ADD COLUMN strategy TEXT;`
+      2. Full test suite including integration + the config tests the laptop can't
+         collect (`platformdirs` missing from the frozen laptop venv — pre-existing).
+      3. `memai-bundle install bundles/italian-a0-starter` — expect persona created
+         with strategy `language_tutor`, 46 inserted / 0 merged; re-run → 0 / 46.
+      4. Live smoke: start server, switch to "Tutor Italiano"; verify (a) selection
+         batch injected on the tutor's first turn (watch server log for the
+         list_items query / injected item in a debug transcript), (b) two voices
+         audibly alternate on [SPEAKER:] tags and rotate target voice across two
+         sessions, (c) "just review old words" mid-session → [FOCUS:] marker, spoken
+         acknowledgment, steered batch next turns, (d) response-language watch item
+         from the prompt-pack entry above, (e) after disconnect+idle: consolidation
+         writes persona_state (check concepts.persona_state in DB) and enrichment
+         no-ops gracefully (no user-initiated cluster yet).

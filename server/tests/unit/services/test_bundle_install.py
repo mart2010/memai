@@ -59,6 +59,7 @@ def _definition(**overrides) -> BundlePersonaDefinition:
         response_language=Language("es"),
         voices={"target_teacher": "ef_dora"},
         settings={"elicitation_cap": 2, "pair_difficulty": {"en": 1.0, "*": 1.5}},
+        strategy="language_tutor",
     )
     defaults.update(overrides)
     return BundlePersonaDefinition(**defaults)
@@ -140,6 +141,8 @@ class TestPersonaCreation:
         assert created.response_language == Language("es")
         # [persona.settings] copied verbatim — opaque to generic code.
         assert created.settings == {"elicitation_cap": 2, "pair_difficulty": {"en": 1.0, "*": 1.5}}
+        # strategy passed through — resolved against the registry at server startup.
+        assert created.strategy == "language_tutor"
 
     def test_derives_default_voice_from_primary_language_when_omitted(self):
         harness = _Harness(_bundle(persona=_definition()))

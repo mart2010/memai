@@ -1,0 +1,85 @@
+title = "Io, tu e il verbo essere"
+
+[[items]]
+type = "concept"
+name = "io"
+category = "function_word"
+language = "it"
+description = "Pronome di prima persona: chi parla. In italiano spesso si omette, ma serve per dare enfasi: 'Io!'"
+
+[[items]]
+type = "concept"
+name = "tu"
+category = "function_word"
+language = "it"
+description = "Pronome di seconda persona informale: la persona con cui si parla. Già visto dentro 'come ti chiami?'."
+
+[[items]]
+type = "concept"
+name = "e"
+category = "function_word"
+language = "it"
+description = "Congiunzione che unisce due cose: 'io e tu', 'Marco e Anna'. Parola piccolissima e frequentissima."
+
+[[items]]
+type = "concept"
+name = "sono"
+category = "verb"
+language = "it"
+description = "Prima persona del verbo essere, irregolare — si impara forma per forma. 'Sono Marco.' 'Sono io.' Si combina con la presentazione già nota: 'Ciao, sono Anna.'"
+
+[[items]]
+type = "concept"
+name = "sei"
+category = "verb"
+language = "it"
+description = "Seconda persona del verbo essere, irregolare. 'Tu sei Marco?' — 'Sì, sono Marco.'"
+
+[[items]]
+type = "concept"
+name = "è"
+category = "verb"
+language = "it"
+description = "Terza persona del verbo essere, irregolare. 'È Anna.' 'Chi è?' — 'È Marco.'"
+
+[[items]]
+type = "concept"
+name = "non"
+category = "function_word"
+language = "it"
+description = "Particella di negazione del verbo. Da sola non basta: si usa dentro la frase, prima del verbo."
+
+[[items]]
+type = "procedure"
+name = "negazione con non"
+category = "rules"
+language = "it"
+description = "Regola di scelta: per negare una frase, 'non' va subito prima del verbo. 'Sono Marco.' diventa 'Non sono Marco.' 'È Anna.' diventa 'Non è Anna.' Usa solo forme del verbo essere già note."
+
+[[items]]
+type = "procedure"
+name = "sono di + [città]"
+category = "construction"
+language = "it"
+description = "Cornice per dire la propria origine: 'sono di' più il nome della città. 'Sono di Roma.' Con la negazione già nota: 'Non sono di Roma, sono di Milano.'"
+
+[[items]]
+type = "concept"
+name = "come stai?"
+category = "idiom"
+language = "it"
+description = "Espressione fissa informale per chiedere come va. Segue spesso un saluto già noto: 'Ciao! Come stai?'"
+
+[[items]]
+type = "concept"
+name = "bene"
+category = "adverb"
+language = "it"
+description = "Avverbio: risposta positiva a 'come stai?'. 'Bene, grazie!'"
+
+[[items]]
+type = "concept"
+name = "male"
+category = "adverb"
+language = "it"
+description = "Avverbio: il contrario di 'bene'. 'Come stai?' — 'Male.' Più comune: 'non male' (così così, accettabile)."

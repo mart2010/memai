@@ -156,6 +156,10 @@ class FakeMemoryRepository:
         self.concepts: list[Concept] = []
         self.procedures: list[Procedure] = []
         self.persona_state_writes: list[tuple[MemoryType, int, dict]] = []
+        # Configurable similarity results: search() returns these (filtered by memory
+        # type, capped at top_n) regardless of the query embedding.
+        self.search_results: list[tuple[float, MemoryItem]] = []
+        self.search_calls: list[tuple[list[float], tuple[MemoryType, ...]]] = []
         self._next_id: int = 1
 
     def _next(self) -> int:
@@ -190,8 +194,44 @@ class FakeMemoryRepository:
         memory_types: tuple[MemoryType, ...],
         top_n: int,
         persona_id: UUID | None = None,
+    ) -> list[tuple[float, MemoryItem]]:
+        self.search_calls.append((embedding, memory_types))
+
+        def _type_of(item: MemoryItem) -> MemoryType:
+            if isinstance(item, Episode):
+                return MemoryType.EPISODE
+            return MemoryType.CONCEPT if isinstance(item, Concept) else MemoryType.PROCEDURE
+
+        return [
+            (similarity, item)
+            for similarity, item in self.search_results
+            if _type_of(item) in memory_types
+        ][:top_n]
+
+    def list_items(
+        self,
+        persona_id: UUID,
+        memory_types: tuple[MemoryType, ...],
+        category: str | None = None,
+        engagement_levels: tuple[EngagementLevel, ...] | None = None,
+        limit: int | None = None,
     ) -> list[MemoryItem]:
-        return []
+        if MemoryType.EPISODE in memory_types:
+            raise ValueError("list_items covers persona-scoped items only — episodes carry no persona scope")
+
+        def _matches(item) -> bool:
+            return (
+                item.persona_id == persona_id
+                and (category is None or item.category == category)
+                and (engagement_levels is None or item.engagement_level in engagement_levels)
+            )
+
+        items: list[MemoryItem] = []
+        if MemoryType.CONCEPT in memory_types:
+            items.extend(sorted((c for c in self.concepts if _matches(c)), key=lambda c: c.id or 0))
+        if MemoryType.PROCEDURE in memory_types:
+            items.extend(sorted((p for p in self.procedures if _matches(p)), key=lambda p: p.id or 0))
+        return items[:limit] if limit is not None else items
 
 
 class FakePersonaRepository:
@@ -336,18 +376,27 @@ class FakeConsolidationExtractor:
 # ---------------------------------------------------------------------------
 
 class FakePersonaSelectionPort:
-    def __init__(self, items: list[SelectedItem] | None = None) -> None:
+    """`focused_items`, when set, is returned for any non-None focus — lets tests assert
+    that a [FOCUS: ...] re-fetch actually replaced the default batch."""
+
+    def __init__(
+        self,
+        items: list[SelectedItem] | None = None,
+        focused_items: list[SelectedItem] | None = None,
+    ) -> None:
         self.items = items or []
-        self.calls: list[tuple[UUID, str | None, EngagementLevel | None, int]] = []
+        self.focused_items = focused_items
+        self.calls: list[tuple[UUID, str | None, int]] = []
 
     def select_items(
         self,
         persona_id: UUID,
-        category: str | None = None,
-        engagement_level: EngagementLevel | None = None,
+        focus: str | None = None,
         limit: int = 10,
     ) -> list[SelectedItem]:
-        self.calls.append((persona_id, category, engagement_level, limit))
+        self.calls.append((persona_id, focus, limit))
+        if focus is not None and self.focused_items is not None:
+            return self.focused_items[:limit]
         return self.items[:limit]
 
 

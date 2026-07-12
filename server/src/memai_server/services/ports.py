@@ -116,6 +116,19 @@ class MemoryRepository(Protocol):
         """Persists an assessment strategy's opaque state byte-for-byte — the only write
         path to `persona_state` (single-writer contract; upserts never touch the column)."""
         ...
+    def list_items(
+        self,
+        persona_id: UUID,
+        memory_types: tuple[MemoryType, ...],
+        category: str | None = None,
+        engagement_levels: tuple[EngagementLevel, ...] | None = None,
+        limit: int | None = None,
+    ) -> list[MemoryItem]:
+        """Non-similarity listing for selection strategies, ordered by ascending id within
+        each memory type — insertion order is the curriculum-order contract for bundle
+        content (UNSEEN tiebreak). Concepts/procedures only: episodes carry no persona
+        scope, category, or engagement (implementations raise ValueError)."""
+        ...
     def search(
         self,
         embedding: list[float],
@@ -151,13 +164,17 @@ class ItemAssessment:
 
 class PersonaSelectionPort(Protocol):
     """Live hook — proactive, persona-driven selection (e.g. spaced repetition), distinct
-    from utterance-triggered RAG recall. Fetched once per session at session start; the
-    live conversation never writes to the DB, so re-querying mid-session is pointless."""
+    from utterance-triggered RAG recall. Fetched lazily on the first turn the persona is
+    active (sessions start on GA; strategy-bearing personas arrive via mid-session
+    switch). `focus` is the user's expressed wish for the session ("just review old
+    vocabulary today"), carried verbatim from a [FOCUS: ...] response marker and
+    interpreted only by the strategy; None means the default learning path. A focus
+    change re-fetches the batch — a different question, so the no-live-writes
+    fetch-once rationale is untouched."""
     def select_items(
         self,
         persona_id: UUID,
-        category: str | None = None,
-        engagement_level: EngagementLevel | None = None,
+        focus: str | None = None,
         limit: int = 10,
     ) -> Sequence[SelectedItem]: ...
 
@@ -233,6 +250,9 @@ class BundlePersonaDefinition:
     response_language: Language
     voices: dict[str, str]
     settings: dict | None = None  # copied VERBATIM to AssistantPersona.settings
+    # Strategy-set name (e.g. "language_tutor") resolved against the composition root's
+    # registry; an unknown name degrades gracefully (warning, no strategies bound).
+    strategy: str | None = None
 
 
 @dataclass(frozen=True)

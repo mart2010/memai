@@ -68,16 +68,24 @@ name = "Profesora Sofía"              #   not exist yet; content-only bundles (
 system_prompt = """..."""             #   cognate accelerators) omit it. Install fails
 languages = ["es"]                    #   if persona absent AND no [persona] present.
 response_language = "es"
+strategy = "language_tutor"           # optional (Phase 12 addition, format_version still 1):
+                                      # names the strategy set the composition root binds
+                                      # (selection/assessment/enrichment); omitted or
+                                      # unknown → no strategies bound (graceful warning)
 
 [persona.voices]
-target_teacher = "ef_dora"            # target-language roles: hardcodable (pair-indep.)
+target_teacher = "ef_dora|em_alex"    # target-language roles: hardcodable (pair-indep.);
+                                      # a "|"-separated value is an HVPT rotation pool,
+                                      # resolved to ONE voice per session by generic code
+                                      # (Phase 12 decision — supersedes the earlier
+                                      # settings.target_voice_pool sketch)
 # "default" (native-teacher anchor) MAY be omitted → installer derives it from
 # User.primary_language (same derivation as onboarding). Required by the entity
-# invariant, so the installer supplies it before construction.
+# invariant, so the installer supplies it before construction. It must be a SINGLE
+# voice — the anchor never rotates.
 
 [persona.settings]                    # opaque — copied VERBATIM to AssistantPersona.settings
 elicitation_cap = 2
-target_voice_pool = ["ef_dora", "em_alex"]   # HVPT rotation set (Phase 12 reads it)
 
 [persona.settings.pair_difficulty]    # tutor vocabulary: map keyed by LEARNER language,
 en = 1.0                              # resolved by the tutor's own strategy at runtime

@@ -243,6 +243,41 @@ The 2026-06-29 decisions (SRS simplification, bundle-only) WERE legitimately reo
   CLI; quality/safety review pass; persona-def upgrade semantics; knowledge-profile
   export (all listed in the Phase 11 brief).
 
+## Phase 12 wiring decisions (settled 2026-07-12, implemented)
+
+Three gaps surfaced when mapping this design onto the Phase 10 wiring; all closed in
+the "wiring foundation" step (see PLAN.md Phase 12 for implementation detail):
+
+- **Strategy binding**: `AssistantPersona.strategy: str | None` (e.g.
+  `"language_tutor"`), declared in the bundle's optional `[persona] strategy` key and
+  resolved against a composition-root registry in `server.py`. New tutor bundles bind
+  without code changes; unknown names warn and bind nothing.
+- **Lazy, focus-aware selection batches**: the Phase 10 eager fetch at session start
+  could never fire for a tutor (sessions start on GA; tutors arrive via `[PERSONA:]`
+  switch). Batches are now fetched lazily by `ProcessTurn` on the persona's first
+  active turn, held per persona in `WorkingMemory.selection_batches`. The port became
+  `select_items(persona_id, focus: str | None = None, limit=10)` — the speculative
+  `category`/`engagement_level` filters were dropped; `focus` carries the user's
+  expressed session wish verbatim ("just review old vocabulary today"), interpreted
+  only by the strategy; `focus=None` = resume the default curriculum.
+- **`[FOCUS: ...]` marker**: when the user states or changes what they want this
+  session, the tutor LLM emits the marker as a response prefix (combinable:
+  `[PERSONA:X][FOCUS: ...]` applies to X) and should verbally acknowledge the shift
+  ("let me pull up your review items") since the re-fetched batch serves the
+  *following* turns. Generic code strips the marker and passes the payload verbatim —
+  the inbound mirror of `SelectedItem.context`.
+- **`MemoryRepository.list_items`**: non-similarity listing (persona, types, optional
+  category/engagement filters) ordered by ascending id — the query surface the
+  selection strategy ranks over.
+- **Cast mechanism (implemented)**: inline `[SPEAKER:role]` tags in the LLM response
+  switch the Kokoro voice per segment in the streaming path; unknown roles fall back
+  to the default anchor. **HVPT rotation is a generic voices-map semantic**: a
+  non-default role's value may be a `"|"`-separated pool (`"ef_dora|em_alex"`),
+  resolved to one voice per session from the session id (stateless — the live path
+  never writes). This supersedes the earlier `settings.target_voice_pool` sketch,
+  which would have required generic code to read inside the opaque settings. The
+  `"default"` (native-anchor) voice must be a single voice — entity invariant.
+
 ## Pointers
 
 - PLAN.md Phase 12 — the implementation checklist this brief backs.

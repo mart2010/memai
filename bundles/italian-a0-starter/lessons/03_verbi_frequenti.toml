@@ -1,0 +1,79 @@
+title = "Verbi frequenti e prime frasi"
+
+[[items]]
+type = "concept"
+name = "parlare"
+category = "verb"
+language = "it"
+description = "Verbo all'infinito: comunicare a voce. Verbo regolare in -are, il gruppo più grande e regolare dell'italiano."
+
+[[items]]
+type = "concept"
+name = "mangiare"
+category = "verb"
+language = "it"
+description = "Verbo all'infinito: consumare cibo. Regolare in -are, come 'parlare'."
+
+[[items]]
+type = "concept"
+name = "bere"
+category = "verb"
+language = "it"
+description = "Verbo all'infinito: consumare una bevanda. Per ora si usa all'infinito; la coniugazione è irregolare e arriva più avanti."
+
+[[items]]
+type = "procedure"
+name = "coniugazione -are (presente, singolare)"
+category = "morphological_pattern"
+language = "it"
+description = "Schema che genera le forme del presente per i verbi regolari in -are già noti come 'parlare' e 'mangiare': si toglie -are e si aggiunge la desinenza della persona. 'Io parlo, tu parli, lui parla.' Vale per centinaia di verbi."
+steps = ["io parlo", "tu parli", "lui/lei parla"]
+
+[[items]]
+type = "procedure"
+name = "vorrei + [nome/infinito]"
+category = "construction"
+language = "it"
+description = "Cornice di cortesia per esprimere un desiderio: 'vorrei' più una cosa o un verbo all'infinito già noto. 'Vorrei mangiare.' 'Vorrei bere.' Forma gentile, perfetta per chiedere qualcosa."
+
+[[items]]
+type = "concept"
+name = "anche"
+category = "function_word"
+language = "it"
+description = "Parola funzionale: aggiunge qualcosa o qualcuno. 'Anche io!' 'Vorrei anche bere.'"
+
+[[items]]
+type = "concept"
+name = "adesso"
+category = "adverb"
+language = "it"
+description = "Avverbio di tempo: in questo momento. 'Adesso parlo io.' 'Vorrei mangiare adesso.'"
+
+[[items]]
+type = "concept"
+name = "oggi"
+category = "adverb"
+language = "it"
+description = "Avverbio di tempo: in questo giorno. 'Oggi sto bene.' 'Come stai oggi?'"
+
+[[items]]
+type = "concept"
+name = "tu vs Lei"
+category = "contrast_pair"
+language = "it"
+description = "Discriminazione tra i due modi di rivolgersi a qualcuno: 'tu' informale (amici, famiglia, coetanei) e 'Lei' formale (sconosciuti, situazioni di rispetto), che usa la terza persona del verbo: 'Tu sei...' ma 'Lei è...'. La scelta sbagliata non blocca la comunicazione ma cambia il tono."
+
+[[items]]
+type = "concept"
+name = "non capisco"
+category = "idiom"
+language = "it"
+description = "Frase di sopravvivenza, da usare come blocco fisso: segnala che non si è capito. 'Non capisco. Puoi ripetere?' Contiene la negazione 'non' già nota."
+
+[[items]]
+type = "concept"
+name = "puoi ripetere?"
+category = "idiom"
+language = "it"
+description = "Frase di sopravvivenza, blocco fisso: chiede di ripetere. Spesso insieme a 'non capisco' e a 'per favore': 'Puoi ripetere, per favore?'"

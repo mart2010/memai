@@ -191,6 +191,7 @@ class InstallPersonaBundle:
             updated_at=now,
             persona_key=bundle.persona_key,
             settings=definition.settings,  # copied verbatim — opaque to generic code
+            strategy=definition.strategy,  # resolved against the registry at server startup
         )
         self._persona_repo.save(persona)
         return persona

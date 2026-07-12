@@ -1,0 +1,85 @@
+title = "Al caffè"
+
+[[items]]
+type = "concept"
+name = "il caffè"
+category = "noun"
+language = "it"
+description = "Nome maschile: la bevanda simbolo del bar italiano — un espresso, salvo indicazione diversa. 'Vorrei il caffè.' Con l'articolo maschile 'il'."
+
+[[items]]
+type = "concept"
+name = "l'acqua"
+category = "noun"
+language = "it"
+description = "Nome femminile: da bere. Al bar si chiede 'naturale o frizzante'. L'articolo femminile 'la' davanti a vocale diventa l': 'l'acqua'."
+
+[[items]]
+type = "concept"
+name = "il vino"
+category = "noun"
+language = "it"
+description = "Nome maschile: la bevanda della cena. 'Vorrei il vino.' Rosso o bianco."
+
+[[items]]
+type = "concept"
+name = "la pizza"
+category = "noun"
+language = "it"
+description = "Nome femminile: il piatto italiano più famoso. 'Vorrei la pizza.' 'Vorrei mangiare la pizza adesso!'"
+
+[[items]]
+type = "concept"
+name = "il conto"
+category = "noun"
+language = "it"
+description = "Nome maschile: quanto si deve pagare al bar o al ristorante. 'Il conto, per favore.'"
+
+[[items]]
+type = "concept"
+name = "uno"
+category = "number"
+language = "it"
+description = "Il numero uno. Davanti a un nome diventa articolo: 'un caffè', 'una pizza'."
+
+[[items]]
+type = "concept"
+name = "due"
+category = "number"
+language = "it"
+description = "Il numero due. 'Due caffè, per favore.'"
+
+[[items]]
+type = "concept"
+name = "tre"
+category = "number"
+language = "it"
+description = "Il numero tre. 'Tre pizze!'"
+
+[[items]]
+type = "concept"
+name = "quanto costa?"
+category = "idiom"
+language = "it"
+description = "Espressione fissa per chiedere il prezzo di una cosa. 'Il caffè, quanto costa?' La risposta arriva coi numeri già noti."
+
+[[items]]
+type = "procedure"
+name = "genere: il / la"
+category = "rules"
+language = "it"
+description = "Regola di scelta dell'articolo: i nomi italiani hanno un genere. Maschile prende 'il' ('il caffè', 'il vino', 'il conto'), femminile prende 'la' ('la pizza', 'l'acqua' davanti a vocale). Il genere si impara insieme al nome, come una coppia fissa."
+
+[[items]]
+type = "concept"
+name = "buono / buona"
+category = "adjective"
+language = "it"
+description = "Aggettivo: di buona qualità, gradevole. Si accorda col genere del nome già noto: 'il caffè è buono', 'la pizza è buona'. Usa la forma 'è' del verbo essere."
+
+[[items]]
+type = "procedure"
+name = "per me, + [nome]"
+category = "construction"
+language = "it"
+description = "Cornice per ordinare al bar: 'per me' più la cosa desiderata, tutta con parole già note. 'Per me, un caffè.' 'Per me, la pizza e l'acqua.' Alternativa rapida a 'vorrei'."

@@ -3,10 +3,11 @@ import asyncio
 import json
 import traceback
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, UTC
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import psycopg
 import truststore
@@ -17,6 +18,15 @@ from .infrastructure import postgres
 from .infrastructure.config import load_config
 from .infrastructure.embedding import SentenceTransformerEmbeddingService
 from .infrastructure.json_file import JSONLSessionLogReader, JSONLSessionReplayReader, JSONLTurnLogger
+from .infrastructure.language_tutor import (
+    LanguageTutorAssessmentStrategy,
+    LanguageTutorEnrichmentStrategy,
+    LanguageTutorSelectionStrategy,
+    OllamaClusterProposer,
+    OllamaFocusInterpreter,
+    OllamaPracticeJudge,
+    STRATEGY_NAME as LANGUAGE_TUTOR,
+)
 from .infrastructure.llm import (
     OllamaConsolidationExtractor,
     OllamaDisambiguationEvaluator,
@@ -35,8 +45,9 @@ from .infrastructure.postgres import (
 )
 from .infrastructure.stt import FasterWhisperSTTService
 from .infrastructure.tts import KOKORO_DEFAULT_VOICES, KokoroTTSService
-from .services.memory import ConsolidateMemory, GenerateMemoryBrief
+from .services.memory import ConsolidateMemory, EnrichMemory, GenerateMemoryBrief
 from .services.persona import EditPersona
+from .services.ports import PersonaAssessmentPort, PersonaEnrichmentPort, PersonaSelectionPort
 from .services.replay import TurnLogReplayer
 from .services.session import EndSession, ProcessTurn, StartSession
 from .services.user import CompleteOnboarding
@@ -57,6 +68,10 @@ class ServerContext:
     log_dir: Path
     memory_merge_threshold: float
     memory_disambiguate_threshold: float
+    # Exposed for strategy factories that construct their own LLM-backed helpers
+    # (e.g. the tutor's focus interpreter) — same model/host as every other adapter.
+    llm_model: str
+    llm_ollama_host: str | None
     user_repo: PSUserRepository
     persona_repo: PSPersonaRepository
     memory_brief_repo: PSMemoryBriefRepository
@@ -121,16 +136,28 @@ async def _run_offline_pipeline(ctx: ServerContext) -> None:
         synthesizer=ctx.synthesizer,
         unit_of_work=ctx.offline_unit_of_work,
         user_repo=ctx.offline_user_repo,
-        # No assessment strategies registered yet — the first concrete one is the
-        # language tutor's (Phase 12); GA assesses nothing.
+        assessment_strategies=_build_assessment_strategies(ctx),
         merge_threshold=ctx.memory_merge_threshold,
         disambiguate_threshold=ctx.memory_disambiguate_threshold,
     )
     processed = await asyncio.to_thread(consolidate.execute)
+    # Enrichment runs after consolidation so strategies see freshly written
+    # persona_state; strategies decide internally whether anything qualifies.
+    enrich = EnrichMemory(
+        memory_repo=ctx.offline_memory_repo,
+        embedding_service=ctx.embedding_service,
+        disambiguator=ctx.disambiguator,
+        synthesizer=ctx.synthesizer,
+        unit_of_work=ctx.offline_unit_of_work,
+        enrichment_strategies=_build_enrichment_strategies(ctx),
+        merge_threshold=ctx.memory_merge_threshold,
+        disambiguate_threshold=ctx.memory_disambiguate_threshold,
+    )
+    enriched = await asyncio.to_thread(enrich.execute)
     if processed:
         brief_gen = GenerateMemoryBrief(llm=ctx.llm, memory_brief_repo=ctx.offline_memory_brief_repo)
         await brief_gen.execute(datetime.now(UTC))
-    print(f"[offline] replayed={replayed} consolidated={processed}")
+    print(f"[offline] replayed={replayed} consolidated={processed} enriched={enriched}")
 
 
 async def _run_offline_pipeline_after_idle(ctx: ServerContext, idle_consolidation_minutes: float) -> None:
@@ -142,6 +169,77 @@ async def _run_offline_pipeline_after_idle(ctx: ServerContext, idle_consolidatio
         await _run_offline_pipeline(ctx)
     except Exception:
         traceback.print_exc()
+
+
+# ---------------------------------------------------------------------------
+# Persona strategy registry
+# ---------------------------------------------------------------------------
+
+# AssistantPersona.strategy name -> selection-strategy factory. Binding personas to
+# concrete strategy implementations is a composition-root concern, so the registry lives
+# here. One entry serves every persona of that class (e.g. all language tutors, any
+# target language) — new bundles bind without code changes.
+SELECTION_STRATEGY_FACTORIES: dict[str, Callable[["ServerContext"], PersonaSelectionPort]] = {
+    LANGUAGE_TUTOR: lambda ctx: LanguageTutorSelectionStrategy(
+        memory_repo=ctx.memory_repo,
+        persona_repo=ctx.persona_repo,
+        embedding_service=ctx.embedding_service,
+        focus_interpreter=OllamaFocusInterpreter(model=ctx.llm_model, host=ctx.llm_ollama_host),
+    ),
+}
+
+
+# Same registry, offline half: assessment strategies run inside the consolidation
+# pipeline and are constructed against the offline_* repos/connection.
+ASSESSMENT_STRATEGY_FACTORIES: dict[str, Callable[["ServerContext"], PersonaAssessmentPort]] = {
+    LANGUAGE_TUTOR: lambda ctx: LanguageTutorAssessmentStrategy(
+        memory_repo=ctx.offline_memory_repo,
+        persona_repo=ctx.offline_persona_repo,
+        user_repo=ctx.offline_user_repo,
+        judge=OllamaPracticeJudge(model=ctx.llm_model, host=ctx.llm_ollama_host),
+    ),
+}
+
+# Offline half, enrichment: dispatched by EnrichMemory after consolidation, so the
+# strategies see freshly written persona_state (e.g. user_initiated salience).
+ENRICHMENT_STRATEGY_FACTORIES: dict[str, Callable[["ServerContext"], PersonaEnrichmentPort]] = {
+    LANGUAGE_TUTOR: lambda ctx: LanguageTutorEnrichmentStrategy(
+        memory_repo=ctx.offline_memory_repo,
+        persona_repo=ctx.offline_persona_repo,
+        proposer=OllamaClusterProposer(model=ctx.llm_model, host=ctx.llm_ollama_host),
+    ),
+}
+
+
+def _build_strategies(ctx: "ServerContext", factories: dict, persona_repo) -> dict[UUID, object]:
+    """Resolve each persona's declared strategy name against a registry. Built per
+    connection / per offline run so a bundle installed between sessions binds without
+    a server restart. Unknown names degrade gracefully: warn, bind nothing."""
+    strategies: dict[UUID, object] = {}
+    for persona in persona_repo.list_all():
+        if persona.strategy is None:
+            continue
+        factory = factories.get(persona.strategy)
+        if factory is None:
+            print(
+                f"[strategy] persona '{persona.name}' declares unknown strategy "
+                f"'{persona.strategy}' — nothing bound from this registry"
+            )
+            continue
+        strategies[persona.id] = factory(ctx)
+    return strategies
+
+
+def _build_selection_strategies(ctx: "ServerContext") -> dict[UUID, PersonaSelectionPort]:
+    return _build_strategies(ctx, SELECTION_STRATEGY_FACTORIES, ctx.persona_repo)
+
+
+def _build_assessment_strategies(ctx: "ServerContext") -> dict[UUID, PersonaAssessmentPort]:
+    return _build_strategies(ctx, ASSESSMENT_STRATEGY_FACTORIES, ctx.offline_persona_repo)
+
+
+def _build_enrichment_strategies(ctx: "ServerContext") -> dict[UUID, PersonaEnrichmentPort]:
+    return _build_strategies(ctx, ENRICHMENT_STRATEGY_FACTORIES, ctx.offline_persona_repo)
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +281,7 @@ async def _handle(ws, ctx: ServerContext) -> None:
         recall_detector=ctx.recall_detector,
         persona_repo=ctx.persona_repo,
         turn_logger=turn_logger,
+        selection_strategies=_build_selection_strategies(ctx),
     )
     end_session = EndSession(turn_logger=turn_logger)
     complete_onboarding = CompleteOnboarding(user_repo=ctx.user_repo)
@@ -298,6 +397,8 @@ def main() -> None:
         log_dir=cfg.log_dir,
         memory_merge_threshold=cfg.memory_merge_threshold,
         memory_disambiguate_threshold=cfg.memory_disambiguate_threshold,
+        llm_model=cfg.llm_model,
+        llm_ollama_host=cfg.llm_ollama_host,
         user_repo=user_repo,
         persona_repo=PSPersonaRepository(conn),
         memory_brief_repo=PSMemoryBriefRepository(conn),

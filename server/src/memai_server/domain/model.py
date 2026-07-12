@@ -53,7 +53,20 @@ GENERAL_ASSISTANT_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 # Every persona's `voices` map must carry this role. Additional roles (e.g. a language
 # tutor's two-teacher cast) are persona-defined; generic code only ever reads DEFAULT_VOICE_ROLE.
+# An additional role's value may be a "|"-separated rotation pool ("ef_dora|em_alex"),
+# resolved to ONE voice per session by the live path (HVPT — multi-voice exposure).
+# The default role is the fixed anchor and must always be a single voice.
 DEFAULT_VOICE_ROLE = "default"
+
+
+def _validate_voices(voices: dict[str, str]) -> None:
+    if DEFAULT_VOICE_ROLE not in voices:
+        raise ValueError(f"voices must include the '{DEFAULT_VOICE_ROLE}' role")
+    if "|" in voices[DEFAULT_VOICE_ROLE]:
+        raise ValueError(
+            f"the '{DEFAULT_VOICE_ROLE}' voice must be a single voice (the fixed anchor) — "
+            "'|' rotation pools are only for additional roles"
+        )
 
 
 @dataclass
@@ -72,14 +85,17 @@ class AssistantPersona:
     # Author-namespaced bundle identity (e.g. "meo/spanish-tutor"), unique by convention;
     # None for GA and user-created personas. Set once at bundle install, never reassigned.
     persona_key: str | None = None
+    # Names the strategy set (selection/assessment/enrichment) this persona binds to,
+    # e.g. "language_tutor". Resolved against the composition root's registry at startup;
+    # None (GA, user-created personas) binds nothing. Set at creation like persona_key.
+    strategy: str | None = None
     # Opaque persona-owned tunables, copied verbatim from a bundle's [persona.settings].
     # Read only by the owning persona's own strategies; generic code never branches on
     # its contents (same leak-prevention contract as persona_state, one level up).
     settings: dict | None = None
 
     def __post_init__(self) -> None:
-        if DEFAULT_VOICE_ROLE not in self.voices:
-            raise ValueError(f"voices must include the '{DEFAULT_VOICE_ROLE}' role")
+        _validate_voices(self.voices)
 
     @property
     def default_voice(self) -> str:
@@ -99,8 +115,7 @@ class AssistantPersona:
         if system_prompt is not None:
             self.system_prompt = system_prompt
         if voices is not None:
-            if DEFAULT_VOICE_ROLE not in voices:
-                raise ValueError(f"voices must include the '{DEFAULT_VOICE_ROLE}' role")
+            _validate_voices(voices)
             self.voices = voices
         if speaking_rate is not None:
             self.speaking_rate = speaking_rate

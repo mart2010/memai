@@ -1,0 +1,78 @@
+title = "Saluti e presentazioni"
+
+[[items]]
+type = "concept"
+name = "ciao"
+category = "function_word"
+language = "it"
+description = "Saluto informale, per dire sia 'hello' sia 'goodbye' tra amici e persone che si conoscono bene. Si usa quando si arriva e quando si va via: 'Ciao!'"
+
+[[items]]
+type = "concept"
+name = "buongiorno"
+category = "function_word"
+language = "it"
+description = "Saluto cortese del mattino e della giornata. Adatto con sconosciuti, nei negozi, al lavoro. 'Buongiorno!'"
+
+[[items]]
+type = "concept"
+name = "buonasera"
+category = "function_word"
+language = "it"
+description = "Saluto cortese della sera, dal tardo pomeriggio in poi. 'Buonasera!'"
+
+[[items]]
+type = "concept"
+name = "arrivederci"
+category = "function_word"
+language = "it"
+description = "Per congedarsi in modo cortese, quando ci si rivedrà. Più formale di 'ciao'. 'Arrivederci!'"
+
+[[items]]
+type = "concept"
+name = "grazie"
+category = "function_word"
+language = "it"
+description = "Per ringraziare. 'Grazie!' Si può rafforzare: 'grazie mille'."
+
+[[items]]
+type = "concept"
+name = "prego"
+category = "function_word"
+language = "it"
+description = "Risposta standard a 'grazie'. 'Grazie!' — 'Prego!' Si usa anche per invitare qualcuno a passare o servirsi."
+
+[[items]]
+type = "concept"
+name = "per favore"
+category = "idiom"
+language = "it"
+description = "Espressione fissa per chiedere qualcosa con cortesia, messa di solito alla fine della richiesta. 'Un momento, per favore.'"
+
+[[items]]
+type = "concept"
+name = "sì"
+category = "function_word"
+language = "it"
+description = "Affermazione: 'sì'. Attenzione all'accento scritto, ma in voce conta solo il suono."
+
+[[items]]
+type = "concept"
+name = "no"
+category = "function_word"
+language = "it"
+description = "Negazione nella risposta: 'no'. 'Sì o no?'"
+
+[[items]]
+type = "procedure"
+name = "mi chiamo + [nome]"
+category = "construction"
+language = "it"
+description = "Cornice per presentarsi: 'mi chiamo' seguito dal proprio nome. 'Mi chiamo Marco.' Si risponde così alla domanda sul nome, spesso con un saluto già noto: 'Ciao, mi chiamo Marco.'"
+
+[[items]]
+type = "procedure"
+name = "come ti chiami?"
+category = "construction"
+language = "it"
+description = "Domanda informale per chiedere il nome. La risposta usa la cornice già nota 'mi chiamo + nome': 'Come ti chiami?' — 'Mi chiamo Anna.'"

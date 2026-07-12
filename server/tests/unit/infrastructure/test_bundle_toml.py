@@ -26,6 +26,7 @@ name = "Profesora Sofía"
 system_prompt = "You teach Spanish."
 languages = ["es"]
 response_language = "es"
+strategy = "language_tutor"
 
 [persona.voices]
 target_teacher = "ef_dora"
@@ -99,6 +100,13 @@ class TestTomlPersonaBundleSourceHappyPath:
             "elicitation_cap": 2,
             "pair_difficulty": {"en": 1.0, "*": 1.5},
         }
+        assert bundle.persona.strategy == "language_tutor"
+
+    def test_persona_without_strategy_parses_to_none(self, tmp_path: Path) -> None:
+        manifest = MANIFEST.replace('strategy = "language_tutor"\n', "")
+        bundle = TomlPersonaBundleSource().load(_write_bundle(tmp_path, manifest=manifest))
+        assert bundle.persona is not None
+        assert bundle.persona.strategy is None
 
     def test_items_parse_with_types_and_steps(self, tmp_path: Path) -> None:
         bundle = TomlPersonaBundleSource().load(_write_bundle(tmp_path))

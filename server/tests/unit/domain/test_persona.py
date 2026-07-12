@@ -59,6 +59,38 @@ class TestAssistantPersonaGuards:
                 is_system=False, created_at=now, updated_at=now,
             )
 
+    def test_default_voice_must_be_single_no_rotation_pool(self):
+        # The default role is the fixed anchor; "|" rotation pools (HVPT) are only
+        # valid on additional roles.
+        now = datetime.now(UTC)
+        with pytest.raises(ValueError, match="single voice"):
+            AssistantPersona(
+                id=uuid4(), name="Tutor", system_prompt="Teach me.",
+                languages=[], response_language=Language("en"),
+                voices={"default": "af_heart|ff_siwis"},
+                is_system=False, created_at=now, updated_at=now,
+            )
+
+    def test_additional_role_may_carry_rotation_pool(self):
+        now = datetime.now(UTC)
+        persona = AssistantPersona(
+            id=uuid4(), name="Tutor", system_prompt="Teach me.",
+            languages=[], response_language=Language("en"),
+            voices={"default": "ff_siwis", "target_teacher": "ef_dora|em_alex"},
+            is_system=False, created_at=now, updated_at=now,
+        )
+        assert persona.voices["target_teacher"] == "ef_dora|em_alex"
+
+    def test_update_rejects_pool_on_default_role(self):
+        now = datetime.now(UTC)
+        persona = AssistantPersona(
+            id=uuid4(), name="Tutor", system_prompt="Teach me.",
+            languages=[], response_language=Language("en"), voices={"default": "af_heart"},
+            is_system=False, created_at=now, updated_at=now,
+        )
+        with pytest.raises(ValueError, match="single voice"):
+            persona.update(updated_at=datetime.now(UTC), voices={"default": "a|b"})
+
     def test_update_rejects_voices_without_default_role(self):
         now = datetime.now(UTC)
         persona = AssistantPersona(

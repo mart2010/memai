@@ -9,7 +9,7 @@ import tomllib
 from datetime import date, datetime
 from pathlib import Path
 
-from ..domain.model import Language, MemoryType
+from ..domain.model import DEFAULT_VOICE_ROLE, Language, MemoryType
 from ..services.ports import (
     BUNDLE_FORMAT_VERSION,
     BundleFormatError,
@@ -23,7 +23,7 @@ _ITEM_TYPES = {"concept": MemoryType.CONCEPT, "procedure": MemoryType.PROCEDURE}
 # Allowlist per the format spec. engagement_level / persona_state / embedding are
 # structurally impossible in a bundle — reject loudly rather than silently ignore.
 _ITEM_KEYS = {"type", "name", "category", "language", "description", "steps"}
-_PERSONA_KEYS = {"name", "system_prompt", "languages", "response_language", "voices", "settings"}
+_PERSONA_KEYS = {"name", "system_prompt", "languages", "response_language", "voices", "settings", "strategy"}
 
 
 class TomlPersonaBundleSource:
@@ -115,10 +115,19 @@ def _parse_persona(table: object) -> BundlePersonaDefinition | None:
         isinstance(k, str) and isinstance(v, str) for k, v in voices.items()
     ):
         raise BundleFormatError("[persona.voices] must map speaker roles to voice names")
+    if "|" in voices.get(DEFAULT_VOICE_ROLE, ""):
+        raise BundleFormatError(
+            f'[persona.voices]: the "{DEFAULT_VOICE_ROLE}" voice must be a single voice '
+            '(the fixed anchor) — "|" rotation pools are only for additional roles'
+        )
 
     settings = table.get("settings")
     if settings is not None and not isinstance(settings, dict):
         raise BundleFormatError("[persona.settings] must be a table")
+
+    strategy = table.get("strategy")
+    if strategy is not None and (not isinstance(strategy, str) or not strategy.strip()):
+        raise BundleFormatError("[persona]: 'strategy' must be a non-empty string when present")
 
     return BundlePersonaDefinition(
         name=_require_str(table, "name", "[persona]"),
@@ -127,6 +136,7 @@ def _parse_persona(table: object) -> BundlePersonaDefinition | None:
         response_language=Language(_require_str(table, "response_language", "[persona]")),
         voices=dict(voices),
         settings=_json_safe(settings) if settings is not None else None,
+        strategy=strategy,
     )
 
 

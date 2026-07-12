@@ -29,6 +29,11 @@ The installer rejects bundles that violate these — author with them in mind:
 - **`persona_key` is your namespace** (`<author>/<persona>`, e.g. `meo/spanish-tutor`).
   Unique by convention — pick a prefix you own and keep it stable across every bundle
   targeting the same persona (base level bundles, accelerators, later levels).
+- **`strategy` names the runtime behaviour set** (optional `[persona]` key, e.g.
+  `strategy = "language_tutor"`): it binds the persona to the selection/assessment/
+  enrichment strategies registered in the memai server. Omit it for a plain
+  conversational persona; an unknown name installs fine but binds nothing (warning at
+  server startup). A language-tutor bundle should declare `"language_tutor"`.
 
 ## Pair-independence
 

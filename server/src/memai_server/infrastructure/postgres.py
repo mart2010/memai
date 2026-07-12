@@ -67,13 +67,13 @@ class PSUnitOfWork:
 
 _PERSONA_COLUMNS = (
     "id, name, system_prompt, languages, response_language, voices, is_system, "
-    "created_at, updated_at, speaking_rate, is_active, persona_key, settings"
+    "created_at, updated_at, speaking_rate, is_active, persona_key, settings, strategy"
 )
 
 
 def _row_to_persona(row: tuple) -> AssistantPersona:
     (id_, name, system_prompt, languages, response_language, voices, is_system,
-     created_at, updated_at, speaking_rate, is_active, persona_key, settings) = row
+     created_at, updated_at, speaking_rate, is_active, persona_key, settings, strategy) = row
     return AssistantPersona(
         id=id_,
         name=name,
@@ -88,6 +88,55 @@ def _row_to_persona(row: tuple) -> AssistantPersona:
         is_active=is_active,
         persona_key=persona_key,
         settings=settings,
+        strategy=strategy,
+    )
+
+
+_CONCEPT_COLUMNS = (
+    "id, persona_id, name, description, language, category, persona_state, "
+    "engagement_level, created_at, updated_at, embedding"
+)
+
+_PROCEDURE_COLUMNS = (
+    "id, persona_id, name, description, steps, language, category, persona_state, "
+    "engagement_level, created_at, updated_at, embedding"
+)
+
+
+def _row_to_concept(row: tuple) -> Concept:
+    (id_, persona_id, name, description, language, category, persona_state,
+     engagement_level, created_at, updated_at, emb) = row
+    return Concept(
+        id=id_,
+        persona_id=persona_id,
+        name=name,
+        description=description,
+        language=Language(language),
+        category=category,
+        persona_state=persona_state,
+        engagement_level=EngagementLevel[engagement_level.upper()],
+        created_at=created_at,
+        updated_at=updated_at,
+        embedding=_list(emb),
+    )
+
+
+def _row_to_procedure(row: tuple) -> Procedure:
+    (id_, persona_id, name, description, steps, language, category, persona_state,
+     engagement_level, created_at, updated_at, emb) = row
+    return Procedure(
+        id=id_,
+        persona_id=persona_id,
+        name=name,
+        description=description,
+        steps=list(steps) if steps else [],
+        language=Language(language),
+        category=category,
+        persona_state=persona_state,
+        engagement_level=EngagementLevel[engagement_level.upper()],
+        created_at=created_at,
+        updated_at=updated_at,
+        embedding=_list(emb),
     )
 
 
@@ -137,7 +186,7 @@ class PSUserRepository:
                 (
                     user.id,
                     user.primary_language.code if user.primary_language else None,
-                    [l.code for l in user.secondary_languages],
+                    [lang.code for lang in user.secondary_languages],
                     user.idle_consolidation_minutes,
                 ),
             )
@@ -173,15 +222,16 @@ class PSPersonaRepository:
             return [_row_to_persona(row) for row in cur.fetchall()]
 
     def save(self, persona: AssistantPersona) -> None:
-        # persona_key is deliberately absent from the UPDATE branch: like is_system, it is
-        # identity set at creation (by the bundle installer) and never reassigned.
+        # persona_key and strategy are deliberately absent from the UPDATE branch: like
+        # is_system, they are identity set at creation (by the bundle installer) and
+        # never reassigned.
         with self._conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO personas
                     (id, name, system_prompt, languages, response_language, voices, is_system,
-                     created_at, updated_at, speaking_rate, is_active, persona_key, settings)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     created_at, updated_at, speaking_rate, is_active, persona_key, settings, strategy)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     name = EXCLUDED.name,
                     system_prompt = EXCLUDED.system_prompt,
@@ -197,7 +247,7 @@ class PSPersonaRepository:
                     persona.id,
                     persona.name,
                     persona.system_prompt,
-                    [l.code for l in persona.languages],
+                    [lang.code for lang in persona.languages],
                     persona.response_language.code,
                     Jsonb(persona.voices),
                     persona.is_system,
@@ -207,6 +257,7 @@ class PSPersonaRepository:
                     persona.is_active,
                     persona.persona_key,
                     Jsonb(persona.settings) if persona.settings is not None else None,
+                    persona.strategy,
                 ),
             )
 
@@ -476,6 +527,41 @@ class PSMemoryRepository:
                 f"UPDATE {table} SET persona_state = %s, updated_at = %s WHERE id = %s",
                 (Jsonb(persona_state), datetime.now(UTC), item_id),
             )
+
+    def list_items(
+        self,
+        persona_id: UUID,
+        memory_types: tuple[MemoryType, ...],
+        category: str | None = None,
+        engagement_levels: tuple[EngagementLevel, ...] | None = None,
+        limit: int | None = None,
+    ) -> list[MemoryItem]:
+        if MemoryType.EPISODE in memory_types:
+            raise ValueError("list_items covers persona-scoped items only — episodes carry no persona scope")
+
+        def _query(table: str, columns: str) -> list[tuple]:
+            clauses = ["persona_id = %s"]
+            params: list[object] = [persona_id]
+            if category is not None:
+                clauses.append("category = %s")
+                params.append(category)
+            if engagement_levels is not None:
+                clauses.append("engagement_level = ANY(%s)")
+                params.append([lvl.name.lower() for lvl in engagement_levels])
+            sql = f"SELECT {columns} FROM {table} WHERE {' AND '.join(clauses)} ORDER BY id"
+            if limit is not None:
+                sql += " LIMIT %s"
+                params.append(limit)
+            with self._conn.cursor() as cur:
+                cur.execute(sql, params)
+                return cur.fetchall()
+
+        items: list[MemoryItem] = []
+        if MemoryType.CONCEPT in memory_types:
+            items.extend(_row_to_concept(row) for row in _query("concepts", _CONCEPT_COLUMNS))
+        if MemoryType.PROCEDURE in memory_types:
+            items.extend(_row_to_procedure(row) for row in _query("procedures", _PROCEDURE_COLUMNS))
+        return items[:limit] if limit is not None else items
 
     def search(
         self,

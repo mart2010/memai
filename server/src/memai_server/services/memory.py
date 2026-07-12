@@ -2,7 +2,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from ..domain.model import MemoryBrief, MemoryType
+from ..domain.model import Concept, EngagementLevel, MemoryBrief, MemoryType
 from ..domain.protocols import WorthinessEvaluator
 from .ports import (
     ConsolidationExtractor,
@@ -16,6 +16,7 @@ from .ports import (
     MemorySynthesizer,
     Message,
     PersonaAssessmentPort,
+    PersonaEnrichmentPort,
     UnitOfWork,
     UserRepository,
 )
@@ -109,6 +110,56 @@ class ConsolidateMemory:
                 self._conversation_repo.save_consolidation(conversation)
             processed += 1
 
+        return processed
+
+
+class EnrichMemory:
+    """Offline dispatch of the optional PersonaEnrichmentPort — runs after
+    consolidation (so fresh persona_state is visible to the strategies), feeding
+    proposed drafts through the same upsert pipeline as extraction and bundle
+    install. Which items matter for exclusion is persona-specific knowledge computed
+    inside each strategy; the upsert-merge dedup is the safety net either way."""
+
+    def __init__(
+        self,
+        memory_repo: MemoryRepository,
+        embedding_service: EmbeddingService,
+        disambiguator: DisambiguationEvaluator,
+        synthesizer: MemorySynthesizer,
+        unit_of_work: UnitOfWork,
+        enrichment_strategies: dict[UUID, PersonaEnrichmentPort] | None = None,
+        merge_threshold: float = DEFAULT_MERGE_THRESHOLD,
+        disambiguate_threshold: float = DEFAULT_DISAMBIGUATE_THRESHOLD,
+    ) -> None:
+        # persona_id -> enrichment strategy; personas without one (e.g. GA) are skipped.
+        self._enrichment_strategies = enrichment_strategies or {}
+        self._unit_of_work = unit_of_work
+        self._upserter = MemoryUpserter(
+            memory_repo, embedding_service, disambiguator, synthesizer,
+            merge_threshold, disambiguate_threshold,
+        )
+
+    def execute(self) -> int:
+        """Synchronous by design, like ConsolidateMemory — callers on an event loop
+        dispatch it via asyncio.to_thread. Returns the number of drafts processed."""
+        processed = 0
+        for persona_id, strategy in self._enrichment_strategies.items():
+            drafts = list(strategy.propose_items(persona_id))
+            if not drafts:
+                continue
+            # One transaction per persona's proposal batch, mirroring the
+            # per-conversation / per-lesson granularity elsewhere.
+            with self._unit_of_work:
+                for draft in drafts:
+                    # A proposal can never claim the user knows the item (same rule as
+                    # bundle install); on merge the upserter's max-engagement keeps any
+                    # higher level already earned.
+                    draft.engagement_level = EngagementLevel.UNSEEN
+                    if isinstance(draft, Concept):
+                        self._upserter.upsert_concept(draft, persona_id)
+                    else:
+                        self._upserter.upsert_procedure(draft, persona_id)
+                    processed += 1
         return processed
 
 

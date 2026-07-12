@@ -33,7 +33,8 @@ CREATE TABLE IF NOT EXISTS personas (
     speaking_rate     DOUBLE PRECISION NOT NULL DEFAULT 1.0,
     is_active         BOOLEAN          NOT NULL DEFAULT TRUE,
     persona_key       TEXT             UNIQUE,                 -- author-namespaced bundle identity (e.g. 'meo/spanish-tutor'); NULL for GA and user-created personas
-    settings          JSONB                                    -- opaque persona-owned tunables; read only by the persona's own strategies (same leak-prevention contract as persona_state)
+    settings          JSONB,                                   -- opaque persona-owned tunables; read only by the persona's own strategies (same leak-prevention contract as persona_state)
+    strategy          TEXT                                     -- strategy-set name resolved by the composition root (e.g. 'language_tutor'); NULL binds no strategies
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
