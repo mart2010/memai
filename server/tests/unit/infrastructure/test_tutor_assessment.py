@@ -93,6 +93,7 @@ def _strategy(
 
 class TestInitialState:
     def test_first_assessment_creates_full_state(self):
+        """Spec: FR-505, TR-806, TR-808"""
         strategy = _strategy(
             judgments=[PracticeJudgment(name="la comida", retrievals=2, errors=0, user_initiated=True)],
         )
@@ -113,6 +114,7 @@ class TestInitialState:
         assert state["avg_response_latency_s"] == 3.0  # one 3s assistant→user delta
 
     def test_initial_half_life_scaled_by_pair_difficulty(self):
+        """Spec: FR-505, TR-806"""
         strategy = _strategy(
             judgments=[PracticeJudgment(name="la comida", retrievals=1)],
             settings={"pair_difficulty": {"fr": 2.0, "*": 4.0}},
@@ -123,6 +125,7 @@ class TestInitialState:
         assert assessment.persona_state["half_life_days"] == 0.5  # 1.0 / 2.0 (fr entry)
 
     def test_pair_difficulty_falls_back_to_star(self):
+        """Spec: TR-801, TR-806"""
         strategy = _strategy(
             judgments=[PracticeJudgment(name="la comida", retrievals=1)],
             settings={"pair_difficulty": {"en": 1.0, "*": 4.0}},
@@ -136,6 +139,7 @@ class TestInitialState:
 
 class TestHalfLifeUpdates:
     def test_new_day_success_grows_half_life(self):
+        """Spec: FR-505, TR-806"""
         stored = _stored_concept("la comida", 1, {
             "last_practiced_at": "2026-07-10", "half_life_days": 2.0,
             "retrievals": 3, "errors": 1, "avg_response_latency_s": 5.0,
@@ -157,6 +161,7 @@ class TestHalfLifeUpdates:
         assert abs(state["avg_response_latency_s"] - 13.0 / 3) < 1e-9
 
     def test_errors_shrink_half_life_and_win_over_successes(self):
+        """Spec: FR-505, TR-806"""
         stored = _stored_concept("la comida", 1, {
             "last_practiced_at": "2026-07-10", "half_life_days": 2.0,
             "retrievals": 0, "errors": 0, "avg_response_latency_s": None,
@@ -173,6 +178,7 @@ class TestHalfLifeUpdates:
         assert assessment.persona_state["errors"] == 1
 
     def test_half_life_never_shrinks_below_floor(self):
+        """Spec: TR-806"""
         stored = _stored_concept("la comida", 1, {
             "last_practiced_at": "2026-07-10", "half_life_days": 0.6,
             "retrievals": 0, "errors": 0, "avg_response_latency_s": None,
@@ -187,6 +193,7 @@ class TestHalfLifeUpdates:
         assert assessment.persona_state["half_life_days"] == 0.5
 
     def test_same_day_repetition_updates_counts_but_not_half_life(self):
+        """Spec: FR-505, TR-806"""
         stored = _stored_concept("la comida", 1, {
             "last_practiced_at": "2026-07-12", "half_life_days": 2.0,
             "retrievals": 1, "errors": 0, "avg_response_latency_s": None,
@@ -204,6 +211,7 @@ class TestHalfLifeUpdates:
         assert state["sessions_practiced"] == 2
 
     def test_user_initiated_is_sticky(self):
+        """Spec: FR-505, TR-806, TR-808"""
         stored = _stored_concept("la comida", 1, {
             "last_practiced_at": "2026-07-10", "half_life_days": 2.0,
             "retrievals": 1, "errors": 0, "avg_response_latency_s": None,
@@ -221,6 +229,7 @@ class TestHalfLifeUpdates:
 
 class TestExposureAndScope:
     def test_unjudged_item_records_exposure_only(self):
+        """Spec: TR-806"""
         stored = _stored_concept("la comida", 1, {
             "last_practiced_at": "2026-07-10", "half_life_days": 2.0,
             "retrievals": 3, "errors": 1, "avg_response_latency_s": None,
@@ -238,6 +247,7 @@ class TestExposureAndScope:
         assert state["sessions_practiced"] == 3
 
     def test_episodes_and_idless_items_are_skipped(self):
+        """Spec: TR-704, TR-806"""
         episode = Episode(id=5, summary="A trip.", happened_at=T0, origin_conversation_id=1)
         no_id = _touched_concept("sin id", 1)
         no_id.id = None
@@ -245,6 +255,7 @@ class TestExposureAndScope:
         assert strategy.assess_items(PERSONA_ID, _conversation(), [episode, no_id]) == []
 
     def test_no_latency_when_conversation_has_no_assistant_user_pair(self):
+        """Spec: TR-806, TR-312"""
         turns = [Turn(timestamp=T0, speaker=Speaker.USER, content="Hola.")]
         strategy = _strategy(judgments=[PracticeJudgment(name="hola", retrievals=1)])
         [assessment] = strategy.assess_items(

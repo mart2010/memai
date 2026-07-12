@@ -77,6 +77,7 @@ def _seed_ended_conversation(conversation_repo: FakeConversationRepository) -> N
 
 class TestRunConsolidation:
     def test_worthy_conversation_produces_episode(self):
+        """Spec: FR-307, TR-703"""
         episode = Episode(id=None, summary="Discussed Python.", happened_at=_now(), origin_conversation_id=1)
         extraction = ExtractionResult(episodes=[episode], concepts=[], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=True, extraction=extraction)
@@ -88,6 +89,7 @@ class TestRunConsolidation:
         assert len(memory_repo.episodes) == 1
 
     def test_unworthy_conversation_skips_episodes(self):
+        """Spec: FR-307"""
         episode = Episode(id=None, summary="Short chat.", happened_at=_now(), origin_conversation_id=1)
         extraction = ExtractionResult(episodes=[episode], concepts=[], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=False, extraction=extraction)
@@ -98,6 +100,7 @@ class TestRunConsolidation:
         assert len(memory_repo.episodes) == 0
 
     def test_concepts_extracted_regardless_of_worthiness(self):
+        """Spec: FR-307"""
         concept = Concept(id=None, persona_id=GENERAL_ASSISTANT_ID, name="Recursion", description="A function calling itself.", language=Language("en"))
         extraction = ExtractionResult(episodes=[], concepts=[concept], procedures=[])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=False, extraction=extraction)
@@ -108,6 +111,7 @@ class TestRunConsolidation:
         assert len(memory_repo.concepts) == 1
 
     def test_conversation_marked_consolidated(self):
+        """Spec: TR-703, TR-507"""
         use_case, conversation_repo, _ = _make_consolidation()
         _seed_ended_conversation(conversation_repo)
 
@@ -116,6 +120,7 @@ class TestRunConsolidation:
         assert all(r.consolidated for r in conversation_repo._records.values())
 
     def test_already_consolidated_conversations_skipped_on_rerun(self):
+        """Spec: TR-703"""
         use_case, conversation_repo, _ = _make_consolidation()
         _seed_ended_conversation(conversation_repo)
 
@@ -125,6 +130,7 @@ class TestRunConsolidation:
         assert count2 == 0
 
     def test_extractor_receives_user_primary_language(self):
+        """Spec: TR-706, INV-10"""
         extractor = FakeConsolidationExtractor()
         use_case, conversation_repo, _ = _make_consolidation(
             extractor=extractor,
@@ -137,6 +143,7 @@ class TestRunConsolidation:
         assert extractor.primary_languages == [Language("fr")]
 
     def test_extract_episodes_true_when_persona_has_no_strategy(self):
+        """Spec: TR-706"""
         extractor = FakeConsolidationExtractor()
         use_case, conversation_repo, _ = _make_consolidation(extractor=extractor)
         _seed_ended_conversation(conversation_repo)
@@ -146,7 +153,7 @@ class TestRunConsolidation:
         assert extractor.extract_episodes_calls == [True]
 
     def test_extract_episodes_false_when_persona_has_registered_strategy(self):
-        """A persona with a registered assessment strategy (today, only the language
+        """Spec: FR-407, TR-706, INV-10 — A persona with a registered assessment strategy (today, only the language
         tutor) owns its own engagement tracking — its conversations are lesson
         practice, not genuine autobiography, so episodes are never even requested."""
         extractor = FakeConsolidationExtractor()
@@ -174,6 +181,7 @@ class _CannedSearchMemoryRepository(FakeMemoryRepository):
 
 class TestCategoryMergeRule:
     def test_existing_category_wins_on_merge(self):
+        """Spec: TR-603"""
         existing = Concept(
             id=42, persona_id=GENERAL_ASSISTANT_ID, name="ser vs estar",
             description="Curated pair.", language=Language("es"), category="contrast_pair",
@@ -193,6 +201,7 @@ class TestCategoryMergeRule:
         assert candidate.id == 42
 
     def test_new_category_fills_gap_when_existing_has_none(self):
+        """Spec: TR-603"""
         existing = Concept(
             id=42, persona_id=GENERAL_ASSISTANT_ID, name="comer",
             description="To eat.", language=Language("es"), category=None,
@@ -232,6 +241,7 @@ class TestAssessmentHook:
         return repo
 
     def test_assessment_dispatched_after_upsert_with_ids(self):
+        """Spec: TR-704"""
         strategy = FakePersonaAssessmentPort()
         use_case, conversation_repo, _ = _make_consolidation(
             extraction=self._extraction(),
@@ -249,6 +259,7 @@ class TestAssessmentHook:
         assert touched[0].id is not None  # upsert ran first — the item has its id
 
     def test_returned_persona_state_persisted_verbatim(self):
+        """Spec: TR-704, INV-6"""
         state = {"last_practiced_at": "2026-07-10", "half_life_days": 3.5, "retrievals": 1}
         use_case, conversation_repo, memory_repo = _make_consolidation(
             extraction=self._extraction(),
@@ -267,6 +278,7 @@ class TestAssessmentHook:
         assert memory_repo.concepts[0].persona_state == state
 
     def test_no_dispatch_when_no_strategy_registered(self):
+        """Spec: TR-704"""
         strategy = FakePersonaAssessmentPort()
         use_case, conversation_repo, memory_repo = _make_consolidation(
             extraction=self._extraction(),
@@ -280,6 +292,7 @@ class TestAssessmentHook:
         assert memory_repo.persona_state_writes == []
 
     def test_no_dispatch_when_nothing_touched(self):
+        """Spec: TR-704"""
         strategy = FakePersonaAssessmentPort()
         use_case, conversation_repo, _ = _make_consolidation(
             extraction=ExtractionResult(episodes=[], concepts=[], procedures=[]),
@@ -309,6 +322,7 @@ class TestDiscardUnmatchedForStrategyPersonas:
         return ExtractionResult(episodes=[], concepts=[concept], procedures=[procedure])
 
     def test_unmatched_concept_and_procedure_discarded(self):
+        """Spec: FR-407, TR-606, TR-704"""
         strategy = FakePersonaAssessmentPort()
         use_case, conversation_repo, memory_repo = _make_consolidation(
             extraction=self._extraction(),
@@ -325,7 +339,7 @@ class TestDiscardUnmatchedForStrategyPersonas:
         assert strategy.calls == []
 
     def test_same_unmatched_items_still_inserted_without_a_strategy(self):
-        """Regression guard: GA and other strategy-less personas keep today's
+        """Spec: TR-606 — Regression guard: GA and other strategy-less personas keep today's
         behavior — knowledge is worth keeping regardless of conversation quality."""
         use_case, conversation_repo, memory_repo = _make_consolidation(extraction=self._extraction())
         _seed_ended_conversation(conversation_repo)
@@ -341,6 +355,7 @@ class TestPreserveCuratedDescriptionForStrategyPersonas:
     let a single conversation's phrasing drift the curated description/steps."""
 
     def test_matched_concept_keeps_curated_description(self):
+        """Spec: FR-407, TR-606"""
         existing = Concept(
             id=1, persona_id=GENERAL_ASSISTANT_ID, name="mangiare",
             description="Curated bundle definition.", language=Language("it"),

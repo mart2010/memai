@@ -34,15 +34,18 @@ def embedding_service() -> SentenceTransformerEmbeddingService:
 
 class TestSentenceTransformerEmbeddingService:
     def test_embedding_dimension_matches_schema(self, embedding_service: SentenceTransformerEmbeddingService) -> None:
+        """Spec: TR-501, TR-952"""
         vec = embedding_service.embed("hello")
         assert len(vec) == _EXPECTED_DIM
 
     def test_embedding_is_normalized(self, embedding_service: SentenceTransformerEmbeddingService) -> None:
+        """Spec: TR-952"""
         vec = embedding_service.embed("hello")
         norm = math.sqrt(sum(x * x for x in vec))
         assert norm == pytest.approx(1.0, abs=1e-3)
 
     def test_identical_text_has_similarity_one(self, embedding_service: SentenceTransformerEmbeddingService) -> None:
+        """Spec: TR-509"""
         vec = embedding_service.embed("The quick brown fox.")
         assert _cosine(vec, vec) == pytest.approx(1.0, abs=1e-4)
 
@@ -59,12 +62,14 @@ class TestSentenceTransformerEmbeddingService:
     def test_calibration_similarity_scores(
         self, embedding_service: SentenceTransformerEmbeddingService, text_a: str, text_b: str, relation: str
     ) -> None:
+        """Spec: TR-602"""
         similarity = _cosine(embedding_service.embed(text_a), embedding_service.embed(text_b))
         print(f"\n[calibration:{relation}] {similarity:.4f}  '{text_a}'  vs  '{text_b}'")
 
     def test_similar_pairs_score_higher_than_dissimilar_pairs(
         self, embedding_service: SentenceTransformerEmbeddingService
     ) -> None:
+        """Spec: TR-602"""
         similar = _cosine(
             embedding_service.embed("The dog ran in the park."),
             embedding_service.embed("A dog was running in the park."),

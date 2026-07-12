@@ -17,10 +17,12 @@ def tts_service() -> KokoroTTSService:
 
 class TestKokoroTTSService:
     def test_synthesises_nonempty_audio(self, tts_service: KokoroTTSService) -> None:
+        """Spec: TR-952"""
         audio = tts_service.synthesise("Hello, this is a test.", voice="af_heart")
         assert len(audio) > 0
 
     def test_speaking_rate_changes_output_length(self, tts_service: KokoroTTSService) -> None:
+        """Spec: FR-105, TR-952"""
         normal = tts_service.synthesise("This is a somewhat longer test sentence.", voice="af_heart", speed=1.0)
         fast = tts_service.synthesise("This is a somewhat longer test sentence.", voice="af_heart", speed=1.5)
         assert len(fast) < len(normal)
@@ -29,7 +31,7 @@ class TestKokoroTTSService:
     def test_default_voice_is_valid_for_installed_kokoro(
         self, tts_service: KokoroTTSService, lang_code: str, voice: str
     ) -> None:
-        """Each entry in KOKORO_DEFAULT_VOICES must be a real voice name in the installed
+        """Spec: TR-952 — Each entry in KOKORO_DEFAULT_VOICES must be a real voice name in the installed
         Kokoro package version — voice packs not yet pre-downloaded on this machine are
         skipped rather than failed (see PLAN.md Phase 7 TODO on wizard-driven downloads),
         but any genuinely invalid/renamed voice name should still fail loudly."""

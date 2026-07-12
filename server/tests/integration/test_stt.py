@@ -42,6 +42,7 @@ def stt_service() -> FasterWhisperSTTService:
 
 class TestFasterWhisperSTTService:
     def test_transcribes_real_speech(self, stt_service: FasterWhisperSTTService, tmp_path: Path) -> None:
+        """Spec: FR-102, TR-952"""
         if shutil.which("espeak-ng") is None:
             pytest.skip("espeak-ng not installed — needed to synthesize reference audio for this test")
 
@@ -52,6 +53,7 @@ class TestFasterWhisperSTTService:
         assert language.code == "en"
 
     def test_transcribes_silence_without_crashing(self, stt_service: FasterWhisperSTTService) -> None:
+        """Spec: FR-103"""
         silence = np.zeros(_SAMPLE_RATE, dtype=np.int16).tobytes()
         text, language = stt_service.transcribe(silence)
         assert isinstance(text, str)

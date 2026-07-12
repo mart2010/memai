@@ -74,8 +74,19 @@ Rules:
   - "is this test still justified?" → the docstring names its requirements.
 - One test may cite several IDs; one ID may be cited by several tests. The tightest
   mapping is test-per-invariant for `INV-…`.
-- Existing tests are back-filled with citations opportunistically — whenever a test is
-  touched, its citation is added. New tests cite from day one.
+- Cite at the narrowest accurate level: the test function normally; the test class
+  docstring when every test in the class verifies the same requirement(s); never the
+  module (too coarse to stay true).
+- New tests cite from day one.
+
+**Conformance status (2026-07-12, back-fill complete):** the entire server suite
+(283 citations across 25 test files) cites the spec; 99 of 155 requirements have at
+least one citing test. The uncited remainder clusters where no test surface exists
+yet: the client (`TR-2xx` — no client test suite), the WebSocket handler / onboarding
+flow (`FR-0xx`, `TR-1xx` — needs E2E), composition-root wiring (`TR-0xx`), and
+process-level invariants enforced by review rather than pytest (INV-1, INV-2, INV-4,
+INV-5, INV-13, INV-14). The setup wizard has no spec coverage at all yet — its tests
+stay uncited until a wizard section is added.
 
 ## The alignment loop in practice
 

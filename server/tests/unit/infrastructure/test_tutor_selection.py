@@ -104,10 +104,12 @@ def _names(selected) -> list[str]:
 
 class TestDefaultComposition:
     def test_empty_memory_returns_empty_batch(self):
+        """Spec: TR-803"""
         strategy, _, _ = _strategy()
         assert strategy.select_items(PERSONA_ID) == []
 
     def test_mixed_batch_reviews_ranked_then_new_in_curriculum_order(self):
+        """Spec: FR-501, TR-802, TR-803"""
         concepts = [
             _concept("nuevo1", 1, EngagementLevel.UNSEEN, created_minutes=1),
             _concept("nuevo2", 2, EngagementLevel.UNSEEN, created_minutes=2),
@@ -122,6 +124,7 @@ class TestDefaultComposition:
         assert set(_names(selected)) == {"mencionado", "explorado", "nuevo1", "nuevo2"}
 
     def test_review_ranking_least_known_then_stalest_first(self):
+        """Spec: TR-802, FR-506"""
         concepts = [
             _concept("fresh_mentioned", 1, EngagementLevel.MENTIONED, updated_minutes=60),
             _concept("stale_mentioned", 2, EngagementLevel.MENTIONED, updated_minutes=0),
@@ -132,6 +135,7 @@ class TestDefaultComposition:
         assert _names(selected) == ["stale_mentioned", "fresh_mentioned", "explored"]
 
     def test_new_items_follow_cross_type_curriculum_order(self):
+        """Spec: TR-802, INV-11"""
         # Concepts and procedures have independent id sequences — created_at carries
         # curriculum order across types (sequential install), id breaks ties.
         concepts = [_concept("c_late", 1, created_minutes=30), _concept("c_early", 2, created_minutes=1)]
@@ -141,6 +145,7 @@ class TestDefaultComposition:
         assert _names(selected) == ["c_early", "p_mid", "c_late"]
 
     def test_short_review_pool_backfills_with_new_items(self):
+        """Spec: TR-803"""
         concepts = [
             _concept("review1", 1, EngagementLevel.MENTIONED),
             _concept("n1", 2, created_minutes=1),
@@ -152,6 +157,7 @@ class TestDefaultComposition:
         assert len(selected) == 4  # 1 review + 3 new, nothing wasted
 
     def test_batch_interleaved_by_category(self):
+        """Spec: FR-501, TR-803"""
         concepts = [
             _concept("n1", 1, category="noun", created_minutes=1),
             _concept("n2", 2, category="noun", created_minutes=2),
@@ -166,17 +172,20 @@ class TestDefaultComposition:
 
 class TestFocusSteering:
     def test_no_focus_never_calls_interpreter(self):
+        """Spec: TR-804"""
         strategy, _, interpreter = _strategy([_concept("hola", 1)])
         strategy.select_items(PERSONA_ID)
         assert interpreter.calls == []
 
     def test_interpreter_receives_verbatim_focus_and_present_categories(self):
+        """Spec: FR-502, TR-804"""
         concepts = [_concept("hola", 1, category="noun"), _concept("ser", 2, category="verb")]
         strategy, _, interpreter = _strategy(concepts)
         strategy.select_items(PERSONA_ID, focus="just review old vocabulary today")
         assert interpreter.calls == [("just review old vocabulary today", ["noun", "verb"])]
 
     def test_review_mode_excludes_new_items(self):
+        """Spec: FR-502, TR-803"""
         concepts = [
             _concept("nuevo", 1, EngagementLevel.UNSEEN),
             _concept("conocido", 2, EngagementLevel.MENTIONED),
@@ -187,6 +196,7 @@ class TestFocusSteering:
         assert _names(selected) == ["conocido"]
 
     def test_new_mode_excludes_review_items(self):
+        """Spec: FR-502, TR-803"""
         concepts = [
             _concept("nuevo", 1, EngagementLevel.UNSEEN),
             _concept("conocido", 2, EngagementLevel.MENTIONED),
@@ -197,6 +207,7 @@ class TestFocusSteering:
         assert _names(selected) == ["nuevo"]
 
     def test_category_focus_filters_items(self):
+        """Spec: TR-803"""
         concepts = [
             _concept("hola", 1, category="noun"),
             _concept("ser", 2, category="verb"),
@@ -207,6 +218,7 @@ class TestFocusSteering:
         assert _names(selected) == ["ser"]
 
     def test_unmatched_category_does_not_zero_the_session(self):
+        """Spec: TR-803"""
         concepts = [_concept("hola", 1, category="noun")]
         interpreter = FakeFocusInterpreter(TutorFocus(category="idiom"))
         strategy, _, _ = _strategy(concepts, interpreter=interpreter)
@@ -214,6 +226,7 @@ class TestFocusSteering:
         assert _names(selected) == ["hola"]
 
     def test_topic_focus_ranks_by_similarity_to_topic(self):
+        """Spec: FR-502, TR-803"""
         concepts = [
             _concept("lejano", 1, embedding=[0.0, 1.0], created_minutes=1),
             _concept("cercano", 2, embedding=[1.0, 0.0], created_minutes=2),
@@ -228,6 +241,7 @@ class TestFocusSteering:
 
 class TestRetentionRanking:
     def test_retention_mode_ranks_lowest_retention_first(self):
+        """Spec: FR-506, TR-802, TR-808"""
         state_due = {"last_practiced_at": "2026-07-01", "half_life_days": 2.0}      # long ago, short half-life
         state_fresh = {"last_practiced_at": "2026-07-11", "half_life_days": 30.0}   # yesterday, long half-life
         concepts = [
@@ -240,6 +254,7 @@ class TestRetentionRanking:
         assert _names(selected) == ["sin_estado", "olvidado", "fresco"]
 
     def test_engagement_ranking_is_the_default_even_with_state_present(self):
+        """Spec: FR-506, TR-802"""
         state = {"last_practiced_at": "2026-07-01", "half_life_days": 2.0}
         concepts = [
             _concept("explorado", 1, EngagementLevel.EXPLORED, persona_state=state),
@@ -252,6 +267,7 @@ class TestRetentionRanking:
 
 class TestEpisodePairing:
     def test_similar_episode_becomes_anchor_context(self):
+        """Spec: FR-503, TR-805"""
         episode = Episode(id=1, summary="A memorable dinner in Madrid.",
                           happened_at=NOW, origin_conversation_id=1)
         memory_repo = FakeMemoryRepository()
@@ -263,6 +279,7 @@ class TestEpisodePairing:
         assert "A memorable dinner in Madrid." in selected[0].context
 
     def test_low_similarity_yields_elicitation_hint(self):
+        """Spec: FR-503, TR-805"""
         episode = Episode(id=1, summary="Unrelated.", happened_at=NOW, origin_conversation_id=1)
         memory_repo = FakeMemoryRepository()
         memory_repo.search_results = [(0.3, episode)]
@@ -274,6 +291,7 @@ class TestEpisodePairing:
         assert "la comida" in selected[0].context
 
     def test_elicitation_hints_capped_per_batch(self):
+        """Spec: FR-503, TR-805"""
         concepts = [
             _concept(f"item{i}", i, embedding=[1.0, 0.0], created_minutes=i) for i in range(1, 5)
         ]
@@ -284,6 +302,7 @@ class TestEpisodePairing:
         assert len(hints) == 2  # default elicitation_cap
 
     def test_elicitation_cap_read_from_persona_settings(self):
+        """Spec: TR-801, TR-805"""
         concepts = [
             _concept(f"item{i}", i, embedding=[1.0, 0.0], created_minutes=i) for i in range(1, 4)
         ]
@@ -293,6 +312,7 @@ class TestEpisodePairing:
         assert all(s.context is None for s in selected)
 
     def test_items_without_embedding_are_not_paired(self):
+        """Spec: TR-805"""
         concepts = [_concept("sin_embedding", 1)]
         strategy, memory_repo, _ = _strategy(concepts)
 

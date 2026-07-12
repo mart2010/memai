@@ -61,12 +61,14 @@ def _upserter(memory_repo=None, synthesizer=None):
 
 class TestMergedFlagReturn:
     def test_insert_returns_false_and_assigns_id(self):
+        """Spec: TR-607"""
         concept = _concept()
         merged = _upserter().upsert_concept(concept, PERSONA_ID)
         assert merged is False
         assert concept.id is not None
 
     def test_merge_returns_true_and_reuses_id(self):
+        """Spec: TR-607, TR-603"""
         existing = _concept(id=42, description="An older synthesis.")
         repo = _CannedSearchMemoryRepository([(0.95, existing)])  # auto-merge band
         concept = _concept()
@@ -77,7 +79,7 @@ class TestMergedFlagReturn:
 
 class TestExactDuplicateShortCircuit:
     def test_identical_concept_skips_synthesis(self):
-        """Reinstalling a bundle re-upserts byte-identical items — no LLM call."""
+        """Spec: TR-604, FR-603 — Reinstalling a bundle re-upserts byte-identical items — no LLM call."""
         existing = _concept(id=42, engagement_level=EngagementLevel.EXPLORED)
         repo = _CannedSearchMemoryRepository([(1.0, existing)])
         synthesizer = FakeMemorySynthesizer()
@@ -92,6 +94,7 @@ class TestExactDuplicateShortCircuit:
         assert concept.engagement_level == EngagementLevel.EXPLORED
 
     def test_differing_concept_description_still_synthesizes(self):
+        """Spec: TR-603, INV-8"""
         existing = _concept(id=42, description="An older synthesis.")
         repo = _CannedSearchMemoryRepository([(0.95, existing)])
         synthesizer = FakeMemorySynthesizer()
@@ -101,6 +104,7 @@ class TestExactDuplicateShortCircuit:
         assert len(synthesizer.concept_calls) == 1
 
     def test_identical_procedure_skips_synthesis(self):
+        """Spec: TR-604"""
         existing = _procedure(id=7)
         repo = _CannedSearchMemoryRepository([(1.0, existing)])
         synthesizer = FakeMemorySynthesizer()
@@ -111,7 +115,7 @@ class TestExactDuplicateShortCircuit:
         assert synthesizer.procedure_calls == []
 
     def test_procedure_with_differing_steps_still_synthesizes(self):
-        """Same name + description but new steps is new evidence, not a duplicate."""
+        """Spec: TR-604, TR-603 — Same name + description but new steps is new evidence, not a duplicate."""
         existing = _procedure(id=7)
         repo = _CannedSearchMemoryRepository([(1.0, existing)])
         synthesizer = FakeMemorySynthesizer()
@@ -129,7 +133,7 @@ class TestExcludeIds:
     MemoryUpserter's docstring."""
 
     def test_excluded_top_candidate_forces_insert(self):
-        """Same-run sibling above the disambiguation threshold must not be merged into."""
+        """Spec: TR-605, FR-604 — Same-run sibling above the disambiguation threshold must not be merged into."""
         sibling = _concept(id=99, name="parlare")
         repo = _CannedSearchMemoryRepository([(0.85, sibling)])  # disambiguate band
 
@@ -140,7 +144,7 @@ class TestExcludeIds:
         assert merged is False
 
     def test_excluded_candidate_does_not_hide_a_real_match_behind_it(self):
-        """A genuine pre-existing duplicate further down the candidate list still wins."""
+        """Spec: TR-605 — A genuine pre-existing duplicate further down the candidate list still wins."""
         sibling = _concept(id=99, name="parlare")
         real_match = _concept(id=7, description="An older synthesis.")
         repo = _CannedSearchMemoryRepository([(0.96, sibling), (0.95, real_match)])  # both auto-merge band
@@ -152,6 +156,7 @@ class TestExcludeIds:
         assert merged is True
 
     def test_excluded_top_candidate_forces_insert_for_procedure(self):
+        """Spec: TR-605, FR-604"""
         sibling = _procedure(id=99, name="vorrei + [nome/infinito]")
         repo = _CannedSearchMemoryRepository([(0.85, sibling)])
 
@@ -162,7 +167,7 @@ class TestExcludeIds:
         assert merged is False
 
     def test_empty_exclude_ids_is_a_no_op(self):
-        """Live consolidation never passes exclude_ids — default behavior is unchanged."""
+        """Spec: TR-605 — Live consolidation never passes exclude_ids — default behavior is unchanged."""
         existing = _concept(id=42, description="An older synthesis.")
         repo = _CannedSearchMemoryRepository([(0.95, existing)])
 
@@ -176,6 +181,7 @@ class TestUpdateDescription:
     match, never edit curated wording — see MemoryUpserter's docstring."""
 
     def test_match_keeps_existing_description_verbatim(self):
+        """Spec: TR-606, FR-407"""
         existing = _concept(id=42, description="Curated bundle wording.")
         repo = _CannedSearchMemoryRepository([(0.95, existing)])
         synthesizer = FakeMemorySynthesizer()
@@ -190,6 +196,7 @@ class TestUpdateDescription:
         assert synthesizer.concept_calls == []
 
     def test_match_still_bumps_engagement_and_fills_category_gap(self):
+        """Spec: TR-606, TR-603, FR-305"""
         existing = _concept(id=42, description="Curated bundle wording.", category="verb")
         repo = _CannedSearchMemoryRepository([(0.95, existing)])
 
@@ -200,6 +207,7 @@ class TestUpdateDescription:
         assert concept.category == "verb"
 
     def test_match_keeps_existing_procedure_description_and_steps_verbatim(self):
+        """Spec: TR-606"""
         existing = _procedure(id=7, description="Curated steps.", steps=["a", "b"])
         repo = _CannedSearchMemoryRepository([(0.95, existing)])
         synthesizer = FakeMemorySynthesizer()
@@ -215,7 +223,7 @@ class TestUpdateDescription:
         assert synthesizer.procedure_calls == []
 
     def test_default_update_description_true_is_a_no_op(self):
-        """Bundle installer and GA-style consolidation never pass this — unchanged."""
+        """Spec: TR-606 — Bundle installer and GA-style consolidation never pass this — unchanged."""
         existing = _concept(id=42, description="An older synthesis.")
         repo = _CannedSearchMemoryRepository([(0.95, existing)])
         synthesizer = FakeMemorySynthesizer()

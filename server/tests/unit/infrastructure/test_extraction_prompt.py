@@ -10,21 +10,25 @@ def _conversation() -> Conversation:
 
 class TestExtractionSystemPrompt:
     def test_episode_summaries_forced_to_primary_language(self):
+        """Spec: INV-10, TR-706"""
         prompt = _extraction_system_prompt(_conversation(), Language("fr"))
         assert "Write every episode summary in the language with IETF code 'fr'" in prompt
         assert "regardless of the language the conversation was held in" in prompt
 
     def test_no_language_rule_when_primary_language_unknown(self):
+        """Spec: TR-706"""
         prompt = _extraction_system_prompt(_conversation(), None)
         assert "Write every episode summary" not in prompt
 
     def test_asks_for_category_on_concepts_and_procedures(self):
+        """Spec: TR-706"""
         prompt = _extraction_system_prompt(_conversation(), Language("en"))
         assert prompt.count('"category"') == 2
 
 
 class TestParseExtractionCategory:
     def test_category_parsed_when_present(self):
+        """Spec: TR-706"""
         data = {
             "concepts": [{"name": "comer", "description": "To eat.", "language": "es", "category": "verb"}],
             "procedures": [{"name": "-er conjugation", "description": "Paradigm.", "language": "fr",
@@ -35,6 +39,7 @@ class TestParseExtractionCategory:
         assert result.procedures[0].category == "morphological_pattern"
 
     def test_category_defaults_to_none(self):
+        """Spec: TR-706"""
         data = {
             "concepts": [{"name": "comer", "description": "To eat.", "language": "es"}],
             "procedures": [{"name": "p", "description": "d.", "language": "en", "steps": [], "category": ""}],

@@ -7,6 +7,7 @@ from memai_server.domain.model import AssistantPersona, GENERAL_ASSISTANT_ID, La
 
 class TestAssistantPersonaGuards:
     def test_non_system_persona_can_be_updated(self):
+        """Spec: FR-204"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
@@ -20,6 +21,7 @@ class TestAssistantPersonaGuards:
         assert persona.updated_at == later
 
     def test_system_persona_can_be_updated(self):
+        """Spec: FR-204"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="General Assistant", system_prompt="Help.",
@@ -33,6 +35,7 @@ class TestAssistantPersonaGuards:
         assert persona.updated_at == later
 
     def test_update_can_change_voices_speaking_rate_response_language(self):
+        """Spec: FR-204, FR-105"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
@@ -51,6 +54,7 @@ class TestAssistantPersonaGuards:
         assert persona.response_language == Language("fr")
 
     def test_voices_must_include_default_role(self):
+        """Spec: INV-7"""
         now = datetime.now(UTC)
         with pytest.raises(ValueError, match="default"):
             AssistantPersona(
@@ -60,6 +64,7 @@ class TestAssistantPersonaGuards:
             )
 
     def test_default_voice_must_be_single_no_rotation_pool(self):
+        """Spec: INV-7"""
         # The default role is the fixed anchor; "|" rotation pools (HVPT) are only
         # valid on additional roles.
         now = datetime.now(UTC)
@@ -72,6 +77,7 @@ class TestAssistantPersonaGuards:
             )
 
     def test_additional_role_may_carry_rotation_pool(self):
+        """Spec: FR-206, INV-7"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
@@ -82,6 +88,7 @@ class TestAssistantPersonaGuards:
         assert persona.voices["target_teacher"] == "ef_dora|em_alex"
 
     def test_update_rejects_pool_on_default_role(self):
+        """Spec: INV-7"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
@@ -92,6 +99,7 @@ class TestAssistantPersonaGuards:
             persona.update(updated_at=datetime.now(UTC), voices={"default": "a|b"})
 
     def test_update_rejects_voices_without_default_role(self):
+        """Spec: INV-7"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
@@ -103,6 +111,7 @@ class TestAssistantPersonaGuards:
         assert persona.default_voice == "af_heart"
 
     def test_partial_update_preserves_unchanged_fields(self):
+        """Spec: FR-204"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Original prompt.",
@@ -113,6 +122,7 @@ class TestAssistantPersonaGuards:
         assert persona.system_prompt == "Original prompt."
 
     def test_general_assistant_factory(self):
+        """Spec: FR-201, TR-506"""
         persona = AssistantPersona.general_assistant("You are a helpful assistant.")
         assert persona.id == GENERAL_ASSISTANT_ID
         assert persona.name == "Vocal Assistant"
@@ -124,6 +134,7 @@ class TestAssistantPersonaGuards:
         assert persona.settings is None
 
     def test_persona_key_and_settings_default_to_none(self):
+        """Spec: TR-506"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
@@ -134,6 +145,7 @@ class TestAssistantPersonaGuards:
         assert persona.settings is None
 
     def test_bundle_installed_persona_carries_key_and_settings(self):
+        """Spec: TR-506, TR-903"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Profesora Sofía", system_prompt="Teach Spanish.",
@@ -147,6 +159,7 @@ class TestAssistantPersonaGuards:
         assert persona.settings["elicitation_cap"] == 2
 
     def test_non_system_persona_can_be_deactivated_and_reactivated(self):
+        """Spec: FR-204"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="Tutor", system_prompt="Teach me.",
@@ -164,6 +177,7 @@ class TestAssistantPersonaGuards:
         assert persona.updated_at == even_later
 
     def test_system_persona_cannot_be_deactivated(self):
+        """Spec: FR-201"""
         now = datetime.now(UTC)
         persona = AssistantPersona(
             id=uuid4(), name="General Assistant", system_prompt="Help.",

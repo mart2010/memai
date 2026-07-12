@@ -78,6 +78,7 @@ def _strategy(
 
 class TestInterestClusterDetection:
     def test_too_few_user_initiated_seeds_proposes_nothing(self):
+        """Spec: FR-507, TR-807"""
         strategy, proposer = _strategy([
             _seed("paella", 1, FOOD_A),
             _seed("tapas", 2, FOOD_B),
@@ -86,6 +87,7 @@ class TestInterestClusterDetection:
         assert proposer.calls == []
 
     def test_scattered_seeds_do_not_form_a_cluster(self):
+        """Spec: TR-807"""
         strategy, proposer = _strategy([
             _seed("paella", 1, FOOD_A),
             _seed("fútbol", 2, SPORT_A),
@@ -95,6 +97,7 @@ class TestInterestClusterDetection:
         assert proposer.calls == []
 
     def test_non_user_initiated_and_unembedded_items_are_not_seeds(self):
+        """Spec: TR-807"""
         strategy, proposer = _strategy([
             _seed("paella", 1, FOOD_A, user_initiated=False),
             _seed("tapas", 2, FOOD_B),
@@ -105,6 +108,7 @@ class TestInterestClusterDetection:
         assert proposer.calls == []
 
     def test_qualifying_cluster_triggers_proposal(self):
+        """Spec: FR-507, TR-807"""
         proposer = FakeClusterProposer([
             ProposedItem(name="el mercado", description="Donde se compra comida.", category="noun"),
         ])
@@ -128,6 +132,7 @@ class TestInterestClusterDetection:
         assert draft.engagement_level == EngagementLevel.UNSEEN
 
     def test_largest_qualifying_cluster_wins(self):
+        """Spec: TR-807"""
         proposer = FakeClusterProposer([ProposedItem(name="x", description="y")])
         strategy, _ = _strategy(
             [
@@ -142,6 +147,7 @@ class TestInterestClusterDetection:
         assert {c.name for c in cluster} == {"paella", "tapas", "tortilla"}
 
     def test_cluster_language_is_majority_vote(self):
+        """Spec: TR-807"""
         proposer = FakeClusterProposer([ProposedItem(name="x", description="y")])
         strategy, _ = _strategy(
             [

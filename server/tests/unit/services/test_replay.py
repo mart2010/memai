@@ -77,6 +77,7 @@ def _make_replayer(
 
 class TestGroupIntoConversations:
     def test_single_exchange_no_marker(self):
+        """Spec: TR-403"""
         lines = [_user(0), _asst(1), _closed(2)]
         groups = _group_into_conversations(lines)
         assert len(groups) == 1
@@ -85,6 +86,7 @@ class TestGroupIntoConversations:
         assert groups[0].ended_at == _ts(2)
 
     def test_topic_continuation_first_assistant_turn(self):
+        """Spec: TR-403, FR-112"""
         lines = [_user(0), _asst(1, marker=ConversationBoundaryType.CONTINUATION), _user(2), _asst(3), _closed(4)]
         groups = _group_into_conversations(lines)
         assert len(groups) == 1
@@ -92,7 +94,7 @@ class TestGroupIntoConversations:
         assert len(groups[0].turns) == 4
 
     def test_conversation_boundary_on_first_assistant_ignored(self):
-        """Boundary on the very first assistant turn doesn't split — whole session is one new conversation."""
+        """Spec: TR-403 — Boundary on the very first assistant turn doesn't split — whole session is one new conversation."""
         lines = [_user(0), _asst(1, marker=ConversationBoundaryType.BREAK), _user(2), _asst(3), _closed(4)]
         groups = _group_into_conversations(lines)
         assert len(groups) == 1
@@ -100,6 +102,7 @@ class TestGroupIntoConversations:
         assert len(groups[0].turns) == 4
 
     def test_conversation_boundary_mid_session_splits(self):
+        """Spec: TR-403, FR-112"""
         lines = [
             _user(0), _asst(1),
             _user(2), _asst(3, marker=ConversationBoundaryType.BREAK),
@@ -116,6 +119,7 @@ class TestGroupIntoConversations:
         assert groups[1].is_continuation is False
 
     def test_topic_continuation_then_mid_session_split(self):
+        """Spec: TR-403"""
         lines = [
             _user(0), _asst(1, marker=ConversationBoundaryType.CONTINUATION),
             _user(2), _asst(3, marker=ConversationBoundaryType.BREAK),
@@ -128,16 +132,18 @@ class TestGroupIntoConversations:
         assert groups[1].is_continuation is False  # second group is a fresh conversation
 
     def test_crashed_session_uses_last_turn_timestamp(self):
-        """No session_closed → ended_at set to last turn's timestamp."""
+        """Spec: TR-404 — No session_closed → ended_at set to last turn's timestamp."""
         lines = [_user(0), _asst(1), _user(2)]
         groups = _group_into_conversations(lines)
         assert len(groups) == 1
         assert groups[0].ended_at == _ts(2)
 
     def test_empty_lines_returns_no_groups(self):
+        """Spec: TR-403"""
         assert _group_into_conversations([]) == []
 
     def test_only_session_closed_returns_no_groups(self):
+        """Spec: TR-403"""
         assert _group_into_conversations([_closed(0)]) == []
 
 
@@ -147,11 +153,13 @@ class TestGroupIntoConversations:
 
 class TestTurnLogReplayer:
     def test_no_sessions_returns_zero(self):
+        """Spec: TR-405"""
         replayer, repo = _make_replayer()
         assert replayer.execute() == 0
         assert len(repo._records) == 0
 
     def test_single_session_creates_one_conversation(self):
+        """Spec: TR-403, FR-404"""
         sid = uuid4()
         lines = [_user(0), _asst(1), _user(2), _asst(3), _closed(4)]
         replayer, repo = _make_replayer(sessions=[(sid, lines)])
@@ -166,6 +174,7 @@ class TestTurnLogReplayer:
         assert conv.persona_id == GENERAL_ASSISTANT_ID
 
     def test_topic_continuation_extends_existing_conversation(self):
+        """Spec: TR-403"""
         sid = uuid4()
         lines = [_user(0), _asst(1, marker=ConversationBoundaryType.CONTINUATION), _user(2), _asst(3), _closed(4)]
         replayer, repo = _make_replayer(sessions=[(sid, lines)], existing_conversations=1)
@@ -180,7 +189,7 @@ class TestTurnLogReplayer:
         assert conv.ended_at == _ts(4)
 
     def test_topic_continuation_with_no_prior_conversation_creates_new(self):
-        """When DB has no prior conversation, topic_continuation falls back to new conversation."""
+        """Spec: TR-403 — When DB has no prior conversation, topic_continuation falls back to new conversation."""
         sid = uuid4()
         lines = [_user(0), _asst(1, marker=ConversationBoundaryType.CONTINUATION), _closed(2)]
         replayer, repo = _make_replayer(sessions=[(sid, lines)])
@@ -191,6 +200,7 @@ class TestTurnLogReplayer:
         assert not list(repo._records.values())[0].consolidated
 
     def test_mid_session_split_creates_two_conversations(self):
+        """Spec: TR-403"""
         sid = uuid4()
         lines = [
             _user(0), _asst(1),
@@ -208,6 +218,7 @@ class TestTurnLogReplayer:
         assert len(convs[1].turns) == 2
 
     def test_multiple_sessions_processed_oldest_first(self):
+        """Spec: TR-405"""
         sid1, sid2 = uuid4(), uuid4()
         lines1 = [_user(0), _asst(1), _closed(2)]
         lines2 = [_user(10), _asst(11), _closed(12)]
@@ -222,6 +233,7 @@ class TestTurnLogReplayer:
         assert convs[1].turns[0].timestamp == _ts(10)
 
     def test_already_persisted_session_is_skipped(self):
+        """Spec: TR-405, FR-404"""
         sid1, sid2 = uuid4(), uuid4()
         lines1 = [_user(0), _asst(1), _closed(2)]
         lines2 = [_user(10), _asst(11), _closed(12)]
@@ -237,7 +249,7 @@ class TestTurnLogReplayer:
         assert len(repo._records) == 2
 
     def test_crashed_session_is_replayed(self):
-        """Sessions without session_closed (crash recovery) are still replayed."""
+        """Spec: TR-404, FR-404 — Sessions without session_closed (crash recovery) are still replayed."""
         sid = uuid4()
         lines = [_user(0), _asst(1)]  # no session_closed
         replayer, repo = _make_replayer(sessions=[(sid, lines)])

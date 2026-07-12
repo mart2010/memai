@@ -38,12 +38,14 @@ def _make_enrich(strategies: dict | None = None) -> tuple[EnrichMemory, FakeMemo
 
 class TestEnrichMemory:
     def test_no_strategies_is_a_noop(self):
+        """Spec: TR-705"""
         enrich, memory_repo, unit_of_work = _make_enrich()
         assert enrich.execute() == 0
         assert memory_repo.concepts == []
         assert unit_of_work.enter_count == 0
 
     def test_drafts_are_upserted_through_the_shared_pipeline(self):
+        """Spec: TR-705, FR-507"""
         strategy = FakePersonaEnrichmentPort(drafts=[_draft_concept("el mercado")])
         enrich, memory_repo, unit_of_work = _make_enrich({PERSONA_ID: strategy})
 
@@ -55,6 +57,7 @@ class TestEnrichMemory:
         assert unit_of_work.enter_count == 1  # one transaction per persona batch
 
     def test_proposals_are_forced_unseen(self):
+        """Spec: INV-12, TR-705"""
         draft = _draft_concept("el mercado")
         draft.engagement_level = EngagementLevel.EXPLORED  # a strategy must not claim knowledge
         strategy = FakePersonaEnrichmentPort(drafts=[draft])
@@ -64,6 +67,7 @@ class TestEnrichMemory:
         assert memory_repo.concepts[0].engagement_level == EngagementLevel.UNSEEN
 
     def test_procedure_drafts_supported(self):
+        """Spec: TR-705"""
         draft = Procedure(
             id=None, persona_id=PERSONA_ID, name="pedir la cuenta",
             description="Cómo pedir la cuenta.", language=Language("es"),
@@ -76,6 +80,7 @@ class TestEnrichMemory:
         assert memory_repo.procedures[0].name == "pedir la cuenta"
 
     def test_empty_proposals_skip_the_transaction(self):
+        """Spec: TR-705"""
         strategy = FakePersonaEnrichmentPort(drafts=[])
         enrich, _, unit_of_work = _make_enrich({PERSONA_ID: strategy})
 

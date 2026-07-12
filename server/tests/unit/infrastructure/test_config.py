@@ -11,6 +11,7 @@ def _write_toml(tmp_path: Path, content: str) -> Path:
 
 class TestLoadConfigComputeDevice:
     def test_tts_device_defaults_to_none_when_tts_section_absent(self, tmp_path: Path):
+        """Spec: TR-951"""
         path = _write_toml(
             tmp_path,
             """
@@ -27,6 +28,7 @@ class TestLoadConfigComputeDevice:
         assert cfg.tts_device is None
 
     def test_tts_device_read_from_config_when_present(self, tmp_path: Path):
+        """Spec: TR-951"""
         path = _write_toml(
             tmp_path,
             """
@@ -40,6 +42,7 @@ class TestLoadConfigComputeDevice:
         assert cfg.tts_device == "cpu"
 
     def test_stt_device_and_compute_type_default_to_cpu_safe_values_when_section_absent(self, tmp_path: Path):
+        """Spec: TR-951"""
         path = _write_toml(tmp_path, "")
 
         cfg = load_config(path)

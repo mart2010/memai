@@ -82,6 +82,7 @@ def _write_bundle(root: Path, manifest: str = MANIFEST, lessons: dict[str, str] 
 
 class TestTomlPersonaBundleSourceHappyPath:
     def test_full_bundle_parses(self, tmp_path: Path) -> None:
+        """Spec: TR-901, TR-902, TR-903"""
         bundle = TomlPersonaBundleSource().load(_write_bundle(tmp_path))
 
         assert bundle.persona_key == "meo/spanish-tutor"
@@ -103,12 +104,14 @@ class TestTomlPersonaBundleSourceHappyPath:
         assert bundle.persona.strategy == "language_tutor"
 
     def test_persona_without_strategy_parses_to_none(self, tmp_path: Path) -> None:
+        """Spec: TR-903"""
         manifest = MANIFEST.replace('strategy = "language_tutor"\n', "")
         bundle = TomlPersonaBundleSource().load(_write_bundle(tmp_path, manifest=manifest))
         assert bundle.persona is not None
         assert bundle.persona.strategy is None
 
     def test_items_parse_with_types_and_steps(self, tmp_path: Path) -> None:
+        """Spec: TR-901"""
         bundle = TomlPersonaBundleSource().load(_write_bundle(tmp_path))
         concept, procedure = bundle.lessons[0].items
 
@@ -122,7 +125,7 @@ class TestTomlPersonaBundleSourceHappyPath:
         assert procedure.steps == ("hola / buenos días", "¿cómo está?")
 
     def test_lessons_ordered_by_filename_sort(self, tmp_path: Path) -> None:
-        """Insertion order is the contract: lesson-filename sort defines curriculum order."""
+        """Spec: TR-901, FR-606 — Insertion order is the contract: lesson-filename sort defines curriculum order."""
         lessons = {
             "10_later.toml": LESSON_FOOD,
             "01_first.toml": LESSON_GREETINGS,
@@ -134,7 +137,7 @@ class TestTomlPersonaBundleSourceHappyPath:
         ]
 
     def test_manifest_preserved_verbatim_and_json_safe(self, tmp_path: Path) -> None:
-        """[bundle] + [provenance] go to the bundle_installs JSONB verbatim; TOML dates
+        """Spec: TR-902, TR-905 — [bundle] + [provenance] go to the bundle_installs JSONB verbatim; TOML dates
         must come out JSON-serialisable (ISO strings)."""
         bundle = TomlPersonaBundleSource().load(_write_bundle(tmp_path))
         assert bundle.manifest["bundle"]["name"] == "spanish-a1"
@@ -142,7 +145,7 @@ class TestTomlPersonaBundleSourceHappyPath:
         assert bundle.manifest["provenance"]["generated_at"] == "2026-07-15"
 
     def test_content_only_bundle_has_no_persona(self, tmp_path: Path) -> None:
-        """Content-only bundles (e.g. cognate accelerators) omit [persona]."""
+        """Spec: TR-903 — Content-only bundles (e.g. cognate accelerators) omit [persona]."""
         manifest = '''
 format_version = 1
 persona_key = "meo/spanish-tutor"
@@ -162,53 +165,61 @@ class TestTomlPersonaBundleSourceRejections:
         TomlPersonaBundleSource().load(bundle_dir)
 
     def test_rejects_missing_directory(self, tmp_path: Path) -> None:
+        """Spec: FR-608"""
         with pytest.raises(BundleFormatError, match="not a directory"):
             self._load(tmp_path / "absent")
 
     def test_rejects_missing_manifest(self, tmp_path: Path) -> None:
+        """Spec: FR-608, TR-902"""
         (tmp_path / "empty-bundle").mkdir()
         with pytest.raises(BundleFormatError, match="bundle.toml"):
             self._load(tmp_path / "empty-bundle")
 
     def test_rejects_invalid_toml_naming_the_file(self, tmp_path: Path) -> None:
+        """Spec: FR-608"""
         bundle_dir = _write_bundle(tmp_path, lessons={"01_bad.toml": "items = [[["})
         with pytest.raises(BundleFormatError, match="01_bad.toml"):
             self._load(bundle_dir)
 
     @pytest.mark.parametrize("version_line", ["format_version = 2", ""])
     def test_rejects_wrong_or_missing_format_version(self, tmp_path: Path, version_line: str) -> None:
+        """Spec: FR-608, TR-902"""
         manifest = MANIFEST.replace("format_version = 1", version_line)
         with pytest.raises(BundleFormatError, match="format_version"):
             self._load(_write_bundle(tmp_path, manifest=manifest))
 
     def test_rejects_missing_persona_key(self, tmp_path: Path) -> None:
+        """Spec: FR-608, TR-902"""
         manifest = MANIFEST.replace('persona_key = "meo/spanish-tutor"', "")
         with pytest.raises(BundleFormatError, match="persona_key"):
             self._load(_write_bundle(tmp_path, manifest=manifest))
 
     def test_rejects_missing_bundle_table_fields(self, tmp_path: Path) -> None:
+        """Spec: FR-608, TR-902"""
         manifest = MANIFEST.replace('version = "1.0.0"', "")
         with pytest.raises(BundleFormatError, match="version"):
             self._load(_write_bundle(tmp_path, manifest=manifest))
 
     def test_rejects_bundle_without_lessons(self, tmp_path: Path) -> None:
+        """Spec: FR-608, TR-901"""
         with pytest.raises(BundleFormatError, match="lesson"):
             self._load(_write_bundle(tmp_path, lessons={}))
 
     def test_rejects_lesson_without_items(self, tmp_path: Path) -> None:
+        """Spec: FR-608, TR-901"""
         bundle_dir = _write_bundle(tmp_path, lessons={"01_empty.toml": 'title = "Empty"'})
         with pytest.raises(BundleFormatError, match="01_empty.toml"):
             self._load(bundle_dir)
 
     def test_rejects_item_claiming_engagement_level(self, tmp_path: Path) -> None:
-        """A bundle cannot claim the user knows things — engagement_level is installer-owned."""
+        """Spec: FR-608, INV-12 — A bundle cannot claim the user knows things — engagement_level is installer-owned."""
         lesson = LESSON_FOOD + 'engagement_level = "integrated"\n'
         bundle_dir = _write_bundle(tmp_path, lessons={"01_sneaky.toml": lesson})
         with pytest.raises(BundleFormatError, match="engagement_level"):
             self._load(bundle_dir)
 
     def test_rejects_item_with_persona_state(self, tmp_path: Path) -> None:
-        """Single-writer contract: persona_state is written only by the owning persona's
+        """Spec: FR-608, INV-6, INV-12 — Single-writer contract: persona_state is written only by the owning persona's
         assessment strategy, never shipped in a bundle."""
         lesson = LESSON_FOOD + "persona_state = { streak = 3 }\n"
         bundle_dir = _write_bundle(tmp_path, lessons={"01_sneaky.toml": lesson})
@@ -216,24 +227,28 @@ class TestTomlPersonaBundleSourceRejections:
             self._load(bundle_dir)
 
     def test_rejects_unknown_item_type(self, tmp_path: Path) -> None:
+        """Spec: FR-608"""
         lesson = LESSON_FOOD.replace('type = "concept"', 'type = "episode"')
         bundle_dir = _write_bundle(tmp_path, lessons={"01_bad.toml": lesson})
         with pytest.raises(BundleFormatError, match="concept.*procedure"):
             self._load(bundle_dir)
 
     def test_rejects_steps_on_a_concept(self, tmp_path: Path) -> None:
+        """Spec: FR-608"""
         lesson = LESSON_FOOD + 'steps = ["step one"]\n'
         bundle_dir = _write_bundle(tmp_path, lessons={"01_bad.toml": lesson})
         with pytest.raises(BundleFormatError, match="steps"):
             self._load(bundle_dir)
 
     def test_rejects_item_missing_required_field(self, tmp_path: Path) -> None:
+        """Spec: FR-608"""
         lesson = LESSON_FOOD.replace('description = "Food."', "")
         bundle_dir = _write_bundle(tmp_path, lessons={"01_bad.toml": lesson})
         with pytest.raises(BundleFormatError, match="description"):
             self._load(bundle_dir)
 
     def test_rejects_persona_with_unknown_keys(self, tmp_path: Path) -> None:
+        """Spec: FR-608, TR-903"""
         manifest = MANIFEST.replace(
             'name = "Profesora Sofía"', 'name = "Profesora Sofía"\nis_system = true'
         )
@@ -241,6 +256,7 @@ class TestTomlPersonaBundleSourceRejections:
             self._load(_write_bundle(tmp_path, manifest=manifest))
 
     def test_rejects_persona_without_languages(self, tmp_path: Path) -> None:
+        """Spec: FR-608, TR-903"""
         manifest = MANIFEST.replace('languages = ["es"]', "languages = []")
         with pytest.raises(BundleFormatError, match="languages"):
             self._load(_write_bundle(tmp_path, manifest=manifest))

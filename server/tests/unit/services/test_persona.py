@@ -59,6 +59,7 @@ def _repo_with(*personas: AssistantPersona) -> FakePersonaRepository:
 
 class TestCreatePersona:
     def test_creates_persona_when_general_assistant_active(self):
+        """Spec: FR-204"""
         ga = _general_assistant()
         session = _session(ga)
         use_case = CreatePersona(_repo_with(ga))
@@ -67,6 +68,7 @@ class TestCreatePersona:
         assert not persona.is_system
 
     def test_raises_when_non_general_persona_active(self):
+        """Spec: FR-204"""
         coach = _other_persona()
         session = _session(coach)
         use_case = CreatePersona(_repo_with(coach))
@@ -74,6 +76,7 @@ class TestCreatePersona:
             use_case.execute(session, name="Tutor", system_prompt="You teach.", now=_now())
 
     def test_saved_to_repo(self):
+        """Spec: FR-204"""
         ga = _general_assistant()
         session = _session(ga)
         repo = _repo_with(ga)
@@ -84,6 +87,7 @@ class TestCreatePersona:
 
 class TestListPersonas:
     def test_returns_all_personas(self):
+        """Spec: FR-204"""
         ga = _general_assistant()
         coach = _other_persona("Coach")
         use_case = ListPersonas(_repo_with(ga, coach))
@@ -91,12 +95,14 @@ class TestListPersonas:
         assert len(result) == 2
 
     def test_empty_repo(self):
+        """Spec: FR-204"""
         use_case = ListPersonas(FakePersonaRepository())
         assert use_case.execute() == []
 
 
 class TestEditPersona:
     def test_updates_name_and_prompt(self):
+        """Spec: FR-204"""
         coach = _other_persona("Coach")
         repo = _repo_with(coach)
         use_case = EditPersona(repo)
@@ -105,6 +111,7 @@ class TestEditPersona:
         assert updated.system_prompt == "You mentor."
 
     def test_partial_update_preserves_other_fields(self):
+        """Spec: FR-204"""
         coach = _other_persona("Coach")
         original_prompt = coach.system_prompt
         repo = _repo_with(coach)
@@ -113,11 +120,13 @@ class TestEditPersona:
         assert updated.system_prompt == original_prompt
 
     def test_raises_on_unknown_persona(self):
+        """Spec: FR-204"""
         use_case = EditPersona(FakePersonaRepository())
         with pytest.raises(ValueError):
             use_case.execute(uuid4(), now=_now(), name="X")
 
     def test_updates_voices_speaking_rate_response_language(self):
+        """Spec: FR-204, FR-105"""
         coach = _other_persona("Coach")
         repo = _repo_with(coach)
         use_case = EditPersona(repo)
@@ -129,6 +138,7 @@ class TestEditPersona:
         assert updated.response_language == Language("fr")
 
     def test_updates_system_persona(self):
+        """Spec: FR-204, FR-003"""
         ga = _general_assistant()
         repo = _repo_with(ga)
         use_case = EditPersona(repo)
@@ -138,6 +148,7 @@ class TestEditPersona:
 
 class TestDeactivatePersona:
     def test_deactivates_non_system_persona(self):
+        """Spec: FR-204"""
         coach = _other_persona("Coach")
         repo = _repo_with(coach)
         event = DeactivatePersona(repo).execute(coach.id, now=_now())
@@ -145,18 +156,21 @@ class TestDeactivatePersona:
         assert event.persona_id == coach.id
 
     def test_raises_on_system_persona(self):
+        """Spec: FR-201, FR-204"""
         ga = _general_assistant()
         repo = _repo_with(ga)
         with pytest.raises(ValueError, match="[Ss]ystem"):
             DeactivatePersona(repo).execute(ga.id, now=_now())
 
     def test_raises_on_unknown_persona(self):
+        """Spec: FR-204"""
         with pytest.raises(ValueError):
             DeactivatePersona(FakePersonaRepository()).execute(uuid4(), now=_now())
 
 
 class TestReactivatePersona:
     def test_reactivates_deactivated_persona(self):
+        """Spec: FR-204"""
         coach = _other_persona("Coach")
         repo = _repo_with(coach)
         DeactivatePersona(repo).execute(coach.id, now=_now())
@@ -165,30 +179,35 @@ class TestReactivatePersona:
         assert event.persona_id == coach.id
 
     def test_raises_on_unknown_persona(self):
+        """Spec: FR-204"""
         with pytest.raises(ValueError):
             ReactivatePersona(FakePersonaRepository()).execute(uuid4(), now=_now())
 
 
 class TestRemovePersona:
     def test_removes_non_system_persona(self):
+        """Spec: FR-204"""
         coach = _other_persona("Coach")
         repo = _repo_with(coach)
         RemovePersona(repo).execute(coach.id)
         assert repo.get(coach.id) is None
 
     def test_raises_on_system_persona(self):
+        """Spec: FR-201, FR-204"""
         ga = _general_assistant()
         repo = _repo_with(ga)
         with pytest.raises(ValueError, match="[Ss]ystem"):
             RemovePersona(repo).execute(ga.id)
 
     def test_raises_on_unknown_persona(self):
+        """Spec: FR-204"""
         with pytest.raises(ValueError):
             RemovePersona(FakePersonaRepository()).execute(uuid4())
 
 
 class TestSwitchPersona:
     def test_returns_event_with_correct_ids(self):
+        """Spec: FR-202"""
         ga = _general_assistant()
         coach = _other_persona("Coach")
         session = _session(ga)
@@ -198,6 +217,7 @@ class TestSwitchPersona:
         assert event.to_persona_id == coach.id
 
     def test_updates_session_active_persona(self):
+        """Spec: FR-202"""
         ga = _general_assistant()
         coach = _other_persona("Coach")
         session = _session(ga)
@@ -205,6 +225,7 @@ class TestSwitchPersona:
         assert session.active_persona.id == coach.id
 
     def test_raises_on_unknown_persona(self):
+        """Spec: FR-202"""
         ga = _general_assistant()
         session = _session(ga)
         with pytest.raises(ValueError):

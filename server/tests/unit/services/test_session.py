@@ -115,18 +115,21 @@ def _make_process_turn(
 
 class TestStartSession:
     def test_loads_user_and_general_assistant(self):
+        """Spec: TR-301, FR-201"""
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
         assert ctx.active_persona.id == GENERAL_ASSISTANT_ID
         assert ctx.memory_brief is None
 
     def test_injects_memory_brief(self):
+        """Spec: FR-109, TR-301"""
         brief = MemoryBrief(content="User likes Python.", created_at=_now(), updated_at=_now())
         use_case, _ = _make_start_session(brief=brief)
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
         assert ctx.memory_brief is brief
 
     def test_raises_if_user_missing(self):
+        """Spec: TR-301"""
         persona_repo = FakePersonaRepository()
         persona_repo.save(_general_assistant())
         use_case = StartSession(
@@ -139,6 +142,7 @@ class TestStartSession:
             use_case.execute(session_id=uuid4(), started_at=_now())
 
     def test_injects_tail_when_previous_session_within_threshold(self):
+        """Spec: FR-109, TR-301"""
         now = _now()
         previous = SessionInfo(session_id=uuid4(), ended_at=now - timedelta(hours=1), clean_exit=True)
         tail = [Turn(timestamp=now, speaker=Speaker.USER, content="earlier turn")]
@@ -148,6 +152,7 @@ class TestStartSession:
         assert ctx.session_tail[0].content == "earlier turn"
 
     def test_no_tail_when_previous_session_exceeds_threshold(self):
+        """Spec: FR-109, TR-301"""
         now = _now()
         previous = SessionInfo(session_id=uuid4(), ended_at=now - timedelta(hours=30), clean_exit=True)
         tail = [Turn(timestamp=now, speaker=Speaker.USER, content="old turn")]
@@ -156,11 +161,13 @@ class TestStartSession:
         assert ctx.session_tail == []
 
     def test_no_tail_when_no_previous_session(self):
+        """Spec: FR-109, TR-301"""
         use_case, _ = _make_start_session(previous=None)
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
         assert ctx.session_tail == []
 
     def test_no_selection_batches_fetched_at_session_start(self):
+        """Spec: TR-306"""
         # Batches are fetched lazily by ProcessTurn — sessions always start on GA,
         # which has no strategy; a tutor arrives via mid-session switch.
         use_case, _ = _make_start_session()
@@ -171,6 +178,7 @@ class TestStartSession:
 class TestProcessTurn:
     @pytest.mark.asyncio
     async def test_basic_turn_produces_audio(self):
+        """Spec: TR-302, FR-104"""
         process_turn, _, _, _ = _make_process_turn(stt_transcript="hello", llm_response="Hello there.")
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
@@ -182,6 +190,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_empty_transcript_returns_none(self):
+        """Spec: FR-103"""
         process_turn, _, _, _ = _make_process_turn(stt_transcript="   ")
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
@@ -191,6 +200,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_recall_path_enriches_context(self):
+        """Spec: FR-302, TR-302"""
         recall_event = RecallTriggered(query="python tips", memory_types=(MemoryType.CONCEPT,))
         process_turn, _, _, llm = _make_process_turn(
             stt_transcript="remember when we talked about python",
@@ -204,6 +214,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_topic_break_fires_boundary_event(self):
+        """Spec: FR-112, TR-304"""
         process_turn, _, wal, _ = _make_process_turn(llm_response="[TOPIC_BREAK] Sure, new topic.")
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
@@ -218,6 +229,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_topic_continuation_fires_on_first_turn(self):
+        """Spec: FR-112, TR-304"""
         process_turn, _, wal, _ = _make_process_turn(llm_response="[TOPIC_CONTINUATION] Yes, continuing.")
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
@@ -230,6 +242,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_topic_continuation_ignored_on_non_first_turn(self):
+        """Spec: TR-304"""
         process_turn, _, wal, _ = _make_process_turn(llm_response="[TOPIC_CONTINUATION] Continuing.")
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
@@ -244,6 +257,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_selection_batch_fetched_lazily_on_first_active_turn(self):
+        """Spec: TR-306, FR-501"""
         strategy = FakePersonaSelectionPort(
             items=[SelectedItem(item=_concept("hola", 1), context="Anchor: your trip to Madrid.")]
         )
@@ -266,6 +280,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_exhausted_batch_is_not_refetched(self):
+        """Spec: TR-306"""
         strategy = FakePersonaSelectionPort(
             items=[SelectedItem(item=_concept("hola", 1)), SelectedItem(item=_concept("adios", 2))]
         )
@@ -291,6 +306,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_no_fetch_during_onboarding_turn(self):
+        """Spec: TR-306"""
         strategy = FakePersonaSelectionPort(items=[SelectedItem(item=_concept("hola", 1))])
         process_turn, _, _, _ = _make_process_turn(
             selection_strategies={GENERAL_ASSISTANT_ID: strategy},
@@ -307,6 +323,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_switched_persona_batch_fetched_on_its_first_turn(self):
+        """Spec: FR-202, TR-306, TR-310"""
         tutor = _tutor_persona()
         persona_repo = FakePersonaRepository()
         persona_repo.save(_general_assistant())
@@ -331,6 +348,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_focus_marker_replaces_batch(self):
+        """Spec: FR-502, TR-306"""
         strategy = FakePersonaSelectionPort(
             items=[SelectedItem(item=_concept("hola", 1)), SelectedItem(item=_concept("adios", 2))],
             focused_items=[SelectedItem(item=_concept("repaso", 3))],
@@ -358,6 +376,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_combined_persona_and_focus_markers_apply_to_new_persona(self):
+        """Spec: TR-306, FR-502"""
         tutor = _tutor_persona()
         persona_repo = FakePersonaRepository()
         persona_repo.save(_general_assistant())
@@ -381,6 +400,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_no_injection_without_selection_batch(self):
+        """Spec: TR-306"""
         process_turn, _, _, llm = _make_process_turn()
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
@@ -391,6 +411,7 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_rolling_window_triggered(self):
+        """Spec: FR-110, TR-309"""
         process_turn, _, _, llm = _make_process_turn(llm_response="Got it.", rolling_window_size=2)
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
@@ -422,6 +443,7 @@ class TestSpeakerCast:
 
     @pytest.mark.asyncio
     async def test_speaker_tags_switch_voice_per_segment(self):
+        """Spec: FR-205, TR-305"""
         result, tts = await self._run(
             "[SPEAKER:target_teacher] Hola amigo. [SPEAKER:default] Now in your language.",
             voices={"default": "vd", "target_teacher": "vt"},
@@ -433,6 +455,7 @@ class TestSpeakerCast:
 
     @pytest.mark.asyncio
     async def test_untagged_response_speaks_with_default_voice(self):
+        """Spec: TR-305"""
         _, tts = await self._run(
             "Just a plain answer.",
             voices={"default": "vd", "target_teacher": "vt"},
@@ -441,6 +464,7 @@ class TestSpeakerCast:
 
     @pytest.mark.asyncio
     async def test_unknown_role_falls_back_to_default_voice(self):
+        """Spec: FR-205, TR-305"""
         _, tts = await self._run(
             "[SPEAKER:ghost] Hola.",
             voices={"default": "vd", "target_teacher": "vt"},
@@ -449,6 +473,7 @@ class TestSpeakerCast:
 
     @pytest.mark.asyncio
     async def test_mid_sentence_switch_flushes_open_segment_with_outgoing_voice(self):
+        """Spec: TR-305"""
         _, tts = await self._run(
             "Listen now [SPEAKER:target_teacher] escucha.",
             voices={"default": "vd", "target_teacher": "vt"},
@@ -460,6 +485,7 @@ class TestSpeakerCast:
 
     @pytest.mark.asyncio
     async def test_rotation_pool_resolved_deterministically_per_session(self):
+        """Spec: FR-206, TR-307"""
         voices = {"default": "vd", "target_teacher": "va|vb"}
         _, tts_even = await self._run(
             "[SPEAKER:target_teacher] Hola.", voices, session_id=UUID(int=2),
@@ -472,6 +498,7 @@ class TestSpeakerCast:
 
     @pytest.mark.asyncio
     async def test_non_speaker_brackets_are_plain_content(self):
+        """Spec: TR-305"""
         result, tts = await self._run(
             "Beware [nota] brackets.",
             voices={"default": "vd"},
@@ -481,6 +508,7 @@ class TestSpeakerCast:
 
     @pytest.mark.asyncio
     async def test_dangling_partial_tag_at_stream_end_is_spoken_as_text(self):
+        """Spec: TR-305"""
         result, _ = await self._run(
             "Hola. [SPEAKER:target",
             voices={"default": "vd", "target_teacher": "vt"},
@@ -490,6 +518,7 @@ class TestSpeakerCast:
 
 class TestEndSession:
     def test_turn_logger_closed_with_clean_exit(self):
+        """Spec: TR-402"""
         turn_logger = FakeTurnLogger()
         session_id = uuid4()
         use_case, _ = _make_start_session()

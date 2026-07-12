@@ -129,6 +129,7 @@ class _Harness:
 
 class TestPersonaCreation:
     def test_creates_persona_from_definition_when_absent(self):
+        """Spec: FR-601, TR-904"""
         harness = _Harness(_bundle(persona=_definition()))
         result = harness.use_case.execute(BUNDLE_PATH)
 
@@ -145,6 +146,7 @@ class TestPersonaCreation:
         assert created.strategy == "language_tutor"
 
     def test_derives_default_voice_from_primary_language_when_omitted(self):
+        """Spec: TR-903, TR-904"""
         harness = _Harness(_bundle(persona=_definition()))
         harness.use_case.execute(BUNDLE_PATH)
 
@@ -153,6 +155,7 @@ class TestPersonaCreation:
         assert harness.derived_voice_requests == [Language("fr")]
 
     def test_keeps_bundle_default_voice_when_provided(self):
+        """Spec: TR-903"""
         definition = _definition(voices={"default": "em_alex", "target_teacher": "ef_dora"})
         harness = _Harness(_bundle(persona=definition))
         harness.use_case.execute(BUNDLE_PATH)
@@ -162,12 +165,14 @@ class TestPersonaCreation:
         assert harness.derived_voice_requests == []
 
     def test_languages_are_bundle_targets_plus_primary_language(self):
+        """Spec: TR-904"""
         harness = _Harness(_bundle(persona=_definition()))
         harness.use_case.execute(BUNDLE_PATH)
         created = harness.persona_repo.get_by_key(PERSONA_KEY)
         assert created.languages == [Language("es"), Language("fr")]
 
     def test_primary_language_not_duplicated_when_already_a_target(self):
+        """Spec: TR-904"""
         definition = _definition(languages=(Language("es"), Language("fr")))
         harness = _Harness(_bundle(persona=definition))
         harness.use_case.execute(BUNDLE_PATH)
@@ -175,11 +180,13 @@ class TestPersonaCreation:
         assert created.languages == [Language("es"), Language("fr")]
 
     def test_fails_when_persona_absent_and_no_definition(self):
+        """Spec: FR-601, TR-904"""
         harness = _Harness(_bundle(persona=None))
         with pytest.raises(BundleInstallError, match=PERSONA_KEY):
             harness.use_case.execute(BUNDLE_PATH)
 
     def test_fails_when_creating_before_onboarding(self):
+        """Spec: FR-605, TR-904"""
         harness = _Harness(_bundle(persona=_definition()), user=User(id=uuid4(), primary_language=None))
         with pytest.raises(BundleInstallError, match="onboarding"):
             harness.use_case.execute(BUNDLE_PATH)
@@ -187,6 +194,7 @@ class TestPersonaCreation:
 
 class TestExistingPersonaAttach:
     def test_attaches_content_without_touching_existing_definition(self):
+        """Spec: FR-601, TR-904"""
         harness = _Harness(_bundle(persona=_definition()))
         existing = _existing_persona()
         harness.persona_repo.save(existing)
@@ -201,6 +209,7 @@ class TestExistingPersonaAttach:
         assert any("[persona]" in notice for notice in result.notices)
 
     def test_content_only_bundle_attaches_silently(self):
+        """Spec: FR-601"""
         harness = _Harness(_bundle(persona=None))
         harness.persona_repo.save(_existing_persona())
 
@@ -212,6 +221,7 @@ class TestExistingPersonaAttach:
 
 class TestItemInstallation:
     def test_items_inserted_unseen_with_persona_id(self):
+        """Spec: FR-602, INV-12"""
         lessons = (
             BundleLesson(
                 filename="01_greetings.toml",
@@ -233,7 +243,7 @@ class TestItemInstallation:
         assert procedure.steps == ["paso uno"]
 
     def test_insertion_order_follows_lessons_then_items(self):
-        """Insertion order is the contract: curriculum order survives as ascending ids."""
+        """Spec: FR-606, INV-11, TR-904 — Insertion order is the contract: curriculum order survives as ascending ids."""
         lessons = (
             BundleLesson(filename="01_first.toml", items=(_concept_item("uno"), _concept_item("dos"))),
             BundleLesson(filename="02_second.toml", items=(_concept_item("tres"),)),
@@ -247,6 +257,7 @@ class TestItemInstallation:
         assert ids == sorted(ids)
 
     def test_one_unit_of_work_per_lesson(self):
+        """Spec: TR-904"""
         lessons = (
             BundleLesson(filename="01_first.toml", items=(_concept_item("uno"),)),
             BundleLesson(filename="02_second.toml", items=(_concept_item("dos"),)),
@@ -257,6 +268,7 @@ class TestItemInstallation:
         assert harness.unit_of_work.enter_count == 3
 
     def test_counts_split_inserted_vs_merged(self):
+        """Spec: TR-905"""
         class _CannedSearch(FakeMemoryRepository):
             """First item finds an exact duplicate (merge); the rest insert as new."""
             def search(self, embedding, memory_types, top_n, persona_id=None):
@@ -285,6 +297,7 @@ class TestSameRunSiblingExclusion:
     """
 
     def test_high_similarity_sibling_from_same_run_still_inserts_separately(self):
+        """Spec: FR-604, TR-904"""
         class _CannedSearch(FakeMemoryRepository):
             """No existing content for the first item; from the second item onward,
             returns whatever was inserted so far as an auto-merge-band match — simulating
@@ -306,7 +319,7 @@ class TestSameRunSiblingExclusion:
         assert [c.name for c in harness.memory_repo.concepts] == ["parlare", "mangiare"]
 
     def test_still_merges_against_content_predating_this_run(self):
-        """The exclusion only covers items inserted THIS run — a genuine pre-existing
+        """Spec: FR-604, FR-603 — The exclusion only covers items inserted THIS run — a genuine pre-existing
         match (an earlier install, an earlier bundle, live extraction) still merges."""
 
         class _CannedSearch(FakeMemoryRepository):
@@ -327,6 +340,7 @@ class TestSameRunSiblingExclusion:
 
 class TestProvenanceLog:
     def test_appends_one_record_with_counts_and_manifest(self):
+        """Spec: FR-607, TR-905"""
         harness = _Harness(_bundle(persona=_definition()))
         harness.use_case.execute(BUNDLE_PATH)
 
@@ -341,6 +355,7 @@ class TestProvenanceLog:
         assert record.manifest["provenance"]["generator_model"] == "claude-fable-5"
 
     def test_loads_bundle_from_given_path(self):
+        """Spec: TR-904"""
         harness = _Harness(_bundle(persona=_definition()))
         harness.use_case.execute(BUNDLE_PATH)
         assert harness.source.loaded_paths == [BUNDLE_PATH]

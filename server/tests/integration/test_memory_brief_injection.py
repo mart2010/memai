@@ -21,6 +21,7 @@ _NOW = datetime.now(UTC)
 
 
 async def test_second_session_llm_context_contains_first_sessions_brief(pg_conn: psycopg.Connection) -> None:
+    """Spec: FR-109, FR-308, TR-303"""
     persona = AssistantPersona.general_assistant(system_prompt="You are a helpful assistant.")
     PSPersonaRepository(pg_conn).save(persona)
     user = User(id=uuid4(), primary_language=Language("en"))

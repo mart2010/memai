@@ -69,6 +69,7 @@ class TestBundleInstallPipeline:
     def test_fresh_install_creates_persona_and_content(
         self, pg_conn: psycopg.Connection, onboarded_user: User
     ) -> None:
+        """Spec: FR-601, FR-602, FR-606, TR-904"""
         installer = _make_installer(pg_conn, FakeMemorySynthesizer())
 
         result = installer.execute(FIXTURE_BUNDLE)
@@ -121,6 +122,7 @@ class TestBundleInstallPipeline:
     def test_reinstall_is_idempotent_and_skips_synthesis(
         self, pg_conn: psycopg.Connection, onboarded_user: User
     ) -> None:
+        """Spec: FR-603, TR-604"""
         synthesizer = FakeMemorySynthesizer()
         installer = _make_installer(pg_conn, synthesizer)
 

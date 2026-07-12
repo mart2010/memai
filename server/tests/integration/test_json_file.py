@@ -24,6 +24,7 @@ def log_dir(tmp_path: Path) -> Path:
 
 class TestJSONLTurnLogger:
     def test_creates_file_on_first_append(self, log_dir: Path) -> None:
+        """Spec: TR-401"""
         logger = JSONLTurnLogger(log_dir)
         sid = uuid4()
         logger.append(sid, _turn("hello"))
@@ -31,6 +32,7 @@ class TestJSONLTurnLogger:
         assert len(files) == 1
 
     def test_turn_fields_round_trip(self, log_dir: Path) -> None:
+        """Spec: TR-402"""
         logger = JSONLTurnLogger(log_dir)
         reader = JSONLSessionLogReader(log_dir)
         sid = uuid4()
@@ -43,6 +45,7 @@ class TestJSONLTurnLogger:
         assert turns[0].language == Language("fr")
 
     def test_turn_without_language(self, log_dir: Path) -> None:
+        """Spec: TR-402"""
         logger = JSONLTurnLogger(log_dir)
         reader = JSONLSessionLogReader(log_dir)
         sid = uuid4()
@@ -52,6 +55,7 @@ class TestJSONLTurnLogger:
         assert turns[0].language is None
 
     def test_multiple_turns_appended_in_order(self, log_dir: Path) -> None:
+        """Spec: TR-401, FR-111"""
         logger = JSONLTurnLogger(log_dir)
         reader = JSONLSessionLogReader(log_dir)
         sid = uuid4()
@@ -61,6 +65,7 @@ class TestJSONLTurnLogger:
         assert [t.content for t in turns] == [f"turn {i}" for i in range(5)]
 
     def test_marker_embedded_in_assistant_turn(self, log_dir: Path) -> None:
+        """Spec: TR-402, FR-111"""
         import json
         logger = JSONLTurnLogger(log_dir)
         sid = uuid4()
@@ -73,6 +78,7 @@ class TestJSONLTurnLogger:
         assert lines[0].get("marker") is None
 
     def test_close_writes_session_closed_marker(self, log_dir: Path) -> None:
+        """Spec: TR-402"""
         import json
         logger = JSONLTurnLogger(log_dir)
         sid = uuid4()
@@ -85,6 +91,7 @@ class TestJSONLTurnLogger:
         assert closed[0]["clean_exit"] is True
 
     def test_close_without_prior_append(self, log_dir: Path) -> None:
+        """Spec: TR-402"""
         logger = JSONLTurnLogger(log_dir)
         sid = uuid4()
         logger.close(sid, ended_at=_now(), clean_exit=False)
@@ -94,15 +101,18 @@ class TestJSONLTurnLogger:
 
 class TestJSONLSessionLogReader:
     def test_returns_none_when_log_dir_absent(self, tmp_path: Path) -> None:
+        """Spec: TR-301"""
         reader = JSONLSessionLogReader(tmp_path / "nonexistent")
         assert reader.get_previous() is None
 
     def test_returns_none_when_no_files(self, log_dir: Path) -> None:
+        """Spec: TR-301"""
         log_dir.mkdir(parents=True)
         reader = JSONLSessionLogReader(log_dir)
         assert reader.get_previous() is None
 
     def test_get_previous_clean_exit(self, log_dir: Path) -> None:
+        """Spec: TR-402, TR-301"""
         logger = JSONLTurnLogger(log_dir)
         reader = JSONLSessionLogReader(log_dir)
         sid = uuid4()
@@ -115,6 +125,7 @@ class TestJSONLSessionLogReader:
         assert info.clean_exit is True
 
     def test_get_previous_unclean_exit(self, log_dir: Path) -> None:
+        """Spec: TR-402"""
         logger = JSONLTurnLogger(log_dir)
         reader = JSONLSessionLogReader(log_dir)
         sid = uuid4()
@@ -126,12 +137,14 @@ class TestJSONLSessionLogReader:
         assert info.clean_exit is False
 
     def test_get_previous_returns_none_for_empty_file(self, log_dir: Path) -> None:
+        """Spec: TR-301"""
         log_dir.mkdir(parents=True)
         (log_dir / f"2025-01-01_{uuid4()}.jsonl").write_text("")
         reader = JSONLSessionLogReader(log_dir)
         assert reader.get_previous() is None
 
     def test_get_previous_picks_most_recent_session(self, log_dir: Path) -> None:
+        """Spec: TR-301"""
         import os, time as _time
         logger = JSONLTurnLogger(log_dir)
         reader = JSONLSessionLogReader(log_dir)
@@ -150,6 +163,7 @@ class TestJSONLSessionLogReader:
         assert info.session_id == new_sid
 
     def test_read_tail_returns_last_n_turns(self, log_dir: Path) -> None:
+        """Spec: FR-109, TR-301"""
         logger = JSONLTurnLogger(log_dir)
         reader = JSONLSessionLogReader(log_dir)
         sid = uuid4()
@@ -160,6 +174,7 @@ class TestJSONLSessionLogReader:
         assert [t.content for t in tail] == ["turn 7", "turn 8", "turn 9"]
 
     def test_read_tail_ignores_marker_field(self, log_dir: Path) -> None:
+        """Spec: TR-402"""
         logger = JSONLTurnLogger(log_dir)
         reader = JSONLSessionLogReader(log_dir)
         sid = uuid4()
@@ -171,6 +186,7 @@ class TestJSONLSessionLogReader:
         assert turns[1].content == "answer"
 
     def test_read_tail_unknown_session_returns_empty(self, log_dir: Path) -> None:
+        """Spec: TR-301"""
         log_dir.mkdir(parents=True)
         reader = JSONLSessionLogReader(log_dir)
         assert reader.read_tail(uuid4(), max_turns=10) == []

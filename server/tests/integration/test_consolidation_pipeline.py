@@ -70,6 +70,7 @@ def _write_session(log_dir, session_id, persona_id) -> None:
 
 
 def test_disconnect_replay_consolidate_updates_db_state(pg_conn: psycopg.Connection, tmp_path) -> None:
+    """Spec: FR-403, FR-404, TR-702, TR-703"""
     persona = _seed_general_assistant(pg_conn)
     conv_repo = PSConversationRepository(pg_conn)
     persona_repo = PSPersonaRepository(pg_conn)
@@ -149,7 +150,7 @@ def test_disconnect_replay_consolidate_updates_db_state(pg_conn: psycopg.Connect
 def test_unworthy_conversation_still_extracts_concepts_but_no_episodes(
     pg_conn: psycopg.Connection, tmp_path
 ) -> None:
-    """CLAUDE.md/PLAN.md: Concepts/Procedures are extracted unconditionally; Episodes
+    """Spec: FR-307, TR-703 — CLAUDE.md/PLAN.md: Concepts/Procedures are extracted unconditionally; Episodes
     require a worthy conversation. Real regression coverage for that split, against a
     real DB — the unit-tested version of this used Fakes throughout."""
     persona = _seed_general_assistant(pg_conn)

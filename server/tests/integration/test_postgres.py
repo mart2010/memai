@@ -62,9 +62,11 @@ def _persona(**overrides) -> AssistantPersona:
 
 class TestPSUserRepository:
     def test_get_returns_none_when_no_user(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-008"""
         assert PSUserRepository(pg_conn).get() is None
 
     def test_save_and_get_round_trip(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-502"""
         repo = PSUserRepository(pg_conn)
         user = User(
             id=uuid4(),
@@ -80,6 +82,7 @@ class TestPSUserRepository:
         assert loaded.idle_consolidation_minutes == 7.5
 
     def test_save_upserts_existing_user(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-502, INV-3"""
         repo = PSUserRepository(pg_conn)
         user = User(id=uuid4(), primary_language=Language("en"))
         repo.save(user)
@@ -90,6 +93,7 @@ class TestPSUserRepository:
 
 class TestPSPersonaRepository:
     def test_save_and_get_round_trip(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-502"""
         repo = PSPersonaRepository(pg_conn)
         persona = _persona(speaking_rate=0.8, is_active=True)
         repo.save(persona)
@@ -99,12 +103,14 @@ class TestPSPersonaRepository:
         assert loaded.is_active is True
 
     def test_list_all_returns_all_personas(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-508"""
         repo = PSPersonaRepository(pg_conn)
         repo.save(_persona())
         repo.save(_persona())
         assert len(repo.list_all()) == 2
 
     def test_deactivate_reactivate_round_trip(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: FR-204, TR-502"""
         repo = PSPersonaRepository(pg_conn)
         persona = _persona()
         repo.save(persona)
@@ -116,6 +122,7 @@ class TestPSPersonaRepository:
         assert repo.get(persona.id).is_active is True
 
     def test_delete_removes_persona_with_no_history(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: FR-204"""
         repo = PSPersonaRepository(pg_conn)
         persona = _persona()
         repo.save(persona)
@@ -123,7 +130,7 @@ class TestPSPersonaRepository:
         assert repo.get(persona.id) is None
 
     def test_voices_map_round_trip(self, pg_conn: psycopg.Connection) -> None:
-        """Phase 10: voices is a JSONB speaker-role map (two-teacher cast is Phase 12,
+        """Spec: TR-502, INV-7 — Phase 10: voices is a JSONB speaker-role map (two-teacher cast is Phase 12,
         but the multi-entry shape must round-trip already)."""
         repo = PSPersonaRepository(pg_conn)
         persona = _persona(voices={"default": "ff_siwis", "target_teacher": "ef_dora"})
@@ -133,7 +140,7 @@ class TestPSPersonaRepository:
         assert loaded.default_voice == "ff_siwis"
 
     def test_persona_key_and_settings_round_trip(self, pg_conn: psycopg.Connection) -> None:
-        """Phase 11: bundle-installed personas carry persona_key + opaque settings."""
+        """Spec: TR-502, TR-903 — Phase 11: bundle-installed personas carry persona_key + opaque settings."""
         repo = PSPersonaRepository(pg_conn)
         settings = {"elicitation_cap": 2, "pair_difficulty": {"en": 1.0, "*": 1.5}}
         persona = _persona(persona_key="meo/spanish-tutor", settings=settings)
@@ -143,6 +150,7 @@ class TestPSPersonaRepository:
         assert loaded.settings == settings
 
     def test_get_by_key(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-904"""
         repo = PSPersonaRepository(pg_conn)
         persona = _persona(persona_key="meo/spanish-tutor")
         repo.save(persona)
@@ -153,7 +161,7 @@ class TestPSPersonaRepository:
         assert repo.get_by_key("meo/absent") is None
 
     def test_persona_key_is_unique(self, pg_conn: psycopg.Connection) -> None:
-        """Uniqueness only has to hold within one installation (convention-enforced
+        """Spec: TR-502 — Uniqueness only has to hold within one installation (convention-enforced
         namespace, no registry) — but within it, the DB constraint is the guard."""
         repo = PSPersonaRepository(pg_conn)
         repo.save(_persona(persona_key="meo/spanish-tutor"))
@@ -161,7 +169,7 @@ class TestPSPersonaRepository:
             repo.save(_persona(persona_key="meo/spanish-tutor"))
 
     def test_save_conflict_does_not_reassign_persona_key(self, pg_conn: psycopg.Connection) -> None:
-        """persona_key is identity set at creation (like is_system): the upsert UPDATE
+        """Spec: TR-506 — persona_key is identity set at creation (like is_system): the upsert UPDATE
         branch structurally excludes it, so a later save cannot reassign it."""
         repo = PSPersonaRepository(pg_conn)
         persona = _persona(persona_key="meo/spanish-tutor")
@@ -173,6 +181,7 @@ class TestPSPersonaRepository:
 
 class TestPSConversationRepository:
     def test_save_new_persists_conversation_and_turns(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-502"""
         persona_repo = PSPersonaRepository(pg_conn)
         conv_repo = PSConversationRepository(pg_conn)
         persona = _persona()
@@ -194,6 +203,7 @@ class TestPSConversationRepository:
         assert loaded.turns[0].content == "hello"
 
     def test_get_unconsolidated_orders_oldest_first(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-703"""
         persona_repo = PSPersonaRepository(pg_conn)
         conv_repo = PSConversationRepository(pg_conn)
         persona = _persona()
@@ -210,6 +220,7 @@ class TestPSConversationRepository:
     def test_save_consolidation_sets_flag_and_excludes_from_unconsolidated(
         self, pg_conn: psycopg.Connection
     ) -> None:
+        """Spec: TR-703"""
         persona_repo = PSPersonaRepository(pg_conn)
         conv_repo = PSConversationRepository(pg_conn)
         persona = _persona()
@@ -225,7 +236,7 @@ class TestPSConversationRepository:
         assert conv_repo.get_unconsolidated() == []
 
     def test_is_session_persisted(self, pg_conn: psycopg.Connection) -> None:
-        """is_session_persisted checks the `turns` table (TurnLogReplayer's idempotency
+        """Spec: TR-405 — is_session_persisted checks the `turns` table (TurnLogReplayer's idempotency
         check), so a conversation needs at least one turn to register a session_id."""
         persona_repo = PSPersonaRepository(pg_conn)
         conv_repo = PSConversationRepository(pg_conn)
@@ -238,6 +249,7 @@ class TestPSConversationRepository:
         assert conv_repo.is_session_persisted(session_id) is True
 
     def test_extend_conversation_appends_turns_and_updates_ended_at(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-403"""
         persona_repo = PSPersonaRepository(pg_conn)
         conv_repo = PSConversationRepository(pg_conn)
         persona = _persona()
@@ -252,6 +264,7 @@ class TestPSConversationRepository:
         assert len(loaded.turns) == 1
 
     def test_get_last_open_id_returns_most_recent_unconsolidated(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-403"""
         persona_repo = PSPersonaRepository(pg_conn)
         conv_repo = PSConversationRepository(pg_conn)
         persona = _persona()
@@ -263,7 +276,7 @@ class TestPSConversationRepository:
         assert conv_repo.get_last_open_id() == newest_id
 
     def test_persona_delete_restricted_once_referenced_by_a_conversation(self, pg_conn: psycopg.Connection) -> None:
-        """CLAUDE.md/PLAN.md Phase 8: conversations.persona_id is ON DELETE RESTRICT —
+        """Spec: TR-503 — CLAUDE.md/PLAN.md Phase 8: conversations.persona_id is ON DELETE RESTRICT —
         session logs are kept forever, so a persona with real history can't be hard-deleted,
         only deactivated (see DeactivatePersona)."""
         persona_repo = PSPersonaRepository(pg_conn)
@@ -278,6 +291,7 @@ class TestPSConversationRepository:
 
 class TestPSMemoryRepository:
     def test_upsert_episode_insert_then_update(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-608, INV-15"""
         persona_repo = PSPersonaRepository(pg_conn)
         conv_repo = PSConversationRepository(pg_conn)
         memory_repo = PSMemoryRepository(pg_conn)
@@ -297,6 +311,7 @@ class TestPSMemoryRepository:
         assert found.summary == "Went hiking in the Alps"
 
     def test_upsert_concept_and_persona_scoped_search(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: INV-9, TR-509"""
         persona_repo = PSPersonaRepository(pg_conn)
         memory_repo = PSMemoryRepository(pg_conn)
         persona_a = _persona()
@@ -317,6 +332,7 @@ class TestPSMemoryRepository:
         assert results[0][1].description == "cosmology"
 
     def test_upsert_procedure_round_trip(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-502"""
         persona_repo = PSPersonaRepository(pg_conn)
         memory_repo = PSMemoryRepository(pg_conn)
         persona = _persona()
@@ -332,6 +348,7 @@ class TestPSMemoryRepository:
         assert found.steps == ["Boil water", "Add tea", "Steep 3 min"]
 
     def test_search_top_n_limits_results(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-509"""
         persona_repo = PSPersonaRepository(pg_conn)
         memory_repo = PSMemoryRepository(pg_conn)
         persona = _persona()
@@ -344,6 +361,7 @@ class TestPSMemoryRepository:
         assert len(results) == 2
 
     def test_search_identical_vector_has_similarity_near_one(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-509"""
         persona_repo = PSPersonaRepository(pg_conn)
         memory_repo = PSMemoryRepository(pg_conn)
         persona = _persona()
@@ -355,7 +373,7 @@ class TestPSMemoryRepository:
         assert similarity == pytest.approx(1.0, abs=1e-4)
 
     def test_category_and_persona_state_round_trip(self, pg_conn: psycopg.Connection) -> None:
-        """Phase 10: category round-trips through upsert INSERT/UPDATE; persona_state is
+        """Spec: TR-502, INV-6 — Phase 10: category round-trips through upsert INSERT/UPDATE; persona_state is
         written only via update_persona_state and never clobbered by a later upsert."""
         persona_repo = PSPersonaRepository(pg_conn)
         memory_repo = PSMemoryRepository(pg_conn)
@@ -387,6 +405,7 @@ class TestPSMemoryRepository:
         assert found.persona_state == state
 
     def test_update_persona_state_rejects_episodes(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: INV-6, INV-10"""
         memory_repo = PSMemoryRepository(pg_conn)
         with pytest.raises(ValueError, match="episode"):
             memory_repo.update_persona_state(MemoryType.EPISODE, 1, {"x": 1})
@@ -394,7 +413,7 @@ class TestPSMemoryRepository:
 
 class TestPSBundleInstallLog:
     def test_append_persists_provenance_row(self, pg_conn: psycopg.Connection) -> None:
-        """Phase 11: append-only provenance log — no read path in code, so verify via
+        """Spec: TR-905, FR-607 — Phase 11: append-only provenance log — no read path in code, so verify via
         raw cursor. persona_key deliberately has no FK (log survives persona deletion)."""
         log = PSBundleInstallLog(pg_conn)
         log.append(BundleInstallRecord(
@@ -431,6 +450,7 @@ class TestPSBundleInstallLog:
         assert rows[1][2:4] == (0, 600)
 
     def test_procedure_category_and_persona_state_round_trip(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-502, INV-6"""
         persona_repo = PSPersonaRepository(pg_conn)
         memory_repo = PSMemoryRepository(pg_conn)
         persona = _persona()
@@ -448,7 +468,7 @@ class TestPSBundleInstallLog:
         assert found.persona_state == {"errors": 1}
 
     def test_persona_delete_cascades_to_concepts_and_procedures(self, pg_conn: psycopg.Connection) -> None:
-        """CLAUDE.md: cascade delete is intentional for Concept/Procedure — deleting a
+        """Spec: INV-9, TR-503 — CLAUDE.md: cascade delete is intentional for Concept/Procedure — deleting a
         persona removes all its concepts/procedures (unlike conversations, which RESTRICT)."""
         persona_repo = PSPersonaRepository(pg_conn)
         memory_repo = PSMemoryRepository(pg_conn)
@@ -472,9 +492,11 @@ class TestPSBundleInstallLog:
 
 class TestPSMemoryBriefRepository:
     def test_get_returns_none_when_absent(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-502"""
         assert PSMemoryBriefRepository(pg_conn).get() is None
 
     def test_save_then_overwrite_singleton(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: TR-502, FR-308"""
         repo = PSMemoryBriefRepository(pg_conn)
         repo.save(MemoryBrief(content="first", created_at=_NOW, updated_at=_NOW))
         repo.save(MemoryBrief(content="second", created_at=_NOW, updated_at=_NOW))
@@ -486,12 +508,14 @@ class TestPSMemoryBriefRepository:
 
 class TestPSUnitOfWork:
     def test_commits_writes_on_clean_exit(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: FR-405"""
         persona = _persona()
         with PSUnitOfWork(pg_conn):
             PSPersonaRepository(pg_conn).save(persona)
         assert PSPersonaRepository(pg_conn).get(persona.id) is not None
 
     def test_rolls_back_writes_on_exception(self, pg_conn: psycopg.Connection) -> None:
+        """Spec: FR-405, TR-703"""
         persona = _persona()
         with pytest.raises(RuntimeError):
             with PSUnitOfWork(pg_conn):
