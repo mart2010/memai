@@ -14,6 +14,11 @@
 [server]
 ws_port = 8765
 log_dir = "logs/sessions"
+# Single-host deployment: the client reads this same file (same platform config path)
+# and only looks at [server].ws_port — nothing more to add. The client-only ssh_host
+# key (see client/config/memai.example.toml) must stay OMITTED here: its absence is
+# what tells the client that the server is local (no SSH tunnel needed).
+# Split-host deployment: the client machine gets its own memai.toml with ssh_host set.
 
 [database]
 # Standard libpq DSN. memai-setup defaults to peer auth (Linux/macOS) — no

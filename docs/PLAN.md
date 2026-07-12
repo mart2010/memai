@@ -1279,7 +1279,7 @@ meaningful and belongs in Phase 12.
 ## Phase 11 — Persona Bundle Format + `InstallPersonaBundle`
 
 Design settled 2026-07-10 — full rationale and format spec in
-`docs/BRIEF_phase11_bundle_format.md`. Headline decision: **the bundle file format IS
+`docs/archive/BRIEF_phase11_bundle_format.md`. Headline decision: **the bundle file format IS
 the port** between memai and any (external, future, possibly commercial) authoring tool
 — memai owns the versioned envelope schema; authors own all content vocabulary. The
 authoring tool itself, the standalone validator CLI, and the content quality/safety

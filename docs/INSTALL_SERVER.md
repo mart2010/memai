@@ -234,8 +234,7 @@ without repeating everything. It walks through:
 - **Embedding model** — pre-downloads `multilingual-e5-large` (used for memory
   consolidation).
 - **Config file** — writes `~/.config/memai/memai.toml` (0600 permissions), shared by
-  server and client on a single-host setup — this replaces the old `.env`-file step from
-  earlier versions of this guide.
+  server and client on a single-host setup.
 - **Database schema** — applies `migrations/001_initial_schema.sql` (idempotent, safe
   to re-run).
 - **Health checks** — confirms Ollama is reachable.

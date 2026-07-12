@@ -7,7 +7,7 @@ manual pass described here is a candidate for automation in that (separate, out-
 project.
 
 The bundle **file format** itself is specified in
-[BRIEF_phase11_bundle_format.md](BRIEF_phase11_bundle_format.md) — this guide assumes it
+[BRIEF_phase11_bundle_format.md](archive/BRIEF_phase11_bundle_format.md) — this guide assumes it
 and covers the *content* side: what to put in the lessons and in what order.
 
 ## Ground rules the format enforces (and why)

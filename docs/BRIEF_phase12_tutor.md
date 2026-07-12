@@ -13,7 +13,7 @@ rapidly**, not literary/grammatical expertise.
 The language tutor is the first concrete persona extension — the worked example for the
 Phase 10 strategy ports (`PersonaSelectionPort`, `PersonaEnrichmentPort`,
 `PersonaAssessmentPort`) and the first consumer of the Phase 11 bundle pipeline
-(`docs/BRIEF_phase11_bundle_format.md`, `docs/AUTHORING_BUNDLES.md`). Bundles are the
+(`docs/archive/BRIEF_phase11_bundle_format.md`, `docs/AUTHORING_BUNDLES.md`). Bundles are the
 curriculum backbone; `propose_items` supplements them with interest-driven clusters.
 
 **Headline result of the stress tests: no new entities and no formal relationships were
@@ -347,7 +347,7 @@ the "wiring foundation" step (see PLAN.md Phase 12 for implementation detail):
 ## Pointers
 
 - PLAN.md Phase 12 — the implementation checklist this brief backs.
-- `docs/BRIEF_phase11_bundle_format.md` — bundle format + `InstallPersonaBundle` spec.
+- `docs/archive/BRIEF_phase11_bundle_format.md` — bundle format + `InstallPersonaBundle` spec.
 - `docs/AUTHORING_BUNDLES.md` — authoring guide + multi-pass strategy.
 - PLAN.md Phase 10 — `category`, `persona_state` single-writer contract, `voices` map,
   strategy port signatures (`SelectedItem`, `MemoryItemDraft`, `ItemAssessment`).
