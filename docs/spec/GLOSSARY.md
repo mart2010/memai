@@ -1,0 +1,152 @@
+# Glossary — the Ubiquitous Language
+
+*Last verified against code: 2026-07-12*
+
+Terms are grouped in three tiers. Within Memai documents, code, tests, and
+conversation, these terms are used **exactly as defined here** — if a term feels
+imprecise during design work, fix it here first, then everywhere else.
+
+Conventions: `code style` marks identifiers that appear verbatim in the codebase.
+Cross-references are *italicised*.
+
+---
+
+## 1. Voice-pipeline technical terms
+
+General AI/audio engineering vocabulary, as used in this project.
+
+| Term | Definition |
+|---|---|
+| **STT** (speech-to-text) | Transcribing audio into text. Memai: `faster-whisper`, which also auto-detects the spoken *language* per *utterance*. |
+| **TTS** (text-to-speech) | Synthesising audio from text. Memai: Kokoro, one multilingual model, one *voice* selected per synthesis call. |
+| **LLM** (large language model) | The conversational/reasoning model. Memai: a local model served by **Ollama** (default `aya-expanse`), streamed token by token. |
+| **VAD** (voice activity detection) | Classifying an *audio frame* as speech or silence. Memai: `webrtcvad` on the client, aggressiveness 2. |
+| **Audio frame** | The smallest audio unit the client processes: 30 ms of 16 kHz mono audio (480 samples). VAD operates per frame. |
+| **Audio buffer** | Server-side accumulation of binary audio frames for the current *utterance*, flushed to STT on *end-of-utterance*. |
+| **PCM** | Raw uncompressed audio samples. Client→server: PCM int16. Server→client: PCM float32 (Kokoro output resampled 24 kHz → 16 kHz). |
+| **Sample rate** | 16 kHz end-to-end on the wire (`SAMPLE_RATE`); Kokoro's native 24 kHz is resampled server-side. |
+| **Token (LLM)** | The LLM's streaming output unit. Memai consumes the stream incrementally: response *markers* are resolved as tokens arrive, sentences are synthesised as they complete. |
+| **Context window** | The LLM's bounded input. Memai treats it as the computational analogue of human *short-term memory*, actively managed via *working memory*. |
+| **System prompt** | The instruction block prepended to every LLM call — composed per turn from the persona's own prompt plus injected context (see `_compose_working_context`). |
+| **Embedding** | A 1024-dim vector representation of text (`multilingual-e5-large`), stored with every *memory item* and used for *similarity search*. |
+| **Similarity search** | Nearest-neighbour lookup over embeddings. Memai: pgvector cosine distance, reported as **cosine similarity = 1 − distance** in [0, 1]. |
+| **pgvector / HNSW** | PostgreSQL extension for vector search / the approximate-nearest-neighbour index used on all three memory tables. |
+| **Streaming synthesis** | Speaking the reply sentence-by-sentence while the LLM is still generating, instead of waiting for the full response — the key latency device. |
+| **WebSocket** | The single client↔server channel (default port 8765): binary frames for audio, JSON text frames for control messages. |
+| **SSH tunnel** | Client-established port forward (`localhost:ws_port → server:ws_port`) in split-host deployments; the only network exposure is SSH. |
+
+## 2. Voice-assistant domain terms
+
+Vocabulary of conversational voice systems generally.
+
+| Term | Definition |
+|---|---|
+| **Utterance** | One continuous stretch of user speech, delimited by VAD: from first speech frame to *end-of-utterance*. The unit STT transcribes. |
+| **End-of-utterance** | The client-side decision that the user stopped speaking: **more than 25 consecutive silent frames (~750 ms)** after speech; signalled to the server as `end_utterance`. |
+| **Turn** | One utterance and its reply half. Memai models both halves: a user `Turn` (transcribed utterance) and an assistant `Turn` (full response text). |
+| **Barge-in** | Interrupting the assistant mid-reply by speaking. **Out of scope by design** (INV-4): the reply plays to completion before the mic re-opens. |
+| **Mic muting** (half-duplex) | Suppressing VAD/capture while the assistant speaks so it does not hear itself. Client-side: muted from first audio chunk until `speaking_end`. See also *acoustic echo* (open issue when muting windows misalign). |
+| **Onboarding** | The first-launch flow: language selection via terminal prompt, then a spoken introduction. Complete once `User.primary_language` is set. |
+| **Wake word** | Not used — Memai sessions are explicitly started (client launch); the mic is live whenever the assistant isn't speaking. |
+| **Latency to first audio** | Time from end-of-utterance to the first synthesised audio chunk — the responsiveness metric the streaming design optimises; instrumented via `[latency]` log lines. |
+| **Session** | One client connection lifetime: WebSocket connect → disconnect. Identified by a UUID; produces exactly one *session log* file. **Not** the same as a *conversation*. |
+| **Persona** | A configured assistant identity. In generic voice-assistant usage a persona is a prompt+voice; in Memai it is a first-class entity — see tier 3. |
+
+## 3. Memai domain terms
+
+Memai's own model — the terms that carry the design. (Entities/value objects in
+`server/src/memai_server/domain/`.)
+
+### Actors & personas
+
+| Term | Definition |
+|---|---|
+| **`User`** | The single human. Owns `primary_language` (null until onboarding), `secondary_languages` (switched only explicitly, INV-14), `idle_consolidation_minutes`. Single-user is a system-wide assumption (INV-3). |
+| **`AssistantPersona`** | A specialised assistant: own `system_prompt`, `response_language`, `voices` map, `speaking_rate`, and own scoped memory. Aggregate root of the persona context. |
+| **GeneralAssistant (GA)** | The one system persona (`is_system`, fixed UUID `…0001`), the cross-domain catch-all and the persona every session starts on. Cannot be removed or deactivated. |
+| **Persona switch** | Changing the `active_persona` mid-session, triggered by the LLM emitting a `[PERSONA:name]` *response prefix marker*. Deliberately distinct from *speaker roles*. |
+| **Persona lifecycle** | Non-system personas can be **deactivated** (kept, memory intact) or **removed** (deleted — cascades to their concepts/procedures, INV-9). |
+| **Voice cast / speaker role** | A persona's `voices` map: role name → Kokoro voice. `"default"` is the mandatory fixed anchor (single voice, INV-7). The LLM switches roles inline via `[SPEAKER:role]` tags. |
+| **Rotation pool** | A non-default role value of `"a\|b\|c"` form: one voice is picked per session (`session_id % len`), stable within a session, varying across sessions (*HVPT*). |
+| **`persona_key`** | Author-namespaced bundle identity (e.g. `memai/italian-tutor`), unique, set once at install; null for GA and user-created personas. |
+| **`strategy`** | The persona's declared strategy-set name (e.g. `"language_tutor"`), resolved against the composition root's registry; null binds nothing; unknown names warn and bind nothing. |
+| **`settings`** | Opaque persona-owned tunables (JSONB), copied verbatim from a bundle; read only by the persona's own strategies (same opacity contract as `persona_state`, INV-6). |
+
+### Conversation & session structures
+
+| Term | Definition |
+|---|---|
+| **`Conversation`** | A topic-bounded exchange: an ordered list of `Turn`s under one persona. **Derived offline** from session logs via *boundary markers* — it does not exist as an object during the live session. The consolidation unit. |
+| **Conversation boundary** | The LLM's judgment, emitted as a response prefix marker, of whether the current exchange continues or breaks from the previous topic: `[TOPIC_BREAK]` (split; new conversation) or `[TOPIC_CONTINUATION]` (first turn only; the session extends the previous open conversation). |
+| **Session log** | The append-only JSONL file for one session (`logs/sessions/YYYY-MM-DD_<session_id>.jsonl`) — the **only** live-path write (INV-1). Kept forever (INV-5). |
+| **Replay** | `TurnLogReplayer`: reading unprocessed session logs and materialising `Conversation` rows in the DB. Runs on every connect (crash recovery) and at the start of the offline pipeline. Idempotent. |
+| **Working memory** | The per-session in-RAM state (`WorkingMemory`): user, active persona, *memory brief*, recent turns, *rolling summary*, *session tail*, *selection batches*. The live analogue of short-term memory. |
+| **Session tail** | The last N (10) turns of the previous session, injected at session start when the previous session ended within 24 h — conversational continuity across connections. |
+| **Rolling summary** | LLM compaction of the oldest half of `recent_turns`, triggered every 50 turns — bounds the live context. |
+
+### Long-term memory
+
+| Term | Definition |
+|---|---|
+| **Memory item** | Umbrella for the three long-term types: `Episode` \| `Concept` \| `Procedure`. All carry a 1024-dim embedding. |
+| **`Episode`** | Episodic memory: what happened, anchored in real-world time (`happened_at`). Persona-independent; summary always in the user's primary language (INV-10); `origin_conversation_id` is fixed provenance (INV-15). |
+| **`Concept`** | Semantic memory: distilled knowledge about one subject, **persona-scoped**. `description` is a tight LLM synthesis (~300 words cap), not an append log. |
+| **`Procedure`** | Procedural memory: how to do something — `description` (always) + `steps` (only when cleanly decomposable). Persona-scoped like `Concept`. |
+| **`category`** | Free-text classifier on Concept/Procedure, interpreted **only** in the owning persona's vocabulary (e.g. the tutor's `noun`/`idiom`/`contrast_pair`); generic code passes it through, never enumerates it. |
+| **`persona_state`** | Opaque JSONB slot on Concept/Procedure. Single-writer contract (INV-6): written only by the owning persona's *assessment strategy*, read only by its *selection strategy*. |
+| **Engagement level** | Generic coarse learning-depth ladder: `unseen → mentioned → explored → integrated` (`EngagementLevel`). Written only by generic consolidation; merges keep the max. |
+| **Memory brief** | The distilled "what I know about the user" text, regenerated offline after consolidation and injected into the system prompt at every session start. |
+| **Language of first introduction** | `Concept.language`/`Procedure.language`: fixed at creation (INV-13); the description is maintained in that language forever, other-language evidence is translated into it during synthesis. |
+
+### Recall & selection (live reads)
+
+| Term | Definition |
+|---|---|
+| **Recall** | Utterance-triggered memory lookup: a `RecallIntentDetector` spots explicit recall intent ("remember when…"), the query is embedded, top-5 similar items (persona-scoped for concepts/procedures) are injected into the turn's context. Reactive. |
+| **Selection** | Persona-driven proactive injection via `PersonaSelectionPort`: a batch of `SelectedItem`s fetched lazily on the persona's first active turn, consumed **one item per turn**. Proactive counterpart to recall. |
+| **Selection batch** | The fetched item list per persona in working memory. Key presence = already fetched; an exhausted batch is not re-queried; only a *focus* change replaces it. |
+| **Focus** | The user's expressed session wish ("just review old words"), carried **verbatim** from a `[FOCUS: …]` marker to `select_items(focus=…)`; interpreted only by the strategy. `None` = default learning path. |
+| **`SelectedItem.context`** | Free text composed by the selection strategy (episode anchor or elicitation hint), injected verbatim — generic code never interprets it. |
+
+### Consolidation & offline pipeline
+
+| Term | Definition |
+|---|---|
+| **Live/offline boundary** | THE architectural invariant (INV-1): live conversation may read the DB but writes only session logs; all DB writes, LLM extraction, embedding generation for storage, and upserts happen offline. |
+| **Offline pipeline** | The post-disconnect sequence: replay → consolidation → enrichment → memory-brief regeneration. Triggered by the *idle timer*; doubles as crash recovery. |
+| **Idle timer** | Countdown started at disconnect (`User.idle_consolidation_minutes`, default 5); a reconnect cancels it. |
+| **Consolidation** | `ConsolidateMemory`: per unconsolidated conversation — worthiness check, LLM extraction, upsert of extracted items, persona assessment, mark consolidated. One DB transaction per conversation. |
+| **Worthiness** | The `WorthinessEvaluator`'s judgment of whether a conversation is substantial enough to yield **episodes** (concepts/procedures are extracted regardless). |
+| **Extraction** | The `ConsolidationExtractor` LLM pass turning a conversation's raw turns into candidate episodes/concepts/procedures. |
+| **Upsert** | The shared merge-or-insert pipeline (`MemoryUpserter`): embed → similarity search → two-tier threshold → merge (with LLM *synthesis*) or insert. Used identically by consolidation, enrichment, and bundle install. |
+| **Two-tier threshold** | similarity ≥ 0.93 → auto-merge; 0.75–0.93 → LLM *disambiguation* (same item or distinct?); < 0.75 → insert. Values are calibration placeholders, configured in `[memory]`. |
+| **Synthesis** | The LLM rewrite that absorbs new evidence into an existing item's description (and steps) on merge — replaces, never appends. |
+| **Consolidation gates** | For personas with a registered assessment strategy: no episode extraction, no inserts on miss (item discarded, `id is None` sentinel), no description/steps/embedding rewrites on match — engagement/category only. |
+| **Enrichment** | `EnrichMemory` dispatching `PersonaEnrichmentPort.propose_items`: strategy-proposed new drafts (always `UNSEEN`) fed through the same upsert pipeline. Runs after consolidation. |
+| **Assessment** | `PersonaAssessmentPort.assess_items`: offline, post-upsert; converts conversational evidence into `persona_state` updates, persisted byte-for-byte. |
+
+### Persona extension & bundles
+
+| Term | Definition |
+|---|---|
+| **Strategy ports** | The three optional persona hooks: selection (live), enrichment (offline), assessment (offline). GA registers none. Bound via the *strategy registry* in the composition root. |
+| **Persona bundle** | A curated, versioned content package: a directory of `bundle.toml` (manifest) + `lessons/*.toml`. **The file format is the port** between Memai and external authoring tools (`BUNDLE_FORMAT_VERSION = 1`). |
+| **Lesson** | Ordering-only grouping inside a bundle: lesson files in filename-sort order, items in file order. Leaves no persisted structure. |
+| **Curriculum order** | The contract that insertion order = teaching order (INV-11): ascending SERIAL id within a type, `created_at` across types. |
+| **Bundle install** | `InstallPersonaBundle` (via `memai-bundle install <path>`): creates the persona if needed (requires completed onboarding), upserts every item as `UNSEEN` (INV-12), appends a provenance record. Idempotent by merge. |
+| **Sibling exclusion** | During one install run, freshly inserted items are excluded from later items' match candidates — a bundle's own deliberately-distinct items must never merge into each other. |
+| **`bundle_installs`** | Append-only provenance log (one row per install run); read by nothing; deliberately not a reinstall guard. |
+
+### Language-tutor vocabulary (first strategy persona)
+
+| Term | Definition |
+|---|---|
+| **Two-teacher cast** | One LLM call role-playing a fixed native-language teacher (`default` anchor) and a target-language teacher, via `[SPEAKER:role]` tags. |
+| **HVPT** (high-variability phonetic training) | The research basis for rotating the target-teacher voice across sessions via a *rotation pool* while the anchor stays fixed. |
+| **SRS state** | The tutor's `persona_state` fields (`state.py`): `last_practiced_at` (day granularity), `half_life_days`, `retrievals` (successful only), `errors`, `avg_response_latency_s`, `user_initiated`, `sessions_practiced`. |
+| **Retention** | Derived-at-selection-time recall estimate: `2^(−days_since / half_life_days)`; never stored. |
+| **Episodic anchoring** | Pairing a due item with an **existing** GA-side Episode via similarity search (threshold-gated) to exploit the self-reference effect. Never seeds new episodes. |
+| **Elicitation hint** | The fallback when no episode matches: an invitation (capped per batch) for the user to tell a short personal story — production practice only; nothing said is captured. |
+| **Interleaving** | Round-robin ordering of the batch across `category` values — the anti-blocking rule. |
+| **Interest cluster** | Several user-initiated concepts sharing a theme (greedy cosine clustering) — the enrichment trigger for proposing the surrounding vocabulary. |
+| **Ephemeral generation** | Tutor principle: nothing that merely surfaces in a lesson is tracked; new tutor content comes only from bundles and enrichment proposals. |

@@ -205,6 +205,7 @@ trade-off that you make with full awareness.
 
 | Page | What it covers |
 |---|---|
+| [Specification](docs/spec/SPEC.md) | The canonical spec: [glossary](docs/spec/GLOSSARY.md), [functional](docs/spec/FUNCTIONAL.md) and [technical](docs/spec/TECHNICAL.md) requirements |
 | [Personas](docs/PERSONAS.md) | The persona concept, the language tutor, and the research behind them |
 | [Installation](docs/INSTALLATION.md) | Topologies, requirements, and step-by-step guides for [server](docs/INSTALL_SERVER.md) and [client](docs/INSTALL_CLIENT.md) |
 | [Authoring bundles](docs/AUTHORING_BUNDLES.md) | How to write curriculum content for a persona |

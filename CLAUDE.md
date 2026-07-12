@@ -1,306 +1,96 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in
+this repository.
 
 ## Project Overview
 
-AI voice assistant that runs entirely on local, open-source infrastructure — no cloud services. It is a monorepo with two independent Python packages:
+AI voice assistant that runs entirely on local, open-source infrastructure — no cloud
+services. Monorepo of three independent uv-managed Python packages: `client/` (mic
+capture + playback; Windows/macOS/Linux), `server/` (STT → LLM → TTS pipeline +
+long-term memory; GPU machine), `setup/` (install wizard).
 
-- **`client/`** — runs on the user's machine (Windows, macOS, Linux); captures microphone audio and plays back synthesized speech. Currently developed on Windows.
-- **`server/`** — runs on any GPU-equipped machine; handles STT, LLM, and TTS. Currently developed on Ubuntu; other GPU-capable OS are in scope.
+## The specification is canonical
 
-The assistant is **language-agnostic**: any primary language is supported as long as it is covered by both faster-whisper (~99 languages) and Kokoro TTS (the limiting factor). The current set is the 7 languages in `SUPPORTED_LANGUAGES` (`server/src/memai_server/domain/model.py`): en fr es it pt ja zh-cn (`ko` was dropped — Kokoro has no Korean voice). Development is not French-specific.
+**`docs/spec/` is the single source of truth** for behaviour, architecture, protocol,
+data model, and vocabulary:
 
-## Environment Setup
+- [docs/spec/SPEC.md](docs/spec/SPEC.md) — how the spec ↔ test ↔ code alignment loop
+  works (requirement IDs, test citations, drift rules). **Follow it**: any code change
+  that alters observable behaviour, a format, a threshold, or an invariant updates the
+  affected `FR-`/`TR-`/`INV-` requirement in the same commit; tests cite the IDs they
+  verify in their docstrings.
+- [docs/spec/GLOSSARY.md](docs/spec/GLOSSARY.md) — the ubiquitous language. Use these
+  terms exactly; push back on drift (see the incubator CLAUDE.md's Ubiquitous Language
+  rule).
+- [docs/spec/FUNCTIONAL.md](docs/spec/FUNCTIONAL.md) /
+  [docs/spec/TECHNICAL.md](docs/spec/TECHNICAL.md) — the requirements themselves.
 
-Each package has its own virtual environment. Python 3.13+ required.
+Do not restate spec facts here or in other docs — link to them. Where any document
+disagrees with the spec, the spec wins and the disagreement is a bug to fix now.
+
+## Hard invariants (details in TECHNICAL.md §Invariants)
+
+Reminders of the rules most likely to be violated accidentally — flag and reject, never
+silently work around:
+
+- **INV-1 Live/offline boundary**: the live conversation path writes only JSONL session
+  logs; any DB write/extraction/embedding-for-storage bleeding into it must be rejected.
+- **INV-3 Single user** — no auth, no concurrency model, by design.
+- **INV-4 No barge-in** — the reply plays to completion; do not add interruption logic.
+- **INV-5 Session logs kept forever** — no rotation/cleanup without explicit discussion.
+- **INV-6 Opacity**: no generic code path may branch on `persona_state` or
+  `AssistantPersona.settings` contents.
+- **INV-9 Cascade delete** personas → concepts/procedures is load-bearing; do not
+  change to SET NULL without explicit discussion.
+- **FR-701 Voice-only config scope**: GA settings are DB-backed `User`/`AssistantPersona`
+  attributes; `memai.toml` is bootstrap-only; install/download/restart concerns belong
+  to the wizard, not conversation.
+
+## Session start
+
+If `docs/PLAN.md` exists, read it first — project status, decisions, next task. Update
+its task markers (`[ ]`/`[~]`/`[x]`) as work progresses. PLAN.md is the phase history;
+the spec is the present tense.
+
+## Environment & running
+
+Python 3.13+; each package has its own venv. **uv only** — never pip (see incubator
+CLAUDE.md / memory: hard rule).
 
 ```bash
 # Server (GPU machine)
-cd server
-uv sync
-# Then replace CPU torch with CUDA build — CUDA (NVIDIA) is the current GPU backend; broader GPU support (ROCm, Metal) is a long-term goal
+cd server && uv sync
+.venv/bin/memai-server            # Linux/macOS (.venv/Scripts/… on Windows)
 
 # Client
-cd client
-uv sync
+cd client && uv sync
+.venv/Scripts/memai-client        # Windows (current dev OS)
+
+# Setup wizard / bundle install
+cd setup && uv sync && uv run memai-setup
+cd server && uv run memai-bundle install <bundle-dir>
 ```
 
-## Running the Components
-
-```bash
-# Start server (GPU machine)
-cd server
-.venv/bin/memai-server          # Linux/macOS
-# .venv/Scripts/memai-server   # Windows
-
-# Start client — SSH tunnel to server is started automatically when ssh_host is configured
-cd client
-.venv/Scripts/memai-client      # Windows (current)
-# .venv/bin/memai-client        # Linux/macOS (planned)
-```
+Dev-environment quirk: this laptop's `server/` venv is frozen — always
+`uv run --no-sync` here; integration tests run on the GPU workstation only (see
+auto-memory `project_dev_environment_split`).
 
 ## Linting
 
-Ruff is configured at the monorepo root with `line-length = 120`. Test files are excluded from linting.
-It's not a dependency of any package venv — install it once with `uv tool install ruff` (use
-`--system-certs` if that fails behind a TLS-inspecting proxy, same cause as the truststore fix
-in `server/`/`setup/`).
+Ruff at the monorepo root, `line-length = 120`, tests excluded. Not in any venv —
+`uv tool install ruff`, then `ruff check .` / `ruff format .` from the root.
 
-```bash
-ruff check .
-ruff format .
-```
+## Testing
 
-## Design Constraints
+- pytest; test pyramid (many unit / fewer integration / few E2E).
+- Fakes over mocks for every port (see incubator CLAUDE.md).
+- Unit tests: `cd server && uv run pytest tests/unit` (no GPU/DB). Full suite needs
+  real Postgres + models (workstation).
+- New/touched tests cite the spec IDs they verify: `"""Spec: INV-12, FR-602 — …"""`.
 
-- **Voice-only configuration (GeneralAssistant scope only)** — this constraint applies to the
-  GeneralAssistant's own settings, not to persona creation or extension. `memai.toml` holds
-  only bootstrap-before-DB-exists settings (`ws_port`, `database.url`,
-  `stt.model_path/device/compute_type`, `tts.device`, `llm.model/ollama_host`, `log_dir`,
-  `memory.merge_threshold/disambiguate_threshold`) — nothing voice-configurable lives there. Every voice-configurable or domain-meaningful setting is instead a
-  DB-backed attribute of whichever entity owns it — `User` (e.g. `idle_consolidation_minutes`)
-  or `AssistantPersona` (e.g. `voices`, `speaking_rate`) — never a global toml scalar.
-  Because Memai is single-user, "global setting" and "User attribute" are the same thing, so
-  there is no legitimate third bucket.
-  - Anything requiring install/download/restart/swap (adding an STT/TTS engine, changing the
-    main LLM) is explicitly **out of scope** for the GA. That's handled by re-running the
-    `questionary` installation/setup wizard, not by conversation.
-  - Creating a new persona (e.g. a language tutor) is a power-user extension activity, not a
-    voice-driven one. The architecture should expose the necessary hooks (persona definition +
-    its own settings file) so a power user can author a persona outside the conversational loop.
-- **Single user** — no concurrency model, no authentication, no row-level security. All
-  design decisions can assume exactly one user.
-- **No barge-in** — mid-stream LLM interruption is out of scope. The TTS response plays
-  to completion before the mic is re-enabled.
-- **Session logs are kept forever** — no log rotation. Raw JSONL session files accumulate
-  indefinitely; do not introduce any cleanup or rotation logic without explicit discussion.
-- **Secondary languages: explicit switches only** — `User.secondary_languages` is tracked
-  but switching between them is always explicit (user asks to switch). There is no implicit
-  persona suggestion when a different language is detected mid-conversation.
+## LLM model guidance (operational)
 
-## Architecture
-
-### Live / Offline Boundary
-
-**Live conversation** — DB reads are allowed (session start: User, MemoryBrief, Persona;
-RAG recall turns: Concept/Episode/Procedure similarity search). Writes go only to local JSONL session
-log files. No DB writes, no embedding generation for storage, no consolidation or upsert.
-
-**Offline (post-disconnect)** — all heavy processing: DB writes, consolidation,
-LLM extraction, embedding generation for storage, pgvector upsert similarity search,
-MemoryBrief generation.
-
-This boundary is a hard invariant. Any DB write or consolidation logic that bleeds into
-the live conversation path must be flagged and rejected.
-
-### Data Flow
-
-```
-Microphone → [VAD] → WebSocket → [STT] → [LLM stream] → [TTS] → WebSocket → Speaker
-  (client)                        (server)                                    (client)
-```
-
-### WebSocket Protocol
-
-Audio is sent as raw binary WebSocket frames; control messages use JSON text frames on `ws://localhost:8765`:
-
-| Message type | Direction | Payload |
-|---|---|---|
-| binary frame | client→server | Raw PCM int16 bytes |
-| `{"type": "end_utterance"}` | client→server | Signals end of speech segment |
-| `{"type": "language_selected", "language": "<lang_code>"}` | client→server | Sent once during onboarding after user picks from terminal selection |
-| `{"type": "select_language", "supported": [...]}` | server→client | Sent on connect when `User.primary_language` is null; client renders terminal dropdown |
-| `{"type": "speaking_end"}` | server→client | Re-enables VAD on client |
-| binary frame | server→client | Synthesized float32 audio bytes |
-
-### Client (`client/src/memai_client/client.py`)
-
-- Uses `sounddevice` to capture 16kHz mono audio in 30ms frames
-- `webrtcvad` (aggressiveness=2) determines if a frame contains speech
-- Accumulates speech frames; after 10 consecutive silent frames sends `end_utterance`
-- Suppresses VAD from playback start until `speaking_end` received (mic muting)
-- Reads `memai.toml` from the platform config dir (`~/.config/memai/` or `%LOCALAPPDATA%\memai\`): `[server].ws_port` (defaults to 8765) and optional `[server].ssh_host` — when `ssh_host` is set (split-host), it auto-establishes an SSH tunnel (`localhost:{ws_port} → {ssh_host}:{ws_port}`) before connecting; when omitted (single-host), it connects to the local server directly
-- No persistent state beyond that one config file
-- On connect: if server sends `select_language`, renders a `questionary` terminal dropdown
-  listing supported languages; user selects once; result sent as `language_selected`
-
-### Server (`server/src/memai_server/server.py`)
-
-- **STT**: `faster-whisper` — language auto-detected by Whisper (no forced language);
-  returns `tuple[str, Language]`
-- **LLM**: `ollama`, streamed token by token. Default model is `aya-expanse` (~8B,
-  multilingual, no reasoning overhead). Avoid large (~70B-class) models like `llama3.3` —
-  they don't fit in VRAM alongside Whisper + Kokoro, so Ollama splits them across CPU/GPU
-  (much slower) and evicts them after a few idle minutes, causing a long cold-reload stall
-  on the next turn. Avoid reasoning models like `qwen3` — their `<think>...</think>` block
-  is not suppressed by `think: false` on thinking-tuned models, so the assistant ends up
-  speaking its internal reasoning out loud.
-- **TTS**: `Kokoro` — single multilingual model, GPU-accelerated when a CUDA GPU
-  is available, CPU fallback otherwise; the limiting factor for `SUPPORTED_LANGUAGES` (7)
-- Session log files written to `logs/sessions/YYYY-MM-DD_<session_id>.jsonl`;
-  one JSON line per turn plus inline boundary markers
-
-### Server Package Layout
-
-```
-server/src/memai_server/
-  domain/       — entities, value objects, events, protocols (no external imports)
-  services/     — use cases / application logic; defines abstract ports
-  infrastructure/  — concrete adapters (Postgres, Ollama/OpenRouter, STT/TTS, language_tutor strategies)
-```
-
-### Key Constants
-
-| Constant | Value | Location |
-|---|---|---|
-| `SAMPLE_RATE` | 16000 Hz | both |
-| `FRAME_DURATION` | 30 ms | client |
-| WebSocket port | 8765 | both |
-| LLM model | `aya-expanse` | server |
-
-## Data Model
-
-### Memory types
-
-Three types of long-term memory, all stored in PostgreSQL with 1024-dim pgvector embeddings (`multilingual-e5-large`):
-
-| Type | Purpose | Persona-scoped |
-|---|---|---|
-| `Episode` | What happened, anchored to its origin conversation | No — persona traceability via `conversation.persona_snapshot` |
-| `Concept` | Distilled knowledge about a subject | Yes — `persona_id` FK |
-| `Procedure` | How to do something — description + optional steps | Yes — `persona_id` FK |
-
-### Concept and Procedure: persona scope
-
-`Concept` and `Procedure` each carry a `persona_id` FK. Similarity search during
-consolidation is always scoped to the active persona before applying the upsert threshold.
-
-**Why scoping is necessary**: the same name can mean entirely different things in different
-persona contexts (e.g. "big bang" with an astronomy persona vs a pop-culture persona).
-Without scoping, the upsert would merge unrelated concepts. Engagement level is also
-inherently persona-specific — the user may have `integrated` a concept under one persona
-and only `mentioned` it under another.
-
-**Cascade delete is intentional**: dropping a persona removes all its concepts and
-procedures. A temporary persona (e.g. exam prep for a specific course) can be fully
-cleaned up by deleting the persona. Do not change to `SET NULL` without explicit
-discussion — the cascade is load-bearing behaviour, not an oversight.
-
-**`GeneralAssistant`** acts as the cross-domain catch-all for concepts that do not belong
-to a specialised persona.
-
-### Consolidation gates for strategy personas
-
-Generic consolidation is gated for any persona with a registered assessment strategy
-(the signal is `assessment_strategies.get(persona_id) is not None` — no persona-specific
-vocabulary in the shared extractor/upserter, only plain booleans):
-
-1. **No episode extraction** (`extract_episodes=False`) — a lesson's drills and role-play
-   stories are not real events; Episodes come only from GA-side conversation.
-2. **No inserts** (`allow_insert=False`) — a similarity miss is discarded, not inserted;
-   new persona content comes only from bundles and `propose_items`.
-3. **No description rewrites** (`update_description=False`) — a match still bumps
-   `engagement_level` / fills a `category` gap, but never touches
-   description/steps/embedding: one conversation's phrasing must not drift a curated
-   definition.
-
-Rationale and live-test evidence: `docs/BRIEF_phase12_tutor.md` ("Consolidation scope
-for the tutor").
-
-### Concept.description invariant
-
-`description` is a tight LLM synthesis — the best current understanding of what the user
-knows about this concept within its persona context. It is not an append log: old details
-are absorbed into the synthesis on each upsert. Hard cap ~300 words, chosen to stay
-safely within the 512-token input limit of `multilingual-e5-large`. Both `description`
-and `embedding` are always updated together on every enrichment — except under the
-strategy-persona consolidation gates above, where generic consolidation never rewrites
-either.
-
-### Language field (Concept and Procedure)
-
-`language` records the language in which the concept or procedure was first introduced.
-It stays fixed even if the concept resurfaces in another language. The description is
-always maintained in this original language; content from other-language conversations is
-translated and synthesised into the existing description during the upsert LLM call.
-
-Related extractor rule: **Episode summaries are always written in `User.primary_language`**
-regardless of conversation language — Episodes are persona-independent and carry no
-language field; months of tutoring must not turn the user's life story into
-target-language documents.
-
-### Persona extension fields and ports (Phase 10)
-
-`Concept` and `Procedure` carry two persona-extension slots:
-
-- `category: str | None` — free text, interpreted in the owning persona's own vocabulary
-  (e.g. the tutor's `noun`/`idiom`/`contrast_pair`); generic code passes it through as a
-  filter value, never enumerates it. On upsert-merge the existing category wins; a new
-  one only fills a gap (curated bundle content beats extractor guesses).
-- `persona_state: dict | None` (JSONB) — opaque, unkeyed (the `persona_id` FK already
-  scopes ownership). **Single-writer contract**: written only by the owning persona's
-  assessment strategy via `MemoryRepository.update_persona_state()` (upsert UPDATEs
-  structurally exclude the column), read only by that persona's selection strategy; no
-  generic code path may branch on its contents. `engagement_level` stays the generic
-  coarse tier, written only by generic consolidation.
-
-Three optional persona strategy ports (`services/ports.py`; GA registers none):
-`PersonaSelectionPort.select_items(persona_id, focus, limit)` (live — batch fetched
-lazily on the first turn the persona is active, consumed one item per turn via the
-RAG-style context injection; a `[FOCUS: ...]` LLM response marker re-fetches the batch
-with the user's session wish passed verbatim, `focus=None` = default curriculum path),
-`PersonaEnrichmentPort.propose_items` (offline — proposes new drafts), and
-`PersonaAssessmentPort.assess_items` (offline — runs in consolidation after upsert,
-returns `ItemAssessment(item_id, memory_type, persona_state)` persisted byte-for-byte).
-Personas bind to strategy implementations via `AssistantPersona.strategy` (nullable
-name, e.g. `"language_tutor"`, set from the bundle's `[persona]` table), resolved
-against the composition root's registry in `server.py`; unknown names warn and bind
-nothing.
-
-`AssistantPersona.voices` is a speaker-role → Kokoro-voice map that must always contain
-the `"default"` role. Additional roles (e.g. the tutor's two-teacher cast) are
-persona-defined: inline `[SPEAKER:role]` tags in the LLM response switch the Kokoro
-voice per segment in the streaming path (unknown roles fall back to default). A
-non-default role's value may be a `"|"`-separated rotation pool (`"ef_dora|em_alex"`)
-resolved to one voice per session from the session id (HVPT, stateless); the
-`"default"` role is the fixed anchor and must be a single voice (entity invariant).
-
-### Upsert similarity threshold
-
-Consolidation uses a two-tier threshold (exact values to be calibrated on real data):
-
-| Similarity | Action |
-|---|---|
-| > 0.93 | Auto-merge — almost certainly the same concept |
-| 0.75 – 0.93 | Send both to LLM for disambiguation: same concept or distinct? |
-| < 0.75 | Auto-insert as new concept |
-
-The middle-band LLM call is cheap (binary judgment, runs offline) and handles cases where
-embedding proximity alone is ambiguous (e.g. "golden retriever" vs "dog").
-
-### Episode.origin_conversation_id
-
-`origin_conversation_id` is NOT NULL — episodes are always extracted from a conversation,
-never invented. It records provenance (where we first learned about this event), not
-ownership. `happened_at` is the real temporal anchor: when the event occurred in the
-real world, which may predate the conversation significantly.
-
-When the same episode is revisited in later conversations, the upsert updates `summary`
-and `embedding` in place; `origin_conversation_id` stays fixed. Full multi-conversation
-traceability (which conversations touched a given episode) is deferred — an
-`episode_conversations` join table would be the path if needed.
-
-### Procedure.description and steps
-
-A procedure has both `description` (NOT NULL) and `steps` (defaults to `{}`):
-
-- `description` is a free-form LLM synthesis — same invariant as `Concept.description`
-  (~300 words, always in the original language). It is the primary carrier of knowledge
-  and is always populated.
-- `steps` is a flat ordered array, populated only when the procedure decomposes cleanly
-  into discrete sequential actions. Left empty for heuristics, principles, or any
-  procedural knowledge that does not have a natural step structure.
-
-Both `description` and `embedding` are updated together on every upsert — same
-strategy-persona exception as `Concept.description` above.
+Default `aya-expanse` (~8B multilingual). Avoid ~70B-class models (VRAM eviction,
+cold-reload stalls) and reasoning models (`<think>` blocks get spoken aloud) —
+rationale in spec TR-952.

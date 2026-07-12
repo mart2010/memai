@@ -24,13 +24,21 @@ installs.
 
 ## Before you start
 
-For anything beyond a small fix, skim [CLAUDE.md](CLAUDE.md) first — it
-documents the architecture, design constraints, and a few hard invariants
-(e.g. the live/offline boundary: live conversation only ever writes flat
-JSONL files, never the database). If your change would cross one of those
-lines, raise it in the PR description before writing code, not after.
+For anything beyond a small fix, start with the **specification** in
+[docs/spec/](docs/spec/SPEC.md) — it is the canonical source for behaviour,
+architecture, the data model, and the project vocabulary
+([glossary](docs/spec/GLOSSARY.md)). Two rules follow from it:
 
-If a `docs/PLAN.md` exists, check it for where the project currently stands.
+- A change that alters observable behaviour, a format, a threshold, or an
+  invariant updates the affected `FR-`/`TR-`/`INV-` requirement in the same
+  PR — the spec never trails the code.
+- Tests cite the requirement IDs they verify in their docstrings
+  (`"""Spec: INV-12, FR-602 — …"""`).
+
+If your change would cross one of the invariants (e.g. INV-1, the
+live/offline boundary), raise it in the PR description before writing code,
+not after. [CLAUDE.md](CLAUDE.md) carries the working rules;
+`docs/PLAN.md` records where the project currently stands.
 
 ## Architecture conventions
 
