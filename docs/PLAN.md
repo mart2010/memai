@@ -1677,13 +1677,72 @@ All tutor runtime machinery, buildable once Phase 11 provides content. Full desi
       cross-session story recap flagged as an open gap (no longer persists — no
       replacement mechanism built, deliberately not solved here). 287 passed /
       7 skipped, `ruff check` clean.
-- [ ] Live smoke (Phase 12 verification, part 2 — deferred to a later session): start
-      server, switch to "Tutor Italiano"; verify (a) selection batch injected on the
-      tutor's first turn (watch server log for the list_items query / injected item in
-      a debug transcript), (b) two voices audibly alternate on [SPEAKER:] tags and
-      rotate target voice across two sessions, (c) "just review old words" mid-session
-      → [FOCUS:] marker, spoken acknowledgment, steered batch next turns, (d)
-      response-language watch item from the prompt-pack entry above, (e) after
-      disconnect+idle: consolidation writes persona_state (check concepts.persona_state
-      in DB) and enrichment no-ops gracefully (no user-initiated cluster yet). Needs the
-      laptop client + real mic/speakers — not doable from this shell.
+- [~] Live smoke (Phase 12 verification, part 2 — run 2026-07-13 on tx940107, AMD
+      Strix Halo/CPU fallback, real Postgres/Ollama `aya-expanse`/Kokoro): no laptop
+      client with real mic/speakers was available, so a scripted WS client
+      (`websockets` + espeak-ng-synthesized utterances, matching the real client's
+      16kHz PCM16-in/float32-out wire protocol exactly) drove the conversation, with
+      temporary `[smoketest]` debug prints in `ProcessTurn` (persona-switch match,
+      selected item, per-segment resolved voice, focus re-fetch — reverted after the
+      run, not committed) making internal state observable without audio playback.
+      `idle_consolidation_minutes` temporarily lowered 5.0 → 0.5 for faster iteration
+      (restored after). Mixed result — two real, reproducible LLM-reliability gaps
+      found, not code bugs:
+      - **(a) PASS**: `[PERSONA:Tutor Italiano]` switch confirmed (server log:
+        `persona switched to 'Tutor Italiano'`); lazy batch fetch fired on the tutor's
+        first active turn (10 items, each carrying a real episode-anchor `context`
+        string pulled via similarity search against GA-authored episodes — the
+        cross-persona episodic-anchoring design working exactly as intended); items
+        consumed one per turn as designed.
+      - **(b) FAIL (live)**: `[SPEAKER:target_teacher]` was never emitted across 5
+        tutor turns in a confirmed-switched session — every synthesized segment used
+        the single default voice (`af_heart`); the two-teacher cast never activated
+        despite the bundle's system prompt explicitly instructing it. HVPT rotation
+        formula itself is unit-tested and unreachable from this gap, not separately
+        re-verified live.
+      - **(c) FAIL (live)**: mid-session "can we just review old vocabulary today
+        instead?" (a near-verbatim match for the prompt pack's own trigger phrasing)
+        never produced a `[FOCUS: ...]` marker — the model replied in-character
+        ("Certo! Rivedere il vocabolario...") but the selection batch kept draining
+        strictly sequentially across the next two turns with no re-fetch.
+      - **(d) Inconclusive-but-benign**: the generic "always respond in 'it', never
+        switch" line was NOT strictly obeyed — the model wove in English parenthetical
+        glosses throughout — so the watch item's feared failure mode (generic
+        instruction fully suppressing bilingual output) did not occur. But since (b)
+        never fired, this bilingual mixing happened as inline glosses in a single
+        untagged voice, not the intended tagged two-teacher segments — the design's
+        actual mechanism is unexercised even though its goal (bilingual content)
+        partly happened by accident.
+      - **(e) PASS**: confirmed across two separate idle-triggered runs (server log:
+        `[offline] replayed=1 consolidated=2 enriched=0` then
+        `replayed=1 consolidated=1 enriched=0`). All 6 conversations created during
+        the session reached `consolidated=true`; `concepts.persona_state` was written
+        with sensible values by `OllamaPracticeJudge` (e.g. `come stai?` →
+        `retrievals=3, user_initiated=true, half_life_days=2.0`; items merely
+        mentioned by the tutor without user production stayed `unseen`/empty,
+        matching the "retrievals = production only" rule); enrichment correctly
+        no-opped both times (no interest cluster of size ≥ 3 yet).
+      - **Root-cause check, not a wording fix**: `[PERSONA:]` itself was also
+        inconsistent turn-to-turn (failed twice, including a 5-attempt run with STT
+        mangling "Tutor Italiano" from the synthetic espeak-ng voice into e.g.
+        "Tutorita Liano" — confirmed via direct `FasterWhisperSTTService.transcribe()`
+        probing to be a synthetic-audio artifact, not a live-mic-representative
+        failure — yet still succeeded on other attempts with equally garbled input),
+        establishing the pattern is LLM sampling variance on an 8B model, the same
+        "reliability ceiling, not a wording problem" already documented for
+        extraction/consolidation elsewhere in this phase. (b)/(c) are the same
+        pattern one layer up: the mechanisms (`_SpeakerTagParser`, `_resolve_tag`
+        for `[FOCUS:]`) are correct and unit-tested; `aya-expanse` simply doesn't
+        reliably reach for either tag even when its own system prompt spells out
+        exactly when to use them.
+      - **Not fixed here — flagged for discussion**: whether to (1) accept as a
+        known model-dependent gap (swap-in a stronger instruction-following model is
+        an operational choice already documented in CLAUDE.md's LLM guidance), (2)
+        strengthen the prompt pack further (already tried once for a related case in
+        this phase and made things worse, not better — see "Consolidation scope for
+        the tutor"), or (3) add a generic few-shot example of tag usage to the
+        prompt-composition path. No code change made against this run's evidence.
+      - Test data from this run (6 conversations, 6 JSONL session files under
+        `server/logs/sessions/`, `persona_state` on `ciao`/`come stai?`) left in
+        place — not purged, per INV-5 (session logs kept forever, no cleanup without
+        discussion) and to avoid an unrequested destructive DB action.
