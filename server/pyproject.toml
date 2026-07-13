@@ -27,6 +27,7 @@ dependencies = [
     "num2words>=0.5.13",
     "en-core-web-sm",
     "truststore>=0.9",
+    "py3langid>=0.2.2",
 ]
 
 [project.optional-dependencies]

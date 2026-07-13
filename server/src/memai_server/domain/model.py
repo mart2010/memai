@@ -51,11 +51,14 @@ class Speaker(Enum):
 
 GENERAL_ASSISTANT_ID = UUID("00000000-0000-0000-0000-000000000001")
 
-# Every persona's `voices` map must carry this role. Additional roles (e.g. a language
-# tutor's two-teacher cast) are persona-defined; generic code only ever reads DEFAULT_VOICE_ROLE.
-# An additional role's value may be a "|"-separated rotation pool ("ef_dora|em_alex"),
+# Every persona's `voices` map must carry this key. Other keys (e.g. a language
+# tutor's two-teacher cast) are IETF language codes, persona-defined; generic code
+# only ever reads DEFAULT_VOICE_ROLE by name — any other key is resolved by the
+# language actually detected in a synthesized segment (see `_session_voice` in
+# services/session.py), never by generic code branching on the key itself.
+# A non-default key's value may be a "|"-separated rotation pool ("ef_dora|em_alex"),
 # resolved to ONE voice per session by the live path (HVPT — multi-voice exposure).
-# The default role is the fixed anchor and must always be a single voice.
+# The default key is the fixed anchor and must always be a single voice.
 DEFAULT_VOICE_ROLE = "default"
 
 
@@ -65,7 +68,7 @@ def _validate_voices(voices: dict[str, str]) -> None:
     if "|" in voices[DEFAULT_VOICE_ROLE]:
         raise ValueError(
             f"the '{DEFAULT_VOICE_ROLE}' voice must be a single voice (the fixed anchor) — "
-            "'|' rotation pools are only for additional roles"
+            "'|' rotation pools are only for non-default (language-code) keys"
         )
 
 
@@ -76,7 +79,7 @@ class AssistantPersona:
     system_prompt: str
     languages: list[Language]  # languages this persona accepts as input; empty = primary language only
     response_language: Language  # language this persona responds in; drives TTS voice selection
-    voices: dict[str, str]      # speaker role -> Kokoro voice identifier; must include DEFAULT_VOICE_ROLE
+    voices: dict[str, str]      # IETF language code (or DEFAULT_VOICE_ROLE) -> Kokoro voice identifier
     is_system: bool
     created_at: datetime
     updated_at: datetime

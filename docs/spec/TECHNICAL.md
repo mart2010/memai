@@ -135,27 +135,42 @@ design discussion, never a patch.
   instruction ⊕ memory brief ⊕ recalled memories ⊕ persona list (when > 1). Messages =
   session tail (as one system message) ⊕ rolling summary ⊕ recent turns; a selected
   item is injected as a system message immediately before the current user turn.
-- **TR-304** Response prefix grammar, resolved incrementally from the token stream (a
-  partial candidate holds tokens back; a non-match releases them as text):
-  `[PERSONA:name]` then `[FOCUS: wish]` then `[TOPIC_CONTINUATION]|[TOPIC_BREAK]` — in
-  that order, each optional, only at response start. `[TOPIC_CONTINUATION]` outside a
-  session's first turn is swallowed (not spoken, no event). A stream ending mid-prefix
-  is emitted as plain text.
-- **TR-305** `[SPEAKER:role]` tags are parsed inline **after** the prefix, anywhere in
-  the response: a role switch flushes the open segment with the outgoing voice, then
-  switches. Unknown roles resolve to the default anchor; a dangling partial tag at
-  stream end is plain text.
+- **TR-304** Response prefix grammar: `[PERSONA:name]` and `[FOCUS: wish]` are
+  scanned for anywhere within the first `_PREFIX_SCAN_WINDOW_CHARS` characters of the
+  response (not only at position zero — real models routinely preface a tag-bearing
+  reply with conversational lead-in, e.g. an apology or acknowledgment, that a
+  leading-only check can never see past), each optional; `[TOPIC_CONTINUATION]|
+  [TOPIC_BREAK]` is then checked at the start of whatever remains, only at response
+  start. `[TOPIC_CONTINUATION]` outside a session's first turn is swallowed (not
+  spoken, no event). If the LLM stream ends before the scan window closes,
+  resolution force-finalizes against exactly what's buffered rather than waiting for
+  tokens that will never come.
+- **TR-305** Cast voice selection is per-segment and language-based, not tag-based:
+  after prefix resolution, each complete sentence is classified by its own dominant
+  language (`LanguageDetector.detect`, candidates restricted to `User.primary_language`
+  plus the active persona's non-default `voices` keys) and a confident match switches
+  the synthesis voice for that segment via `_session_voice`; a low-confidence result
+  (see TR-307) keeps whatever voice was already active rather than forcing a switch.
+  Deliberately whole-segment, never mid-sentence — a sentence quoting a foreign word
+  stays entirely in the voice it started in.
 - **TR-306** Selection batches: fetched lazily on a strategy persona's first active
   turn (`select_items(persona_id)`, a live DB *read*), stored per persona id in working
   memory; one item popped per turn; exhausted batches are not re-fetched. A `[FOCUS:]`
   marker re-fetches with the wish verbatim, replacing the batch — applied **after** any
   persona switch in the same response, so combined markers steer the target persona.
-- **TR-307** Voice resolution (`_session_voice`): `voices[role]` (fallback default);
-  `|`-pools pick index `session_id.int % len(pool)` — deterministic per session, no
-  state.
-- **TR-308** Sentence-level synthesis: segments split on `.` `!` `?`; each segment is
-  markdown/emoji-stripped and number-spelled (num2words for en/fr/es/it/pt only) before
-  TTS; empty segments are skipped.
+- **TR-307** Voice resolution (`_session_voice`): `voices[language_code]` (fallback
+  default anchor for an unregistered or undetected code); `|`-pools pick index
+  `session_id.int % len(pool)` — deterministic per session, no state. Detection
+  (`infrastructure/language_detection.py`) returns `None` — leaving the current voice
+  unchanged — below a minimum confident-length threshold (placeholder pending real
+  tuning); very short segments (a bare greeting, "No.") are genuinely ambiguous to
+  statistical language ID.
+- **TR-308** Sentence-level synthesis: segments split on `.` `!` `?`, including
+  retroactively splitting a multi-sentence chunk that arrives in one piece (e.g. via
+  TR-304's force-resolve) into its constituent sentences rather than only checking
+  whether the whole chunk ends on one; each segment is markdown/emoji-stripped and
+  number-spelled (num2words for en/fr/es/it/pt only) before TTS; empty segments are
+  skipped.
 - **TR-309** Rolling summary: when `total_turn_count % 50 == 0`, the oldest 25 recent
   turns are LLM-summarised into (or merged with) `rolling_summary` and dropped from the
   window.

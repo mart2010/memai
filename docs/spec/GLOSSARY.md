@@ -64,10 +64,10 @@ Memai's own model — the terms that carry the design. (Entities/value objects i
 | **`User`** | The single human. Owns `primary_language` (null until onboarding), `secondary_languages` (switched only explicitly, INV-14), `idle_consolidation_minutes`. Single-user is a system-wide assumption (INV-3). |
 | **`AssistantPersona`** | A specialised assistant: own `system_prompt`, `response_language`, `voices` map, `speaking_rate`, and own scoped memory. Aggregate root of the persona context. |
 | **GeneralAssistant (GA)** | The one system persona (`is_system`, fixed UUID `…0001`), the cross-domain catch-all and the persona every session starts on. Cannot be removed or deactivated. |
-| **Persona switch** | Changing the `active_persona` mid-session, triggered by the LLM emitting a `[PERSONA:name]` *response prefix marker*. Deliberately distinct from *speaker roles*. |
+| **Persona switch** | Changing the `active_persona` mid-session, triggered by the LLM emitting a `[PERSONA:name]` *response prefix marker*. Deliberately distinct from the *voice cast* — switching personas changes who's conversing; the cast is which Kokoro voice narrates a given persona's own segments. |
 | **Persona lifecycle** | Non-system personas can be **deactivated** (kept, memory intact) or **removed** (deleted — cascades to their concepts/procedures, INV-9). |
-| **Voice cast / speaker role** | A persona's `voices` map: role name → Kokoro voice. `"default"` is the mandatory fixed anchor (single voice, INV-7). The LLM switches roles inline via `[SPEAKER:role]` tags. |
-| **Rotation pool** | A non-default role value of `"a\|b\|c"` form: one voice is picked per session (`session_id % len`), stable within a session, varying across sessions (*HVPT*). |
+| **Voice cast** | A persona's `voices` map: IETF language code → Kokoro voice (`"default"` is the mandatory fixed native anchor, single voice, INV-7). Which voice narrates a segment is decided automatically from that segment's own detected dominant language — no LLM-emitted tag involved. |
+| **Rotation pool** | A non-default `voices` key's value of `"a\|b\|c"` form: one voice is picked per session (`session_id % len`), stable within a session, varying across sessions (*HVPT*). |
 | **`persona_key`** | Author-namespaced bundle identity (e.g. `memai/italian-tutor`), unique, set once at install; null for GA and user-created personas. |
 | **`strategy`** | The persona's declared strategy-set name (e.g. `"language_tutor"`), resolved against the composition root's registry; null binds nothing; unknown names warn and bind nothing. |
 | **`settings`** | Opaque persona-owned tunables (JSONB), copied verbatim from a bundle; read only by the persona's own strategies (same opacity contract as `persona_state`, INV-6). |
@@ -141,7 +141,7 @@ Memai's own model — the terms that carry the design. (Entities/value objects i
 
 | Term | Definition |
 |---|---|
-| **Two-teacher cast** | One LLM call role-playing a fixed native-language teacher (`default` anchor) and a target-language teacher, via `[SPEAKER:role]` tags. |
+| **Two-teacher cast** | One LLM call role-playing a fixed native-language teacher (`default` anchor) and a target-language teacher; voice selection is automatic per segment from its detected language (see the *Voice cast* entry above), not an LLM-emitted tag. |
 | **HVPT** (high-variability phonetic training) | The research basis for rotating the target-teacher voice across sessions via a *rotation pool* while the anchor stays fixed. |
 | **SRS state** | The tutor's `persona_state` fields (`state.py`): `last_practiced_at` (day granularity), `half_life_days`, `retrievals` (successful only), `errors`, `avg_response_latency_s`, `user_initiated`, `sessions_practiced`. |
 | **Retention** | Derived-at-selection-time recall estimate: `2^(−days_since / half_life_days)`; never stored. |

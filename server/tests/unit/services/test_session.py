@@ -19,6 +19,7 @@ from memai_server.services.session import EndSession, ProcessTurn, StartSession
 
 from tests.fakes.fakes import (
     FakeEmbeddingService,
+    FakeLanguageDetector,
     FakeLLMService,
     FakeMemoryBriefRepository,
     FakeMemoryRepository,
@@ -91,6 +92,7 @@ def _make_process_turn(
     selection_strategies: dict | None = None,
     persona_repo: FakePersonaRepository | None = None,
     tts: FakeTTSService | None = None,
+    language_detector: FakeLanguageDetector | None = None,
 ) -> tuple[ProcessTurn, FakeMemoryRepository, FakeTurnLogger, FakeLLMService]:
     memory_repo = FakeMemoryRepository()
     wal = FakeTurnLogger()
@@ -107,6 +109,7 @@ def _make_process_turn(
         recall_detector=FakeRecallIntentDetector(result=recall_result),
         persona_repo=persona_repo,
         turn_logger=wal,
+        language_detector=language_detector or FakeLanguageDetector(),
         selection_strategies=selection_strategies,
         rolling_window_size=rolling_window_size,
     )
@@ -494,7 +497,11 @@ class TestProcessTurn:
 
 
 class TestSpeakerCast:
-    """Inline [SPEAKER:role] tags — per-segment voice switching (two-teacher cast)."""
+    """Per-segment language detection — voice switching for the two-teacher cast.
+    Deliberately whole-segment granularity, never mid-sentence: a segment that's
+    mostly the native language but quotes a target-language word stays in the
+    native voice (accented, as a real bilingual guide would sound) — see
+    _synthesise_segment's comment in session.py."""
 
     def _cast_persona(self, voices: dict[str, str]) -> AssistantPersona:
         now = _now()
@@ -504,88 +511,95 @@ class TestSpeakerCast:
             is_system=True, created_at=now, updated_at=now,
         )
 
-    async def _run(self, llm_response: str, voices: dict[str, str], session_id=None):
+    async def _run(
+        self, llm_response: str, voices: dict[str, str], detected: list[str | None] | None = None,
+        session_id=None,
+    ):
         tts = FakeTTSService()
-        process_turn, _, _, _ = _make_process_turn(llm_response=llm_response, tts=tts)
+        detector = FakeLanguageDetector(results=detected)
+        process_turn, _, _, _ = _make_process_turn(llm_response=llm_response, tts=tts, language_detector=detector)
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=session_id or uuid4(), started_at=_now())
         ctx.active_persona = self._cast_persona(voices)
         result = await process_turn.execute(ctx, audio=b"a", now=_now())
-        return result, tts
+        return result, tts, detector
 
     @pytest.mark.asyncio
-    async def test_speaker_tags_switch_voice_per_segment(self):
+    async def test_segment_language_switches_voice(self):
         """Spec: FR-205, TR-305"""
-        result, tts = await self._run(
-            "[SPEAKER:target_teacher] Hola amigo. [SPEAKER:default] Now in your language.",
-            voices={"default": "vd", "target_teacher": "vt"},
+        result, tts, _ = await self._run(
+            "Hola amigo. Now in your language.",
+            voices={"default": "vd", "es": "vt"},
+            detected=["es", "en"],
         )
-        voices_used = [voice for _, voice, _ in tts.synthesised]
-        assert voices_used == ["vt", "vd"]
-        assert "[SPEAKER" not in result.assistant_content
+        assert [voice for _, voice, _ in tts.synthesised] == ["vt", "vd"]
         assert "Hola amigo." in result.assistant_content
 
     @pytest.mark.asyncio
-    async def test_untagged_response_speaks_with_default_voice(self):
-        """Spec: TR-305"""
-        _, tts = await self._run(
+    async def test_low_confidence_detection_keeps_current_voice(self):
+        """Spec: TR-305 — a None result (see FakeLanguageDetector/the real detector's
+        min-length gate) must not force a switch."""
+        _, tts, _ = await self._run(
             "Just a plain answer.",
-            voices={"default": "vd", "target_teacher": "vt"},
+            voices={"default": "vd", "es": "vt"},
+            detected=[None],
         )
         assert [voice for _, voice, _ in tts.synthesised] == ["vd"]
 
     @pytest.mark.asyncio
-    async def test_unknown_role_falls_back_to_default_voice(self):
-        """Spec: FR-205, TR-305"""
-        _, tts = await self._run(
-            "[SPEAKER:ghost] Hola.",
-            voices={"default": "vd", "target_teacher": "vt"},
+    async def test_detected_language_outside_voices_map_falls_back_to_default(self):
+        """Spec: FR-205, TR-305 — e.g. the detector's candidate set includes the
+        learner's own language, which is never itself a voices key."""
+        _, tts, _ = await self._run(
+            "Hola.",
+            voices={"default": "vd", "es": "vt"},
+            detected=["fr"],
         )
         assert [voice for _, voice, _ in tts.synthesised] == ["vd"]
 
     @pytest.mark.asyncio
-    async def test_mid_sentence_switch_flushes_open_segment_with_outgoing_voice(self):
-        """Spec: TR-305"""
-        _, tts = await self._run(
-            "Listen now [SPEAKER:target_teacher] escucha.",
-            voices={"default": "vd", "target_teacher": "vt"},
+    async def test_no_detection_call_when_persona_has_no_cast_voices(self):
+        """Spec: TR-305 — GA and any single-voice persona skip detection entirely,
+        not just fall back to default; avoids a wasted call on every ordinary turn."""
+        _, tts, detector = await self._run(
+            "Just a plain answer.",
+            voices={"default": "vd"},
         )
-        assert [(text.strip(), voice) for text, voice, _ in tts.synthesised] == [
-            ("Listen now", "vd"),
-            ("escucha.", "vt"),
-        ]
+        assert detector.calls == []
+        assert [voice for _, voice, _ in tts.synthesised] == ["vd"]
+
+    @pytest.mark.asyncio
+    async def test_detection_candidates_are_native_language_plus_cast_voice_keys(self):
+        """Spec: TR-305 — restricting candidates to exactly the languages in play
+        (not open-domain detection) is what makes short/ambiguous segments tractable."""
+        _, _, detector = await self._run(
+            "Hola.",
+            voices={"default": "vd", "es": "vt"},
+            detected=["es"],
+        )
+        assert detector.calls[0][1] == ("en", "es")  # native (User.primary_language) + cast key
+
+    @pytest.mark.asyncio
+    async def test_single_segment_never_splits_mid_sentence(self):
+        """Spec: TR-305 — a sentence mixing languages is spoken whole, in whichever
+        voice its own overall detected language resolves to; never split mid-sentence
+        even when the model writes a bilingual aside in one sentence."""
+        _, tts, _ = await self._run(
+            "Listen now, escucha bene, all in one breath.",
+            voices={"default": "vd", "es": "vt"},
+            detected=["en"],
+        )
+        assert len(tts.synthesised) == 1
+        assert tts.synthesised[0][1] == "vd"
 
     @pytest.mark.asyncio
     async def test_rotation_pool_resolved_deterministically_per_session(self):
         """Spec: FR-206, TR-307"""
-        voices = {"default": "vd", "target_teacher": "va|vb"}
-        _, tts_even = await self._run(
-            "[SPEAKER:target_teacher] Hola.", voices, session_id=UUID(int=2),
-        )
-        _, tts_odd = await self._run(
-            "[SPEAKER:target_teacher] Hola.", voices, session_id=UUID(int=3),
-        )
+        voices = {"default": "vd", "es": "va|vb"}
+        _, tts_even, _ = await self._run("Hola.", voices, detected=["es"], session_id=UUID(int=2))
+        _, tts_odd, _ = await self._run("Hola.", voices, detected=["es"], session_id=UUID(int=3))
         assert [v for _, v, _ in tts_even.synthesised] == ["va"]
         assert [v for _, v, _ in tts_odd.synthesised] == ["vb"]
-
-    @pytest.mark.asyncio
-    async def test_non_speaker_brackets_are_plain_content(self):
-        """Spec: TR-305"""
-        result, tts = await self._run(
-            "Beware [nota] brackets.",
-            voices={"default": "vd"},
-        )
-        assert "[nota]" in result.assistant_content
-        assert [v for _, v, _ in tts.synthesised] == ["vd"]
-
-    @pytest.mark.asyncio
-    async def test_dangling_partial_tag_at_stream_end_is_spoken_as_text(self):
-        """Spec: TR-305"""
-        result, _ = await self._run(
-            "Hola. [SPEAKER:target",
-            voices={"default": "vd", "target_teacher": "vt"},
-        )
-        assert result.assistant_content.endswith("[SPEAKER:target")
 
 
 class TestEndSession:

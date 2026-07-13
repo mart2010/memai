@@ -77,13 +77,16 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   **⚠ Gap:** only *edit* (onboarding voice/language) and *switch* (`[PERSONA:]`) are
   wired to live triggers; create/remove/deactivate/reactivate have no voice or CLI
   entry point yet.
-- **FR-205** A persona's voice identity is its `voices` map (mandatory `default` anchor
-  role, INV-7). Inline `[SPEAKER:role]` tags in a response must switch the synthesis
-  voice per segment; unknown roles fall back to the default anchor; tags are never
-  spoken.
-- **FR-206** A non-default role defined as a `|`-separated pool must resolve to one
-  voice per session — stable within the session, rotating across sessions (HVPT) —
-  with no persisted state.
+- **FR-205** A persona's voice identity is its `voices` map (mandatory `default`
+  anchor, INV-7; other keys are IETF language codes). Each synthesized segment's own
+  detected dominant language must switch the synthesis voice to that language's
+  registered voice, at whole-segment granularity — never mid-sentence, so a segment
+  quoting a foreign word in an otherwise native-language sentence stays in the
+  native voice; an undetected or unregistered language falls back to the default
+  anchor.
+- **FR-206** A non-default `voices` map key defined as a `|`-separated pool must
+  resolve to one voice per session — stable within the session, rotating across
+  sessions (HVPT) — with no persisted state.
 
 ## FR-3xx — Memory & recall
 

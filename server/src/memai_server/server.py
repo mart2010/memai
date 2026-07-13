@@ -17,6 +17,7 @@ from .domain.model import DEFAULT_VOICE_ROLE, Language, SUPPORTED_LANGUAGES, Use
 from .infrastructure import postgres
 from .infrastructure.config import load_config
 from .infrastructure.embedding import SentenceTransformerEmbeddingService
+from .infrastructure.language_detection import Py3LangidLanguageDetector
 from .infrastructure.json_file import JSONLSessionLogReader, JSONLSessionReplayReader, JSONLTurnLogger
 from .infrastructure.language_tutor import (
     LanguageTutorAssessmentStrategy,
@@ -65,6 +66,7 @@ class ServerContext:
     llm: OllamaLLMService
     tts: KokoroTTSService
     embedding_service: SentenceTransformerEmbeddingService
+    language_detector: Py3LangidLanguageDetector
     log_dir: Path
     memory_merge_threshold: float
     memory_disambiguate_threshold: float
@@ -281,6 +283,7 @@ async def _handle(ws, ctx: ServerContext) -> None:
         recall_detector=ctx.recall_detector,
         persona_repo=ctx.persona_repo,
         turn_logger=turn_logger,
+        language_detector=ctx.language_detector,
         selection_strategies=_build_selection_strategies(ctx),
     )
     end_session = EndSession(turn_logger=turn_logger)
@@ -386,6 +389,7 @@ def main() -> None:
     tts = KokoroTTSService(device=cfg.tts_device)
     print("Loading embedding model…")
     embedding_service = SentenceTransformerEmbeddingService()
+    language_detector = Py3LangidLanguageDetector()
     print("Services ready.")
 
     ctx = ServerContext(
@@ -394,6 +398,7 @@ def main() -> None:
         llm=llm,
         tts=tts,
         embedding_service=embedding_service,
+        language_detector=language_detector,
         log_dir=cfg.log_dir,
         memory_merge_threshold=cfg.memory_merge_threshold,
         memory_disambiguate_threshold=cfg.memory_disambiguate_threshold,

@@ -1900,3 +1900,80 @@ All tutor runtime machinery, buildable once Phase 11 provides content. Full desi
       change; item (b) remains a known, quantified (~50%) gap. Not re-run against
       the full audio/WebSocket harness after this fix — the plain-text quality gate
       is now the primary tool for this kind of check, per the redesign above.
+- [x] Cast voice switching retired from LLM tags to per-segment language detection
+      (2026-07-13, same session) — the ~50% `cast_voice_switch` gap above turned out
+      to have a much better fix than another prompt-reinforcement attempt: the
+      user's own observation broke it open. In the two-teacher design, one voice
+      speaks the learner's language and the other speaks *only* the target language,
+      by construction — so the language of each synthesized segment already tells
+      you which voice it should use, no LLM tag cooperation required at all.
+      **Implementation**: new `LanguageDetector` port (`services/ports.py`) +
+      `Py3LangidLanguageDetector` (`infrastructure/language_detection.py`, `py3langid`
+      — pure Python, ships its own compact model, no download/network, added via
+      `uv add py3langid --system-certs`, the same corporate-proxy TLS workaround
+      documented elsewhere in this project's history). `_SpeakerTagParser`/
+      `[SPEAKER:role]` deleted outright from `services/session.py` (not kept as a
+      dual mode — nothing else used it, YAGNI). `_synthesise_segment` now detects
+      each complete segment's dominant language (candidates restricted to
+      `User.primary_language` + the active persona's non-default `voices` keys —
+      not open-domain 100+-language guessing) and switches `current_voice` via the
+      unchanged `_session_voice`/HVPT-rotation-pool logic on a confident match,
+      otherwise keeps whatever voice was already active. `AssistantPersona.voices`
+      keeps its exact shape (`dict[str, str]`, same `_validate_voices` invariant) —
+      only the *meaning* of non-default keys changed, from arbitrary role names to
+      IETF language codes; zero domain-schema change needed.
+      **Deliberately whole-segment, never mid-sentence** — this was the user's
+      explicit design call, not a detector limitation worked around after the fact:
+      a segment that's mostly the native language but quotes a target-language word
+      stays entirely in the native voice (accented, as a real bilingual guide
+      sounds), never split mid-sentence. `_MIN_CONFIDENT_CHARS = 8` gates short/
+      ambiguous segments (a bare "Ciao!", "No.", "Sì." are genuinely ambiguous to
+      statistical language ID — some are borrowed/international words in the first
+      place) to keep the current voice rather than force a guess; verified live
+      that "Ciao!" alone classifies as English even restricted to an {en, it}
+      candidate set, confirming the gate is needed, not just defensive.
+      **Real, separate bug found and fixed along the way**: the force-resolve
+      fallback added earlier this session (for the prefix-scan-window change) could
+      hand `_handle_post_prefix_token` an entire multi-sentence response in one
+      final chunk once the LLM stream ended without ever growing a tag to scan for
+      — and the old sentence-boundary check only tested whether the *whole*
+      accumulated buffer ended in `.`/`!`/`?`, silently merging what should have
+      been several segments (each with its own correct voice) into one. New
+      `_split_complete_sentences` finds every boundary in a chunk, not just checks
+      the end — this was latent since the scan-window change, only surfaced by a
+      multi-sentence test with no bracket tag in it. 8 test cases rewritten in
+      `TestSpeakerCast` (unaffected tests renamed/kept where the assertion still
+      applies) exercising the new mechanism, including a dedicated regression test
+      that a bilingual single sentence is never split.
+      **Bundle content updated** (`bundles/italian-a0-starter/bundle.toml`):
+      `[persona.voices]` key `target_teacher` → `it` (the actual IETF code); the
+      system prompt's `[SPEAKER:role]` tag-syntax explanation deleted entirely,
+      replaced by a much shorter instruction — say guide lines in the learner's
+      language, teacher lines entirely in Italian, never mixed mid-sentence — since
+      there's no tag mechanism left to explain to the model at all.
+      **Spec updated in the same commit** per SPEC.md's convention: FR-205/FR-206
+      (FUNCTIONAL.md), TR-304/305/307/308 (TECHNICAL.md — TR-304 was *already*
+      stale from this session's earlier prefix-scan-window change, caught and fixed
+      here too), and the Voice cast/Two-teacher cast GLOSSARY entries.
+      `docs/BRIEF_phase12_tutor.md`'s "Cast mechanism" section rewritten in place
+      with a dated correction, matching that doc's existing correction-annotation
+      style; `docs/AUTHORING_BUNDLES.md` updated.
+      **Verified live against `aya-expanse`, 5/5**: `persona_switch`/
+      `selection_batch`/`cast_voice_switch`/`focus_marker` all PASS on every run
+      (quality gate now uses the real `Py3LangidLanguageDetector`, not a Fake, for
+      exactly this reason). A follow-up diagnostic dumped raw per-segment
+      `(voice, text)` pairs to confirm the PASS wasn't just an artifact of a short
+      first segment landing on the anchor voice by chance: the transcript showed a
+      genuine mid-response round-trip — an Italian phrase in the target voice,
+      immediately followed by its English parenthetical gloss `"(Hello, how are
+      you?)"` correctly detected and switched back to the guide voice — real
+      content-driven switching, not luck.
+      **New, minor, non-breaking finding from that same diagnostic**: the model
+      spontaneously wrote `[Focalizza: Saluti e presentazioni]` — an Italian
+      translation of the `[FOCUS:]` marker — unprompted, in a turn that never asked
+      for a focus change. `_extract_tag`'s exact-string match only recognizes the
+      literal English `"[FOCUS:"`, so this fell through as literal spoken bracket
+      text rather than triggering a re-fetch. Harmless (read aloud, not a crash or
+      wrong behavior) but a real edge case now that the tutor responds fully in
+      Italian rather than code-switching into English for asides — not fixed here,
+      flagged for whoever picks this up next.

@@ -77,6 +77,20 @@ class FakeEmbeddingService:
         return self.vector
 
 
+class FakeLanguageDetector:
+    """`results` is a queue, popped in call order — lets a test script a per-segment
+    sequence (e.g. ["it", None, "en"]). Defaults to always-None (never confidently
+    detects, so cast voice never switches) when not given."""
+
+    def __init__(self, results: list[str | None] | None = None) -> None:
+        self._results = list(results) if results is not None else []
+        self.calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def detect(self, text: str, candidates: tuple[str, ...]) -> str | None:
+        self.calls.append((text, candidates))
+        return self._results.pop(0) if self._results else None
+
+
 class FakeUserRepository:
     def __init__(self, user: User | None = None) -> None:
         self._user = user

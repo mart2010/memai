@@ -79,6 +79,15 @@ class EmbeddingService(Protocol):
     def embed(self, text: str) -> list[float]: ...
 
 
+class LanguageDetector(Protocol):
+    def detect(self, text: str, candidates: tuple[str, ...]) -> str | None:
+        """Best-guess dominant language of `text`, restricted to `candidates` (IETF
+        codes). Returns None when `text` is too short/ambiguous to trust a guess —
+        callers should keep whatever language was already in effect rather than
+        force a switch on a low-confidence call."""
+        ...
+
+
 class UserRepository(Protocol):
     def get(self) -> User | None: ...
     def save(self, user: User) -> None: ...

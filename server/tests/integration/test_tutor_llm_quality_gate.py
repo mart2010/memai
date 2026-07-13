@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
-"""Live LLM quality gate for the language-tutor's tag-emission design (persona switch,
-lazy selection-batch injection, [FOCUS:] steering, two-teacher [SPEAKER:] cast).
+"""Live LLM quality gate for the language-tutor's design (persona switch, lazy
+selection-batch injection, [FOCUS:] steering, two-teacher voice cast).
 
 **Not part of continuous testing** — gated behind `MEMAI_TEST_LLM_QUALITY_GATE=1` even
 when Ollama is reachable, unlike this directory's other tests (which run whenever their
@@ -15,8 +15,8 @@ real audio). This trades full-stack coverage for transparency: every prompt and 
 under test is plain text, printed verbatim with `-s`, with nothing to reverse-engineer
 from audio or log scraping. Real STT/TTS reliability is covered separately by
 `test_stt.py`/`test_tts.py` in this directory; this test is only about what the LLM does
-with the text it's given — that's the part earlier live testing showed to be the actual
-reliability gap (STT-mangled input turned out to be a red herring, see PLAN.md).
+with the text it's given, and — for the voice cast specifically — what a real
+`LanguageDetector` (`Py3LangidLanguageDetector`, not a Fake) makes of that real text.
 
 Uses the real tutor persona's system prompt straight from `bundles/italian-a0-starter/`
 (via `TomlPersonaBundleSource`), so the prompt under test is byte-identical to what ships.
@@ -30,12 +30,15 @@ Optional env vars: `MEMAI_TEST_LLM_MODEL` (default `aya-expanse`), `MEMAI_TEST_L
 `MEMAI_TEST_SWITCH_ATTEMPTS` (default 5).
 
 A single run is one data point, not a verdict — this model's behaviour is genuinely
-non-deterministic. 8 manual runs against `aya-expanse` on 2026-07-13 (after moving the
-persona-switch few-shot to the front of the prompt, see `_compose_working_context`)
-found `persona_switch`/`selection_batch`/`focus_marker` reliably PASS (8/8) but
-`cast_voice_switch` only ~50% (4/8) — a real, separate reliability gap in the bundle's
-own two-teacher cast instructions, not fixed by that change. Re-run a handful of times
-before concluding anything about a rate, not just a single PASS/FAIL.
+non-deterministic; re-run a handful of times before concluding anything about a rate.
+History: 8 manual runs against `aya-expanse` on 2026-07-13, back when cast voice
+switching was still LLM-tag-based (`[SPEAKER:role]`), found `persona_switch`/
+`selection_batch`/`focus_marker` reliably PASS (8/8, after front-loading the
+`[PERSONA:]`/`[FOCUS:]` few-shot — see `_compose_working_context`) but
+`cast_voice_switch` only ~50% (4/8). That mechanism is now retired: voice selection is
+per-segment language detection, not an LLM tag (see `docs/BRIEF_phase12_tutor.md`'s
+"Cast mechanism" correction) — the 4/8 figure no longer applies to what this test now
+checks and needs fresh data.
 """
 import os
 from datetime import datetime, UTC
@@ -46,6 +49,7 @@ import pytest
 
 from memai_server.domain.model import AssistantPersona, Concept, Language, User
 from memai_server.infrastructure.bundle_toml import TomlPersonaBundleSource
+from memai_server.infrastructure.language_detection import Py3LangidLanguageDetector
 from memai_server.infrastructure.llm import OllamaLLMService
 from memai_server.services.ports import SelectedItem
 from memai_server.services.session import ProcessTurn, StartSession, TurnResult
@@ -136,8 +140,9 @@ async def _say(process_turn: ProcessTurn, ctx, stt: FakeSTTService, text: str) -
 @pytest.mark.asyncio
 async def test_tutor_llm_quality_gate(ollama_model) -> None:
     """Spec: FR-202 (persona switch), TR-306 (selection batch), FR-502 ([FOCUS:]),
-    FR-205/TR-305 (two-teacher [SPEAKER:] cast) — live reliability against a real
-    model's real output, not plumbing correctness (see test_session.py for that)."""
+    FR-205/TR-305 (two-teacher voice cast) — live reliability against a real model's
+    real output (and, for the cast, a real LanguageDetector's real classification of
+    that output) — not plumbing correctness (see test_session.py for that)."""
     general = AssistantPersona.general_assistant(_GA_SYSTEM_PROMPT)
     tutor = _load_tutor_persona()
 
@@ -164,6 +169,7 @@ async def test_tutor_llm_quality_gate(ollama_model) -> None:
         recall_detector=FakeRecallIntentDetector(),
         persona_repo=persona_repo,
         turn_logger=FakeTurnLogger(),
+        language_detector=Py3LangidLanguageDetector(),
         selection_strategies={tutor.id: strategy},
     )
     start_session = StartSession(

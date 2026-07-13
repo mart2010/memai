@@ -335,14 +335,33 @@ the "wiring foundation" step (see PLAN.md Phase 12 for implementation detail):
 - **`MemoryRepository.list_items`**: non-similarity listing (persona, types, optional
   category/engagement filters) ordered by ascending id — the query surface the
   selection strategy ranks over.
-- **Cast mechanism (implemented)**: inline `[SPEAKER:role]` tags in the LLM response
-  switch the Kokoro voice per segment in the streaming path; unknown roles fall back
-  to the default anchor. **HVPT rotation is a generic voices-map semantic**: a
-  non-default role's value may be a `"|"`-separated pool (`"ef_dora|em_alex"`),
-  resolved to one voice per session from the session id (stateless — the live path
-  never writes). This supersedes the earlier `settings.target_voice_pool` sketch,
-  which would have required generic code to read inside the opaque settings. The
-  `"default"` (native-anchor) voice must be a single voice — entity invariant.
+- **Cast mechanism — retired in favour of per-segment language detection
+  (2026-07-13, live-testing correction)**: the original design (inline
+  `[SPEAKER:role]` tags in the LLM response) is superseded. Live quality-gate testing
+  (`server/tests/integration/test_tutor_llm_quality_gate.py`) found `aya-expanse`
+  emitted the tag only ~50% of the time even after the `[PERSONA:]`/`[FOCUS:]`
+  front-loading fix that took those two markers to 8/8 — the model would narrate a
+  voice switch in prose without ever writing the tag, the same failure pattern seen
+  elsewhere in this phase, just not fixed by the same remedy. The user's own
+  observation broke the deadlock: since one speaker is defined as native-language,
+  the other as target-language-only, the language of each complete sentence *already*
+  tells you which voice it should be — no LLM cooperation required at all. Each
+  synthesized segment's own detected dominant language now selects the Kokoro voice
+  (`LanguageDetector` port, `infrastructure/language_detection.py`'s
+  `Py3LangidLanguageDetector`, candidates restricted to `User.primary_language` +
+  the persona's non-default `voices` keys — no open-domain 100+-language guessing).
+  Deliberately **whole-segment, never mid-sentence**: a sentence that's mostly the
+  native language but quotes a target-language word stays entirely in the native
+  voice (accented, as a real bilingual guide sounds) — this was the user's explicit
+  design call, not a detector limitation worked around after the fact. **HVPT
+  rotation is still a generic voices-map semantic**, unchanged in mechanism, just
+  re-keyed: a non-default key is now the target language's own IETF code (e.g.
+  `"it"`, not a role name like `"target_teacher"`), whose value may be a
+  `"|"`-separated pool (`"if_sara|im_nicola"`), resolved to one voice per session
+  from the session id (stateless — the live path never writes). The `"default"`
+  (native-anchor) voice must still be a single voice — entity invariant, unchanged.
+  The persona's own prompt no longer needs to explain a tag syntax at all — just
+  which language each speaker writes in (`bundles/italian-a0-starter/bundle.toml`).
 
 ## Pointers
 

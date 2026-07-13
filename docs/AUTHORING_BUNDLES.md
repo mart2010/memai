@@ -52,7 +52,11 @@ Author **one main bundle per target language**, never per language *pair*:
   `pair_difficulty` in the format brief) — resolved by the persona's own strategy at
   runtime, never by generic code.
 - The native-teacher voice (`voices["default"]`) is **omitted** from the bundle and
-  derived from `User.primary_language` at install.
+  derived from `User.primary_language` at install. Any other cast voice is keyed by
+  the target language's own IETF code (e.g. `voices["it"]`), not a role name —
+  voice selection is automatic per synthesized segment from its own detected
+  language, so the persona's own prompt only needs to say which language each
+  speaker writes in, never a tag to emit (see `docs/spec/TECHNICAL.md` TR-305).
 
 ## Category taxonomy (tutor vocabulary)
 

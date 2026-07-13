@@ -21,6 +21,7 @@ from ..domain.model import (
 from ..domain.protocols import RecallIntentDetector
 from .ports import (
     EmbeddingService,
+    LanguageDetector,
     LLMService,
     MemoryBriefRepository,
     MemoryItem,
@@ -96,8 +97,20 @@ _FIRST_LAUNCH_DIRECTIVE = (
 _SENTENCE_ENDINGS = {".", "!", "?"}
 
 
-def _is_sentence_end(text: str) -> bool:
-    return bool(text) and text[-1] in _SENTENCE_ENDINGS
+def _split_complete_sentences(buffer: str) -> tuple[list[str], str]:
+    """Split `buffer` into (complete sentences, trailing incomplete remainder). A
+    single call's `buffer` isn't guaranteed to hold at most one sentence — the
+    force-resolve fallback (see `_try_resolve_prefixes(..., force=True)`) can hand
+    back an entire multi-sentence response in one piece when the LLM's response
+    never grew a tag to scan for, so this must find every boundary, not just check
+    whether the buffer as a whole ends on one."""
+    sentences: list[str] = []
+    start = 0
+    for i, ch in enumerate(buffer):
+        if ch in _SENTENCE_ENDINGS:
+            sentences.append(buffer[start:i + 1])
+            start = i + 1
+    return sentences, buffer[start:]
 
 
 _BOUNDARY_MARKERS = (
@@ -212,55 +225,15 @@ def _try_resolve_prefixes(
     return text, persona_name, focus, boundary
 
 
-_SPEAKER_TAG = "[SPEAKER:"
-
-
-class _SpeakerTagParser:
-    """Incrementally splits post-prefix response text into ("text", chunk) and
-    ("role", name) events from inline [SPEAKER:role] tags (multi-voice cast),
-    holding back partial tags until disambiguated."""
-
-    def __init__(self) -> None:
-        self._buffer = ""
-
-    def feed(self, token: str) -> list[tuple[str, str]]:
-        self._buffer += token
-        events: list[tuple[str, str]] = []
-        while self._buffer:
-            start = self._buffer.find("[")
-            if start == -1:
-                events.append(("text", self._buffer))
-                self._buffer = ""
-                break
-            if start > 0:
-                events.append(("text", self._buffer[:start]))
-                self._buffer = self._buffer[start:]
-            if self._buffer.startswith(_SPEAKER_TAG):
-                end = self._buffer.find("]")
-                if end == -1:
-                    break  # tag opened but not closed — wait for more tokens
-                events.append(("role", self._buffer[len(_SPEAKER_TAG):end].strip()))
-                self._buffer = self._buffer[end + 1:].lstrip()
-                continue
-            if _SPEAKER_TAG.startswith(self._buffer):
-                break  # still disambiguating a potential tag
-            # A '[' that is not a speaker tag — plain text.
-            events.append(("text", "["))
-            self._buffer = self._buffer[1:]
-        return events
-
-    def flush(self) -> str:
-        """Whatever remains at stream end (e.g. a dangling partial tag) is text."""
-        leftover, self._buffer = self._buffer, ""
-        return leftover
-
-
-def _session_voice(persona: AssistantPersona, role: str, session_id: UUID) -> str:
-    """Resolve a speaker role to one concrete voice for this session. Unknown roles
-    fall back to the default anchor. A '|'-separated value is a rotation pool: the
-    session id picks one deterministically — stable within a session, varying across
-    sessions (HVPT). Stateless by design: the live path never writes."""
-    raw = persona.voices.get(role, persona.default_voice)
+def _session_voice(persona: AssistantPersona, language: str, session_id: UUID) -> str:
+    """Resolve a detected language code to one concrete voice for this session.
+    `persona.voices` is keyed by IETF language code for any cast role beyond the
+    fixed `DEFAULT_VOICE_ROLE` anchor — an unregistered code (including the
+    learner's own native language, which is never itself a key) falls back to the
+    anchor. A '|'-separated value is a rotation pool: the session id picks one
+    deterministically — stable within a session, varying across sessions (HVPT).
+    Stateless by design: the live path never writes."""
+    raw = persona.voices.get(language, persona.default_voice)
     options = [v.strip() for v in raw.split("|") if v.strip()]
     if not options:
         return persona.default_voice
@@ -464,6 +437,7 @@ class ProcessTurn:
         recall_detector: RecallIntentDetector,
         persona_repo: PersonaRepository,
         turn_logger: TurnLogger,
+        language_detector: LanguageDetector,
         selection_strategies: dict[UUID, PersonaSelectionPort] | None = None,
         rolling_window_size: int = 50,
     ) -> None:
@@ -475,6 +449,7 @@ class ProcessTurn:
         self._recall_detector = recall_detector
         self._persona_repo = persona_repo
         self._turn_logger = turn_logger
+        self._language_detector = language_detector
         # persona_id -> selection strategy; personas without one (e.g. GA) get no batch.
         self._selection_strategies = selection_strategies or {}
         self._rolling_window_size = rolling_window_size
@@ -551,11 +526,21 @@ class ProcessTurn:
         response_language = wm.active_persona.response_language
         lang_code = response_language.code if response_language else None
         speaking_rate = wm.active_persona.speaking_rate
-        # Multi-voice cast: inline [SPEAKER:role] tags switch the Kokoro voice per
-        # segment; untagged text speaks with the default anchor. Roles resolve to a
-        # concrete voice once per session (see _session_voice — HVPT rotation pools).
-        current_voice = _session_voice(wm.active_persona, DEFAULT_VOICE_ROLE, wm.session_id)
-        speaker_parser = _SpeakerTagParser()
+        # Multi-voice cast: each complete segment's OWN dominant language picks the
+        # Kokoro voice — no LLM tag cooperation needed (see _session_voice — HVPT
+        # rotation pools). Whole-segment granularity is deliberate: a segment that's
+        # mostly the native language but quotes a target-language word stays in the
+        # native voice (accented, as a real bilingual guide would sound), never split
+        # mid-sentence — this is a design choice, not a detector limitation. Detection
+        # only runs when there's more than one voice to pick from (a cast persona) and
+        # the learner's own language is known, restricting candidates to exactly the
+        # languages actually in play; a low-confidence call (see
+        # infrastructure/language_detection.py) keeps whatever voice was already
+        # active rather than force a switch.
+        current_voice = wm.active_persona.default_voice
+        cast_languages = tuple(k for k in wm.active_persona.voices if k != DEFAULT_VOICE_ROLE)
+        native_lang = wm.user.primary_language.code if wm.user.primary_language else None
+        detection_candidates = ((native_lang,) + cast_languages) if cast_languages and native_lang else ()
 
         audio_chunks: list[bytes] = []
         content_parts: list[str] = []
@@ -569,8 +554,12 @@ class ProcessTurn:
         t_first_audio: float | None = None
 
         def _synthesise_segment(text: str) -> None:
-            nonlocal t_first_audio
+            nonlocal t_first_audio, current_voice
             processed = _spell_out_numbers(_strip_markdown(text), lang_code)
+            if detection_candidates:
+                detected = self._language_detector.detect(processed, detection_candidates)
+                if detected is not None:
+                    current_voice = _session_voice(wm.active_persona, detected, wm.session_id)
             if _TUTOR_DEBUG:
                 print(f"[tutor-debug] segment voice={current_voice!r} text={processed[:60]!r}")
             content_parts.append(processed)
@@ -582,20 +571,11 @@ class ProcessTurn:
                 print(f"[latency] Total to first audio: {t_first_audio - t_start:.2f}s")
 
         def _handle_post_prefix_token(token: str) -> None:
-            nonlocal sentence_buffer, current_voice
-            for kind, value in speaker_parser.feed(token):
-                if kind == "role":
-                    # A speaker switch is a natural break — flush the open segment
-                    # with the outgoing voice before switching.
-                    if sentence_buffer.strip():
-                        _synthesise_segment(sentence_buffer)
-                    sentence_buffer = ""
-                    current_voice = _session_voice(wm.active_persona, value, wm.session_id)
-                    continue
-                sentence_buffer += value
-                if _is_sentence_end(sentence_buffer.rstrip()):
-                    _synthesise_segment(sentence_buffer)
-                    sentence_buffer = ""
+            nonlocal sentence_buffer
+            sentence_buffer += token
+            complete, sentence_buffer = _split_complete_sentences(sentence_buffer)
+            for sentence in complete:
+                _synthesise_segment(sentence)
 
         async for token in self._llm.complete(messages, system_prompt):
             if t_first_token is None:
@@ -622,8 +602,6 @@ class ProcessTurn:
             )
             _handle_post_prefix_token(token)
 
-        # A dangling partial speaker tag at stream end is plain content too.
-        sentence_buffer += speaker_parser.flush()
         if sentence_buffer.strip():
             _synthesise_segment(sentence_buffer)
 
