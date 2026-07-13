@@ -87,6 +87,10 @@ Ruff at the monorepo root, `line-length = 120`, tests excluded. Not in any venv 
 - Fakes over mocks for every port (see incubator CLAUDE.md).
 - Unit tests: `cd server && uv run pytest tests/unit` (no GPU/DB). Full suite needs
   real Postgres + models (workstation).
+- `server/tests/e2e/` — manual-only LLM quality gates against a real running server
+  (real model output, not `FakeLLMService`), never picked up by a bare `pytest`/CI run
+  (skip unless their `MEMAI_TEST_*` env vars are set). Report cards for a design/model
+  pairing, not regression tests — see each module's docstring for setup.
 - New/touched tests cite the spec IDs they verify: `"""Spec: INV-12, FR-602 — …"""`.
 
 ## LLM model guidance (operational)

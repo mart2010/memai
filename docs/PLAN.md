@@ -1801,3 +1801,59 @@ All tutor runtime machinery, buildable once Phase 11 provides content. Full desi
       `aya-expanse` restored as the default model afterward; `gemma3:27b` left
       pulled locally (17 GB, unloaded from GPU memory via `ollama stop`) in case a
       follow-up session wants it again without re-downloading.
+- [~] Prefix-scan-window parser change + formal E2E quality gate (2026-07-13, same
+      session): prototyped option (3) above — `_try_resolve_prefixes` in
+      `services/session.py` now scans up to `_PREFIX_SCAN_WINDOW_CHARS` (200,
+      placeholder pending real tuning, same posture as the 0.93/0.75 upsert
+      thresholds) characters for `[PERSONA:]`/`[FOCUS:]` anywhere, not just position
+      zero (`_extract_tag`/`_tag_might_still_open` replace the old
+      `_resolve_tag`/leading-`startswith` check); gained a `force` parameter,
+      finalizing against whatever's buffered once the LLM stream ends, so the common
+      tag-free turn still resolves promptly instead of blocking on a window that will
+      never fill. 3 new unit tests (lead-in prose recognized; window-exceeded prose
+      falls through as literal text, documenting the tradeoff) — 223 unit tests
+      green, `ruff check` clean. **Explicit, acknowledged tradeoff**: every tag-free
+      turn (the common case) now waits up to the window (or stream end) before speech
+      starts, instead of usually resolving within the first token — a real latency
+      cost paid to catch the rare turn with lead-in prose.
+      **Re-tested live against `aya-expanse` after the fix: still fails** — same
+      symptom as the gemma3:27b run (narrates "I'm doing my best to make the switch
+      to 'Tutor Italiano' mode" / "Perfetto! Ora sono nella modalità 'Tutor
+      Italiano'" and free-lances fully in Italian-tutor character) across 5 attempts,
+      never confirmed. Since the window is wide enough to have caught these short
+      preambles had the tag appeared anywhere within them, this confirms the root
+      cause precisely: the tag isn't merely mis-positioned, it is **never emitted at
+      all** in these failures — the model narrates the action in natural language
+      instead of invoking the mechanism. A wider scan window cannot fix a tag that
+      was never written. Real fix territory is now narrowed to prompt-level
+      reinforcement (a concrete before/after few-shot showing that saying "I am
+      switching" in prose does nothing, only the tag does) or a different signaling
+      channel entirely (e.g. Ollama tool/function-calling — `aya-expanse` itself
+      lists `tools` as a capability per `ollama list`, unexplored) — not further
+      parser changes.
+      **New: `server/tests/e2e/test_tutor_llm_quality_gate.py`** — formalizes this
+      whole manual-testing loop (built ad hoc across today's session) into a
+      repeatable, committed artifact: a live scripted-WebSocket run (same espeak-ng
+      + real wire-protocol approach as the manual smoke tests) against an
+      already-running real server, checking persona-switch confirmation (with the
+      same STT-noise-avoiding "Yes" follow-up pattern), lazy batch injection,
+      `[SPEAKER:]` cast-voice variety, and `[FOCUS:]` re-fetch — one scenario per
+      run (turns are too expensive and stateful to isolate per-check; a failed
+      persona switch cascades clear `SKIP`s rather than misleading failures for the
+      downstream checks). Explicitly **not continuous testing** — a report card for
+      a design/LLM pairing, to be re-run whenever the default model changes or the
+      prompt pack is revised, not on every commit: skips unless
+      `MEMAI_TEST_SERVER_LOG_PATH` is set (same posture as
+      `tests/integration/conftest.py`), so a bare `pytest`/CI run never picks it up.
+      Reads a new opt-in, privacy-gated trace channel — `_TUTOR_DEBUG` in
+      `services/session.py`, on only via `MEMAI_TEST_TUTOR_DEBUG=1` on the server
+      process, off by default — for the internal signals (which batch/persona/voice
+      was used) that aren't otherwise observable from outside the WebSocket's
+      audio-only wire protocol; gated (unlike the always-on `[latency]`/`[offline]`/
+      `[strategy]` prints already in the codebase) specifically because some traced
+      lines echo real conversation content. CLAUDE.md's Testing section updated with
+      a one-line pointer. **Verified live**: run against the real `aya-expanse`
+      server correctly reported `persona_switch: FAIL (not confirmed within 5
+      attempts)` and cascaded clean `SKIP`s for the other three checks, exiting
+      non-zero with a readable summary — exactly the expected, meaningful failure
+      for this model, not a bug in the test.

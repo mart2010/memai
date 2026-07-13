@@ -399,6 +399,78 @@ class TestProcessTurn:
         assert [s.item.name for s in ctx.selection_batches[tutor.id]] == ["verbos"]
 
     @pytest.mark.asyncio
+    async def test_persona_marker_recognized_after_lead_in_prose(self):
+        """Spec: FR-202, TR-310 — real models routinely preface a tag-bearing reply
+        with conversational lead-in rather than opening with the tag itself (see
+        docs/PLAN.md Phase 12 live smoke + gemma3:27b follow-up); the marker must
+        still be recognized when it isn't the literal first token."""
+        tutor = _tutor_persona()
+        persona_repo = FakePersonaRepository()
+        persona_repo.save(_general_assistant())
+        persona_repo.save(tutor)
+        process_turn, _, _, _ = _make_process_turn(
+            llm_response="Sure, switching now. [PERSONA:Tutor] Hola, empecemos.",
+            persona_repo=persona_repo,
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        result = await process_turn.execute(ctx, audio=b"a", now=_now())
+
+        assert result is not None and result.persona_switched is not None
+        assert result.persona_switched.to_persona_id == tutor.id
+        assert "[PERSONA" not in result.assistant_content
+        assert "Sure, switching now." in result.assistant_content
+        assert "Hola, empecemos." in result.assistant_content
+
+    @pytest.mark.asyncio
+    async def test_focus_marker_recognized_after_lead_in_prose(self):
+        """Spec: FR-502, TR-306"""
+        strategy = FakePersonaSelectionPort(
+            items=[SelectedItem(item=_concept("hola", 1))],
+            focused_items=[SelectedItem(item=_concept("repaso", 3))],
+        )
+        process_turn, _, _, _ = _make_process_turn(
+            llm_response="Sure, let's review. [FOCUS: old vocabulary] Perfetto.",
+            selection_strategies={GENERAL_ASSISTANT_ID: strategy},
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        result = await process_turn.execute(ctx, audio=b"a", now=_now())
+
+        assert result is not None
+        assert "[FOCUS" not in result.assistant_content
+        assert "Sure, let's review." in result.assistant_content
+        assert "Perfetto." in result.assistant_content
+        assert strategy.calls == [
+            (GENERAL_ASSISTANT_ID, None, 10),                # lazy default fetch
+            (GENERAL_ASSISTANT_ID, "old vocabulary", 10),     # focus re-fetch, verbatim
+        ]
+
+    @pytest.mark.asyncio
+    async def test_persona_marker_beyond_scan_window_is_not_recognized(self):
+        """Spec: TR-310 — documents the bounded scan window's tradeoff: lead-in prose
+        past the window means the marker is never recognized and falls through as
+        literal spoken text, rather than the parser waiting indefinitely."""
+        tutor = _tutor_persona()
+        persona_repo = FakePersonaRepository()
+        persona_repo.save(_general_assistant())
+        persona_repo.save(tutor)
+        long_preamble = "Sorry for the confusion. " * 15  # well past the scan window
+        process_turn, _, _, _ = _make_process_turn(
+            llm_response=f"{long_preamble}[PERSONA:Tutor] Hola.",
+            persona_repo=persona_repo,
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        result = await process_turn.execute(ctx, audio=b"a", now=_now())
+
+        assert result is not None and result.persona_switched is None
+        assert "[PERSONA:Tutor]" in result.assistant_content  # falls through as literal text
+
+    @pytest.mark.asyncio
     async def test_no_injection_without_selection_batch(self):
         """Spec: TR-306"""
         process_turn, _, _, llm = _make_process_turn()

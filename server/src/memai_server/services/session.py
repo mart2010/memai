@@ -1,4 +1,5 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
+import os
 import re
 import time
 from dataclasses import dataclass, field
@@ -34,6 +35,13 @@ from .ports import (
     TurnLogger,
     UserRepository,
 )
+
+# Opt-in, off by default: persona-switch/selection/cast-voice tracing for evaluating
+# a candidate LLM's tag-emission reliability (see server/tests/e2e/, and docs/PLAN.md
+# Phase 12's live smoke + gemma3:27b follow-up, which is what this was built for).
+# Gated because some of these lines echo conversation content to stdout — unlike the
+# existing unconditional [latency]/[offline]/[strategy] lines, which never do.
+_TUTOR_DEBUG = os.environ.get("MEMAI_TEST_TUTOR_DEBUG") is not None
 
 
 @dataclass
@@ -118,50 +126,90 @@ def _resolve_boundary_marker(
     return buffer, None
 
 
-def _resolve_tag(buffer: str, tag: str) -> tuple[str, str | None] | None:
-    """Resolve an optional '{tag}value]' prefix (e.g. '[PERSONA:name]', '[FOCUS: wish]').
+# How much lead-in prose to buffer while scanning for a [PERSONA:]/[FOCUS:] tag
+# appearing anywhere in a streaming response (not just position zero) before giving up
+# on finding one. Widened from a position-zero-only check after live testing (see
+# docs/PLAN.md Phase 12 live smoke + gemma3:27b follow-up) showed real models — weak
+# and strong alike — routinely preface a tag-bearing reply with conversational lead-in
+# (an apology, an acknowledgment), especially when recovering from apparent confusion —
+# exactly when a reliable switch matters most, and exactly what position-zero matching
+# can never catch. This is a latency/reliability tradeoff, not a free win: a turn with
+# no tag at all now waits up to this many characters (or stream end, whichever comes
+# first) before speech can start, instead of usually resolving within the first token.
+# Value is a placeholder pending real tuning against live turns, same posture as the
+# 0.93/0.75 upsert thresholds.
+_PREFIX_SCAN_WINDOW_CHARS = 200
 
-    Returns None while `buffer` is still a proper prefix of `tag` or the closing ']' has
-    not arrived; otherwise (remaining_text, payload_or_None).
+
+def _extract_tag(buffer: str, tag: str) -> tuple[str, str] | None:
+    """If `tag` occurs anywhere in `buffer` and is already closed by a ']', remove it —
+    splicing the surrounding text back together — and return (buffer_without_tag,
+    payload). Returns None if `tag` isn't present yet, or is open but not yet closed.
     """
-    if buffer.startswith(tag):
-        end = buffer.find("]")
-        if end == -1:
-            return None
-        return buffer[end + 1:].lstrip(), buffer[len(tag):end].strip()
-    if tag.startswith(buffer):
-        return None  # still disambiguating the tag itself
-    return buffer, None
+    start = buffer.find(tag)
+    if start == -1:
+        return None
+    end = buffer.find("]", start)
+    if end == -1:
+        return None  # tag opened but not closed yet — wait for more tokens
+    payload = buffer[start + len(tag):end].strip()
+    return buffer[:start] + buffer[end + 1:], payload
+
+
+def _tag_might_still_open(buffer: str, tag: str) -> bool:
+    """True if some suffix of `buffer` is a proper, non-empty prefix of `tag` — i.e.
+    the buffer's tail might currently be mid-way through typing this tag's opening
+    bracket sequence, so it's too early to conclude the tag isn't coming."""
+    return any(buffer.endswith(tag[:i]) for i in range(1, len(tag)))
 
 
 def _try_resolve_prefixes(
-    buffer: str, is_first_turn: bool
+    buffer: str, is_first_turn: bool, force: bool = False
 ) -> tuple[str, str | None, str | None, ConversationBoundaryType | None] | None:
-    """Incrementally resolve the optional response-prefix markers [PERSONA:name],
-    [FOCUS: wish], and a boundary marker — in that order, each optional — from a
-    streaming LLM response.
+    """Resolve the optional response-prefix markers [PERSONA:name] and [FOCUS: wish]
+    from anywhere within the first `_PREFIX_SCAN_WINDOW_CHARS` characters of a
+    streaming LLM response — not just position zero, see that constant's docstring —
+    followed by an optional boundary marker at the very start of whatever remains.
 
-    Returns None while more tokens are needed to disambiguate a partial prefix;
-    otherwise (remaining_text, persona_name_or_None, focus_or_None, boundary_type_or_None).
+    Returns None while more tokens might change the outcome (still inside the scan
+    window with a tag not yet found, or the tail of `buffer` might be an in-progress
+    tag) — unless `force` is set, which finalizes against exactly what's buffered now
+    (used once the LLM stream itself has ended and no further tokens are coming, so
+    nothing left unresolved can ever resolve). Otherwise returns (remaining_text,
+    persona_name_or_None, focus_or_None, boundary_type_or_None).
     """
-    if not buffer.startswith("["):
-        return buffer, None, None, None
+    remaining = buffer
+    persona_name: str | None = None
+    focus: str | None = None
 
-    persona_result = _resolve_tag(buffer, "[PERSONA:")
-    if persona_result is None:
-        return None
-    buffer, persona_name = persona_result
+    extracted = _extract_tag(remaining, "[PERSONA:")
+    if extracted is not None:
+        remaining, persona_name = extracted
 
-    focus_result = _resolve_tag(buffer, "[FOCUS:")
-    if focus_result is None:
-        return None
-    buffer, focus = focus_result
+    extracted = _extract_tag(remaining, "[FOCUS:")
+    if extracted is not None:
+        remaining, focus = extracted
 
-    boundary_result = _resolve_boundary_marker(buffer, is_first_turn)
+    if not force:
+        still_waiting = (
+            (persona_name is None and _tag_might_still_open(remaining, "[PERSONA:"))
+            or (focus is None and _tag_might_still_open(remaining, "[FOCUS:"))
+            or (
+                (persona_name is None or focus is None)
+                and len(remaining) < _PREFIX_SCAN_WINDOW_CHARS
+            )
+        )
+        if still_waiting:
+            return None
+
+    text = remaining.lstrip()
+    boundary_result = _resolve_boundary_marker(text, is_first_turn)
     if boundary_result is None:
-        return None
-    remaining, boundary = boundary_result
-    return remaining, persona_name, focus, boundary
+        if not force:
+            return None
+        boundary_result = (text, None)  # dangling partial boundary marker at stream end — plain text
+    text, boundary = boundary_result
+    return text, persona_name, focus, boundary
 
 
 _SPEAKER_TAG = "[SPEAKER:"
@@ -421,8 +469,16 @@ class ProcessTurn:
             return None
         if persona_id not in wm.selection_batches:
             wm.selection_batches[persona_id] = list(strategy.select_items(persona_id))
+            if _TUTOR_DEBUG:
+                names = [getattr(i.item, "name", getattr(i.item, "summary", "?"))
+                         for i in wm.selection_batches[persona_id]]
+                print(f"[tutor-debug] fetched batch for {persona_id}: {names}")
         batch = wm.selection_batches[persona_id]
-        return batch.pop(0) if batch else None
+        item = batch.pop(0) if batch else None
+        if _TUTOR_DEBUG:
+            name = getattr(item.item, "name", getattr(item.item, "summary", "?")) if item else None
+            print(f"[tutor-debug] selected item this turn: {name}")
+        return item
 
     async def execute(self, wm: WorkingMemory, audio: bytes, now: datetime) -> TurnResult | None:
         t_start = time.monotonic()
@@ -491,6 +547,8 @@ class ProcessTurn:
         def _synthesise_segment(text: str) -> None:
             nonlocal t_first_audio
             processed = _spell_out_numbers(_strip_markdown(text), lang_code)
+            if _TUTOR_DEBUG:
+                print(f"[tutor-debug] segment voice={current_voice!r} text={processed[:60]!r}")
             content_parts.append(processed)
             t_segment_ready = time.monotonic()
             audio_chunks.append(self._tts.synthesise(processed, current_voice, speaking_rate))
@@ -499,19 +557,8 @@ class ProcessTurn:
                 print(f"[latency] TTS first chunk: {t_first_audio - t_segment_ready:.2f}s")
                 print(f"[latency] Total to first audio: {t_first_audio - t_start:.2f}s")
 
-        async for token in self._llm.complete(messages, system_prompt):
-            if t_first_token is None:
-                t_first_token = time.monotonic()
-                print(f"[latency] LLM first token: {t_first_token - t_stt_done:.2f}s")
-
-            if not prefix_resolved:
-                prefix_buffer += token
-                resolved = _try_resolve_prefixes(prefix_buffer, is_first_turn)
-                if resolved is None:
-                    continue
-                token, detected_name, detected_focus, boundary_marker = resolved
-                prefix_resolved = True
-
+        def _handle_post_prefix_token(token: str) -> None:
+            nonlocal sentence_buffer, current_voice
             for kind, value in speaker_parser.feed(token):
                 if kind == "role":
                     # A speaker switch is a natural break — flush the open segment
@@ -526,13 +573,33 @@ class ProcessTurn:
                     _synthesise_segment(sentence_buffer)
                     sentence_buffer = ""
 
+        async for token in self._llm.complete(messages, system_prompt):
+            if t_first_token is None:
+                t_first_token = time.monotonic()
+                print(f"[latency] LLM first token: {t_first_token - t_stt_done:.2f}s")
+
+            if not prefix_resolved:
+                prefix_buffer += token
+                resolved = _try_resolve_prefixes(prefix_buffer, is_first_turn)
+                if resolved is None:
+                    continue
+                token, detected_name, detected_focus, boundary_marker = resolved
+                prefix_resolved = True
+
+            _handle_post_prefix_token(token)
+
         if not prefix_resolved:
-            # Response ended mid-prefix (e.g. a stray "[" with no closing marker) —
-            # treat whatever was buffered as plain content rather than dropping it.
-            sentence_buffer = prefix_buffer
-        else:
-            # A dangling partial speaker tag at stream end is plain content too.
-            sentence_buffer += speaker_parser.flush()
+            # Stream ended before the scan window closed (e.g. a short response with
+            # no tag, or a genuinely dangling partial tag) — force-resolve against
+            # exactly what's buffered instead of waiting for tokens that will never
+            # come.
+            token, detected_name, detected_focus, boundary_marker = _try_resolve_prefixes(
+                prefix_buffer, is_first_turn, force=True
+            )
+            _handle_post_prefix_token(token)
+
+        # A dangling partial speaker tag at stream end is plain content too.
+        sentence_buffer += speaker_parser.flush()
         if sentence_buffer.strip():
             _synthesise_segment(sentence_buffer)
 
@@ -555,6 +622,8 @@ class ProcessTurn:
                     to_persona_id=match.id,
                 )
                 wm.active_persona = match
+                if _TUTOR_DEBUG:
+                    print(f"[tutor-debug] persona switched to {match.name!r} (id={match.id})")
 
         # 8b. Focus marker → re-fetch the active persona's batch steered by the user's
         # expressed wish, replacing whatever remained. Resolved AFTER the persona switch
@@ -563,9 +632,11 @@ class ProcessTurn:
         if detected_focus:
             strategy = self._selection_strategies.get(wm.active_persona.id)
             if strategy is not None:
-                wm.selection_batches[wm.active_persona.id] = list(
-                    strategy.select_items(wm.active_persona.id, focus=detected_focus)
-                )
+                new_batch = list(strategy.select_items(wm.active_persona.id, focus=detected_focus))
+                wm.selection_batches[wm.active_persona.id] = new_batch
+                if _TUTOR_DEBUG:
+                    names = [getattr(i.item, "name", getattr(i.item, "summary", "?")) for i in new_batch]
+                    print(f"[tutor-debug] focus={detected_focus!r} -> re-fetched batch: {names}")
 
         # 9. Log assistant turn + update working memory
         # Fresh timestamp captures when the LLM finished — gap from `now` reflects response time.
