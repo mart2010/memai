@@ -1746,3 +1746,58 @@ All tutor runtime machinery, buildable once Phase 11 provides content. Full desi
         `server/logs/sessions/`, `persona_state` on `ciao`/`come stai?`) left in
         place — not purged, per INV-5 (session logs kept forever, no cleanup without
         discussion) and to avoid an unrequested destructive DB action.
+- [~] Stronger-model follow-up (2026-07-13, same session, tx940107): tested whether
+      option (1) above (swap the default model) resolves the (b)/(c) tag-emission gap,
+      using `gemma3:27b` (catalogue's largest non-reasoning entry) — a genuine option
+      on this hardware despite the 27B size: `mem_info_vram_total` shows the AMD Strix
+      Halo iGPU has a 16 GB fixed VRAM pool plus a 22.8 GB GTT (shared-system-memory)
+      pool it can also address (~38.8 GB GPU-reachable total, out of 45 GB system RAM
+      — smaller than some Strix Halo configs' 96-128 GB, but enough here). Confirmed
+      via `ollama ps`/sysfs: `gemma3:27b` loads **100% GPU** (17.7 GB in the GTT pool,
+      VRAM pool barely touched) — genuine unified-memory offload, not the silent
+      CPU/GPU split `llama3.3` (70B) suffers per CLAUDE.md's LLM guidance. Temporarily
+      pointed `memai.toml`'s `llm.model` at it (reverted after); same scripted-client
+      method and temporary `[smoketest]` prints as the base run (reverted after).
+      **Result: did not fix the gap — surfaced a different, arguably worse failure
+      mode.** Across two full switch-retry sequences (5 attempts each) the persona
+      switch never confirmed. Turn 1 (STT-garbled "Tutor Italiano" as before):
+      unlike aya-expanse's silent free-lancing, gemma3:27b correctly noticed the
+      garbled name didn't match any real persona and asked the user to confirm by
+      name — arguably *better* instruction-following on that narrow point. But
+      answering that confirmation with a clean, unmangled "Yes, please switch me."
+      (removing the STT-garbling confound entirely) still never produced a leading
+      `[PERSONA:]` tag: instead, from turn 2 onward from every attempt, the model
+      **narrated** "I am now switching to the 'Tutor Italiano' persona" as prose and
+      then wrote fully in-character Italian-tutor content ("Ciao! Sono un assistente
+      vocale che può aiutarti con l'italiano...") — convincingly *sounding* switched
+      to a listener — while `wm.active_persona` never actually changed server-side
+      (no `persona switched to` log line any attempt, either run). A third, isolated
+      single-turn probe with fully-English phrasing (no Italian proper noun for STT
+      to mangle at all) inherited the prior failed session's turns via the *working-
+      as-designed* session-tail injection (a new connection shortly after a prior
+      disconnect legitimately gets that session's tail) and spiraled further: the
+      model declared "an internal error" in its own persona-switching code and
+      fabricated a fake troubleshooting menu ("Report the Bug", "Abandon Tutor
+      Italiano", "Limited Italian Assistance") — confident, coherent, entirely
+      invented self-diagnosis, never touching the actual mechanism either.
+      **Root cause, one layer deeper than the base run's finding**: the tag parser
+      (`_try_resolve_prefixes`) only recognizes `[PERSONA:...]`/`[FOCUS:...]` as a
+      *leading* prefix (`if not buffer.startswith("["): return buffer, None, None,
+      None` — session.py's very first prefix-resolution check). Both models — weak
+      and strong — have a natural tendency to preface a response with conversational
+      lead-in (apology, acknowledgment, self-correction) especially when recovering
+      from apparent confusion, which is exactly the scenario where reliable switching
+      matters most; a leading-only tag can never be recognized once that happens,
+      regardless of model quality. Model upgrade alone does not fix a structural
+      leading-prefix-only signaling convention — if anything, a stronger model
+      produces *more* fluent, *more* convincing prose around the tag it still isn't
+      emitting, which is a worse UX failure (illusion of success) than a weaker
+      model's more obviously-wrong free-lancing.
+      **Not fixed here — sharpens the discussion options above**: this pushes weight
+      toward option (3) (a few-shot example demonstrating the tag as the literal
+      first token) or a parser change to recognize the tag anywhere early in the
+      response rather than only at position zero, over option (1) (model swap) —
+      though (1) was not tested exhaustively (only one larger model, one scenario).
+      `aya-expanse` restored as the default model afterward; `gemma3:27b` left
+      pulled locally (17 GB, unloaded from GPU memory via `ollama stop`) in case a
+      follow-up session wants it again without re-downloading.
