@@ -1857,3 +1857,46 @@ All tutor runtime machinery, buildable once Phase 11 provides content. Full desi
       attempts)` and cascaded clean `SKIP`s for the other three checks, exiting
       non-zero with a readable summary — exactly the expected, meaningful failure
       for this model, not a bug in the test.
+- [~] Quality gate redesigned to plain text, no audio/server/DB — front-loaded
+      few-shot fixes persona-switch/focus reliability; cast-voice switching stays
+      ~50% (2026-07-13, same session): per feedback, the quality gate moved from a
+      real-server/WebSocket/espeak-ng/audio harness to calling `ProcessTurn.execute()`
+      directly — real `OllamaLLMService` against Fakes for STT (returns whatever
+      text is set, bypassing STT-mangling entirely), TTS (records (text, voice)
+      tuples, no Kokoro needed), and repos (the tutor's real system prompt loaded
+      from `bundles/italian-a0-starter/` via `TomlPersonaBundleSource`, so the
+      prompt under test is byte-identical to what ships). No server process, no
+      Postgres, no espeak-ng — full plain-text transparency (`-s` prints the exact
+      dialogue) and each run now takes ~10-20s instead of ~80-100s. Moved from
+      `server/tests/e2e/` (deleted) to `server/tests/integration/
+      test_tutor_llm_quality_gate.py`, gated behind an explicit
+      `MEMAI_TEST_LLM_QUALITY_GATE=1` opt-in (not merely "Ollama reachable", unlike
+      this directory's other tests) so it still never runs as part of a routine
+      integration-suite pass.
+      Also tried the discussion's option (3): moved the `[PERSONA:]` few-shot
+      instruction (added earlier this session, see above) from the *last* system
+      prompt part to the *first* — ahead of the persona's own system prompt, the
+      language directive, and the memory brief — on the theory that an 8B model
+      attends less to instructions buried at the end of a long context (primacy
+      effect), rather than writing a stronger example (already tried, no effect).
+      **Result: this is the fix for the persona-switch gap.** 8 live runs against
+      `aya-expanse`: `persona_switch` PASS 8/8 (confirmed on attempt 1/5 every
+      time — a dramatic change from 0/2 on the old audio harness before this
+      reorder), `selection_batch` PASS 8/8, `focus_marker` PASS 8/8 (downstream of
+      the switch now actually succeeding — the tutor's own `[FOCUS:]` instructions
+      were never in effect before, since the conversation never actually reached
+      the tutor persona). `cast_voice_switch` only PASS 4/8 (~50%) — a real,
+      separate reliability gap: the two-teacher `[SPEAKER:]` instructions live in
+      the bundle's own system prompt content (`bundles/italian-a0-starter/
+      bundle.toml`), not the generic code just reordered, and reordering the
+      generic parts around it didn't carry over the same fix. Genuinely
+      non-deterministic (not the record-then-forget of the earlier gemma3:27b
+      "apology spiral" pattern) — worth a similar front-loading/few-shot pass on
+      the bundle's own prompt text if this matters enough to chase further, but not
+      done here (bundle content, not generic code — an authoring change, per
+      `docs/AUTHORING_BUNDLES.md`).
+      Net effect on Phase 12's live-smoke checklist: items (a) and (c), found
+      failing earlier this session, are now reliably passing with this prompt
+      change; item (b) remains a known, quantified (~50%) gap. Not re-run against
+      the full audio/WebSocket harness after this fix — the plain-text quality gate
+      is now the primary tool for this kind of check, per the redesign above.

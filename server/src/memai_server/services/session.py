@@ -332,7 +332,34 @@ def _compose_working_context(
     recalled_memories: list[MemoryItem],
     selected_item: SelectedItem | None = None,
 ) -> tuple[str, list[Message]]:
-    prompt_parts = [wm.active_persona.system_prompt]
+    prompt_parts: list[str] = []
+    if len(wm.available_personas) > 1:
+        # Few-shot reinforcement, placed FIRST (2026-07-13, docs/PLAN.md Phase 12 live
+        # testing): a plain instruction — even appended last, after the persona system
+        # prompt/memory brief — reliably lost to real models narrating the switch in
+        # prose instead of emitting the tag ("Sure, switching to X now!" with no
+        # [PERSONA:] anywhere). A concrete correct/incorrect example didn't help either
+        # while still appended last (re-tested live against aya-expanse, still 0/5).
+        # Moved to the front on the theory that an 8B model attends less to instructions
+        # buried after a long persona prompt/memory brief (primacy effect) — see
+        # server/tests/integration/test_tutor_llm_quality_gate.py for the live check.
+        persona_lines = "\n".join(f"- {p.name}" for p in wm.available_personas)
+        other = next((p for p in wm.available_personas if p.id != wm.active_persona.id), None)
+        instruction = (
+            "Available personas:\n"
+            f"{persona_lines}\n\n"
+            "To switch, your reply must literally BEGIN with the tag [PERSONA:name] — the tag "
+            "itself performs the switch. Describing the switch in words does nothing on its own."
+        )
+        if other is not None:
+            instruction += (
+                f'\nExample — if asked to switch to "{other.name}":\n'
+                f'  Correct: "[PERSONA:{other.name}] <your first sentence as {other.name}>"\n'
+                f'  Wrong:   "Sure, switching to {other.name} now! <...>" — no tag, so nothing '
+                "actually switches, no matter how confidently it reads."
+            )
+        prompt_parts.append(instruction)
+    prompt_parts.append(wm.active_persona.system_prompt)
     if wm.needs_onboarding:
         prompt_parts.insert(0, _FIRST_LAUNCH_DIRECTIVE)
         prompt_parts.append(ONBOARDING_SCRIPT)
@@ -344,9 +371,6 @@ def _compose_working_context(
     if recalled_memories:
         lines = "\n".join(f"- {_format_memory_item(m)}" for m in recalled_memories)
         prompt_parts.append(f"Relevant memories:\n{lines}")
-    if len(wm.available_personas) > 1:
-        persona_lines = "\n".join(f"- {p.name}" for p in wm.available_personas)
-        prompt_parts.append(f"Available personas (reply with [PERSONA:name] to switch):\n{persona_lines}")
     system_prompt = "\n\n".join(prompt_parts)
 
     messages: list[Message] = []
