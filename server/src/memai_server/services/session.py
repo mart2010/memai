@@ -1,4 +1,5 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
+import asyncio
 import os
 import re
 import time
@@ -455,7 +456,7 @@ class ProcessTurn:
         self._rolling_window_size = rolling_window_size
         self._last_turn_end: float | None = None
 
-    def _next_selected_item(self, wm: WorkingMemory) -> SelectedItem | None:
+    async def _next_selected_item(self, wm: WorkingMemory) -> SelectedItem | None:
         """Lazily fetch the active persona's selection batch on its first active turn
         (a live DB read, same standing as RAG recall), then consume one item per turn.
         Key presence in selection_batches means "already fetched" — an exhausted batch
@@ -467,7 +468,7 @@ class ProcessTurn:
         if strategy is None:
             return None
         if persona_id not in wm.selection_batches:
-            wm.selection_batches[persona_id] = list(strategy.select_items(persona_id))
+            wm.selection_batches[persona_id] = list(await asyncio.to_thread(strategy.select_items, persona_id))
             if _TUTOR_DEBUG:
                 names = [getattr(i.item, "name", getattr(i.item, "summary", "?"))
                          for i in wm.selection_batches[persona_id]]
@@ -485,7 +486,7 @@ class ProcessTurn:
             print(f"[latency] Gap since last turn: {t_start - self._last_turn_end:.1f}s")
 
         # 1. STT
-        text, detected_language = self._stt.transcribe(audio)
+        text, detected_language = await asyncio.to_thread(self._stt.transcribe, audio)
         if not text.strip():
             return None
         t_stt_done = time.monotonic()
@@ -503,20 +504,22 @@ class ProcessTurn:
 
         # 4. Recall intent → enrich working context from LTM
         recalled_memories: list[MemoryItem] = []
-        recall = self._recall_detector.detect(text)
+        recall = await asyncio.to_thread(self._recall_detector.detect, text)
         if recall:
-            embedding = self._embedding_service.embed(recall.query)
-            recalled_memories = [
-                item for _, item in self._memory_repo.search(
-                    embedding, recall.memory_types, top_n=5,
-                    persona_id=wm.active_persona.id,
-                )
-            ]
+            embedding = await asyncio.to_thread(self._embedding_service.embed, recall.query)
+            search_results = await asyncio.to_thread(
+                self._memory_repo.search,
+                embedding,
+                recall.memory_types,
+                top_n=5,
+                persona_id=wm.active_persona.id,
+            )
+            recalled_memories = [item for _, item in search_results]
 
         # 5. Persona-selected item — batch fetched lazily on the active persona's first
         # turn, then one item per turn, injected via the same context-message mechanism
         # as recall above.
-        selected_item = self._next_selected_item(wm)
+        selected_item = await self._next_selected_item(wm)
 
         # 6. Stream the LLM response; resolve any leading [PERSONA:name]/boundary marker
         # as soon as enough tokens arrive, then synthesise each sentence via TTS as it
@@ -553,7 +556,7 @@ class ProcessTurn:
         t_first_token: float | None = None
         t_first_audio: float | None = None
 
-        def _synthesise_segment(text: str) -> None:
+        async def _synthesise_segment(text: str) -> None:
             nonlocal t_first_audio, current_voice
             processed = _spell_out_numbers(_strip_markdown(text), lang_code)
             if detection_candidates:
@@ -564,18 +567,18 @@ class ProcessTurn:
                 print(f"[tutor-debug] segment voice={current_voice!r} text={processed[:60]!r}")
             content_parts.append(processed)
             t_segment_ready = time.monotonic()
-            audio_chunks.append(self._tts.synthesise(processed, current_voice, speaking_rate))
+            audio_chunks.append(await asyncio.to_thread(self._tts.synthesise, processed, current_voice, speaking_rate))
             if t_first_audio is None:
                 t_first_audio = time.monotonic()
                 print(f"[latency] TTS first chunk: {t_first_audio - t_segment_ready:.2f}s")
                 print(f"[latency] Total to first audio: {t_first_audio - t_start:.2f}s")
 
-        def _handle_post_prefix_token(token: str) -> None:
+        async def _handle_post_prefix_token(token: str) -> None:
             nonlocal sentence_buffer
             sentence_buffer += token
             complete, sentence_buffer = _split_complete_sentences(sentence_buffer)
             for sentence in complete:
-                _synthesise_segment(sentence)
+                await _synthesise_segment(sentence)
 
         async for token in self._llm.complete(messages, system_prompt):
             if t_first_token is None:
@@ -590,7 +593,7 @@ class ProcessTurn:
                 token, detected_name, detected_focus, boundary_marker = resolved
                 prefix_resolved = True
 
-            _handle_post_prefix_token(token)
+            await _handle_post_prefix_token(token)
 
         if not prefix_resolved:
             # Stream ended before the scan window closed (e.g. a short response with
@@ -600,10 +603,10 @@ class ProcessTurn:
             token, detected_name, detected_focus, boundary_marker = _try_resolve_prefixes(
                 prefix_buffer, is_first_turn, force=True
             )
-            _handle_post_prefix_token(token)
+            await _handle_post_prefix_token(token)
 
         if sentence_buffer.strip():
-            _synthesise_segment(sentence_buffer)
+            await _synthesise_segment(sentence_buffer)
 
         assistant_content = "".join(content_parts).strip()
         print(f"[latency] Total turn: {time.monotonic() - t_start:.2f}s")
@@ -614,8 +617,9 @@ class ProcessTurn:
         # 8. Persona switch from detected prefix
         persona_switched: PersonaSwitched | None = None
         if detected_name:
+            all_personas = await asyncio.to_thread(self._persona_repo.list_all)
             match = next(
-                (p for p in self._persona_repo.list_all() if p.name.lower() == detected_name.lower()),
+                (p for p in all_personas if p.name.lower() == detected_name.lower()),
                 None,
             )
             if match and match.id != wm.active_persona.id:
@@ -634,7 +638,9 @@ class ProcessTurn:
         if detected_focus:
             strategy = self._selection_strategies.get(wm.active_persona.id)
             if strategy is not None:
-                new_batch = list(strategy.select_items(wm.active_persona.id, focus=detected_focus))
+                new_batch = list(
+                    await asyncio.to_thread(strategy.select_items, wm.active_persona.id, focus=detected_focus)
+                )
                 wm.selection_batches[wm.active_persona.id] = new_batch
                 if _TUTOR_DEBUG:
                     names = [getattr(i.item, "name", getattr(i.item, "summary", "?")) for i in new_batch]
