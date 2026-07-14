@@ -53,6 +53,11 @@ class TomlConfigWriter:
         }
         config["tts"] = {"device": device}
         config["llm"] = {"model": plan.llm_model_id or "aya-expanse"}
+        # The wizard-selected languages ARE the installed-languages contract: the
+        # server offers onboarding language selection and GA response-language
+        # mirroring only within this set (FR-705). Absent (configs written before
+        # this key existed), the server falls back to all of SUPPORTED_LANGUAGES.
+        config["languages"] = {"installed": plan.languages}
         self._write(config)
 
     def write_client_config(self, plan: InstallationPlan) -> None:

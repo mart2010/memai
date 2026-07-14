@@ -1,6 +1,6 @@
 # Technical Specification
 
-*Last verified against code: 2026-07-12*
+*Last verified against code: 2026-07-14*
 
 Internal contracts: architecture, protocol, formats, data model, algorithms. Terms per
 [GLOSSARY.md](GLOSSARY.md); conventions per [SPEC.md](SPEC.md). File references anchor
@@ -47,8 +47,12 @@ design discussion, never a patch.
   proposals always enter at `UNSEEN`; only generic consolidation moves engagement.
 - **INV-13 — Language of first introduction is fixed.** `Concept.language` /
   `Procedure.language` never changes on upsert; descriptions stay in that language.
-- **INV-14 — Secondary languages switch explicitly only.** No implicit persona or
-  language switching from detected speech language.
+- **INV-14 — Persistent language settings switch explicitly only.** No implicit persona
+  switching, and no change to any stored language setting (`User.primary_language`, a
+  persona's `response_language`), from detected speech language. The GA's per-turn
+  response-language mirroring (TR-313) is the sanctioned ephemeral exception: recomputed
+  each turn, bounded by the installed languages, never written anywhere, never applied
+  to strategy personas.
 - **INV-15 — Episode provenance is fixed.** `origin_conversation_id` is NOT NULL and
   never reassigned; `happened_at` is the temporal anchor, not the conversation date.
 
@@ -87,7 +91,7 @@ design discussion, never a patch.
 |---|---|---|---|
 | **TR-101** | binary frame | client→server | PCM **int16** 16 kHz mono; accumulated in the utterance audio buffer (ignored until onboarding is done) |
 | **TR-102** | `{"type": "end_utterance"}` | client→server | Flush the buffer to STT and run the turn; ignored when the buffer is empty or onboarding incomplete |
-| **TR-103** | `{"type": "select_language", "supported": [codes]}` | server→client | Sent on connect iff `User.primary_language` is null |
+| **TR-103** | `{"type": "select_language", "supported": [codes]}` | server→client | Sent on connect iff `User.primary_language` is null; `supported` = the installed languages (TR-951 `[languages]`), not all of `SUPPORTED_LANGUAGES` |
 | **TR-104** | `{"type": "language_selected", "language": code}` | client→server | Completes onboarding (FR-003); ignored once onboarding is done |
 | **TR-105** | binary frame | server→client | PCM **float32** 16 kHz synthesised audio, one frame per synthesised segment |
 | **TR-106** | `{"type": "speaking_end"}` | server→client | Sent after each turn's chunks (even when the turn produced nothing); re-enables client VAD |
@@ -182,6 +186,20 @@ design discussion, never a patch.
 - **TR-312** Turn timestamps: the user turn is stamped at `end_utterance` receipt; the
   assistant turn is stamped when the LLM stream finishes — the assistant→user delta is
   the stored response-latency proxy consumed by tutor assessment (TR-806).
+- **TR-313** GA response-language mirroring (FR-105/FR-113): `ProcessTurn` holds an
+  installed-voices map (installed language code → that language's default Kokoro voice,
+  wired by the composition root). When the active persona is the GA (fixed id),
+  onboarding is complete, and the utterance's STT-detected language is a key of the map,
+  the turn's response-language instruction becomes "respond in the detected language";
+  a detected language outside the map instead composes a primary-language instruction
+  telling the model to remind the user the language isn't installed and that re-running
+  `memai-setup` adds it. The turn's number-spelling language (TR-308) and initial
+  synthesis voice follow the effective language — the persona's registered voice for
+  that code when one exists (via `_session_voice`), else the map's voice, and the
+  persona's own default anchor when mirroring its own `response_language`. Ephemeral by
+  construction: recomputed per turn, persists nothing (INV-14). Whisper misdetection on
+  very short utterances can mis-trigger either branch — accepted, same calibration
+  posture as TR-307.
 
 ## TR-4xx — Session logs & replay
 
@@ -225,6 +243,9 @@ design discussion, never a patch.
   `mentioned`.
 - **TR-505** `SUPPORTED_LANGUAGES` = the faster-whisper ∩ Kokoro intersection,
   currently `en fr es it pt ja zh-cn` (7; `ko` dropped — no Kokoro Korean pipeline).
+  The installed languages (FR-705) are the wizard-selected subset of this list; the
+  composition root intersects `[languages].installed` with it (unsupported codes warn
+  and are ignored; an empty intersection fails startup; key absent → all supported).
 - **TR-506** GA seed: fixed UUID `00000000-0000-0000-0000-000000000001`, `is_system`,
   idempotent insert; `persona_key`/`strategy` are set at creation only and never
   updated by `save()` (like `is_system`).
@@ -377,7 +398,10 @@ only validation layer.
   auth default on Linux/macOS); `[stt] model_path, device cuda|cpu, compute_type`
   (float16↔cuda, int8↔cpu); `[tts] device` (absent → Kokoro auto-detect); `[llm]
   model="aya-expanse", ollama_host?`; `[memory] merge_threshold=0.93,
-  disambiguate_threshold=0.75`. Bootstrap-before-DB settings only (FR-701).
+  disambiguate_threshold=0.75`; `[languages] installed=[codes]` (the installed
+  languages, FR-705 — absent → all of `SUPPORTED_LANGUAGES`). Bootstrap-before-DB
+  settings only (FR-701); installed languages qualify because they are a property of
+  the installation (which TTS voices were pulled), changeable only via the wizard.
 - **TR-952** Models: STT `faster-whisper` (beam 5, auto language); LLM via Ollama
   streaming (avoid ~70B-class models — VRAM eviction/cold-reload; avoid
   reasoning models — `<think>` blocks get spoken); TTS Kokoro (one lazily-created

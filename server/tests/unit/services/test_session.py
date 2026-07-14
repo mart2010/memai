@@ -93,6 +93,7 @@ def _make_process_turn(
     persona_repo: FakePersonaRepository | None = None,
     tts: FakeTTSService | None = None,
     language_detector: FakeLanguageDetector | None = None,
+    installed_voices: dict[str, str] | None = None,
 ) -> tuple[ProcessTurn, FakeMemoryRepository, FakeTurnLogger, FakeLLMService]:
     memory_repo = FakeMemoryRepository()
     wal = FakeTurnLogger()
@@ -112,6 +113,7 @@ def _make_process_turn(
         language_detector=language_detector or FakeLanguageDetector(),
         selection_strategies=selection_strategies,
         rolling_window_size=rolling_window_size,
+        installed_voices=installed_voices,
     )
     return process_turn, memory_repo, wal, llm
 
@@ -600,6 +602,127 @@ class TestSpeakerCast:
         _, tts_odd, _ = await self._run("Hola.", voices, detected=["es"], session_id=UUID(int=3))
         assert [v for _, v, _ in tts_even.synthesised] == ["va"]
         assert [v for _, v, _ in tts_odd.synthesised] == ["vb"]
+
+
+class TestResponseLanguageMirroring:
+    """GA per-turn response-language mirroring against the installed-languages
+    contract. Ephemeral by design: nothing is persisted, persona.response_language
+    never moves (INV-14) — the effective language is recomputed from each
+    utterance's detected language."""
+
+    @pytest.mark.asyncio
+    async def test_ga_mirrors_installed_detected_language(self):
+        """Spec: FR-105, TR-313 — the user speaks an installed language; the GA is
+        instructed to answer in it and the reply is voiced by that language's
+        installed default voice, not the primary-language anchor."""
+        tts = FakeTTSService()
+        process_turn, _, _, llm = _make_process_turn(
+            detected_language=Language("es"),
+            installed_voices={"en": "af_heart", "es": "ef_dora"},
+            tts=tts,
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"hola", now=_now())
+
+        _, system_prompt = llm.calls[0]
+        assert "currently speaking the language with IETF code 'es'" in system_prompt
+        assert "Respond in that same language" in system_prompt
+        assert all(voice == "ef_dora" for _, voice, _ in tts.synthesised)
+
+    @pytest.mark.asyncio
+    async def test_mirroring_own_language_keeps_persona_voice(self):
+        """Spec: TR-313 — detected == the persona's own response language: the
+        persona's configured default anchor wins over the installed-voices map."""
+        tts = FakeTTSService()
+        process_turn, _, _, _ = _make_process_turn(
+            detected_language=Language("en"),
+            installed_voices={"en": "some_other_en_voice", "es": "ef_dora"},
+            tts=tts,
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"hello", now=_now())
+
+        assert all(voice == "af_heart" for _, voice, _ in tts.synthesised)
+
+    @pytest.mark.asyncio
+    async def test_uninstalled_language_gets_primary_language_reminder(self):
+        """Spec: FR-113, TR-313 — a detected language outside the installed set:
+        answer in the primary language, remind that the language is not installed
+        and that the setup wizard adds it; voice stays the persona anchor."""
+        tts = FakeTTSService()
+        process_turn, _, _, llm = _make_process_turn(
+            detected_language=Language("de"),
+            installed_voices={"en": "af_heart", "es": "ef_dora"},
+            tts=tts,
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"hallo", now=_now())
+
+        _, system_prompt = llm.calls[0]
+        assert "'de'" in system_prompt
+        assert "not installed" in system_prompt
+        assert "'en'" in system_prompt  # primary language carries the reminder
+        assert "memai-setup" in system_prompt
+        assert all(voice == "af_heart" for _, voice, _ in tts.synthesised)
+
+    @pytest.mark.asyncio
+    async def test_non_ga_persona_never_mirrors(self):
+        """Spec: FR-105, TR-313, INV-14 — a strategy persona (tutor) keeps its
+        configured response language whatever the user speaks; no mirror
+        instruction, no uninstalled-language reminder."""
+        process_turn, _, _, llm = _make_process_turn(
+            detected_language=Language("en"),
+            installed_voices={"en": "af_heart", "es": "ef_dora"},
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+        ctx.active_persona = _tutor_persona()
+
+        await process_turn.execute(ctx, audio=b"hello", now=_now())
+
+        _, system_prompt = llm.calls[0]
+        assert "Always respond in the language with IETF code 'es'" in system_prompt
+        assert "currently speaking" not in system_prompt
+        assert "not installed" not in system_prompt
+
+    @pytest.mark.asyncio
+    async def test_mirroring_is_ephemeral(self):
+        """Spec: INV-14, TR-313 — mirroring never writes: the GA's stored
+        response_language is untouched after a mirrored turn."""
+        process_turn, _, _, _ = _make_process_turn(
+            detected_language=Language("es"),
+            installed_voices={"en": "af_heart", "es": "ef_dora"},
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"hola", now=_now())
+
+        assert ctx.active_persona.response_language == Language("en")
+
+    @pytest.mark.asyncio
+    async def test_no_mirroring_during_onboarding_turn(self):
+        """Spec: TR-313 — the introduction turn is always delivered in the
+        just-selected primary language, never mirrored."""
+        process_turn, _, _, llm = _make_process_turn(
+            detected_language=Language("es"),
+            installed_voices={"en": "af_heart", "es": "ef_dora"},
+        )
+        use_case, _ = _make_start_session(user=User(id=uuid4(), primary_language=None))
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+        assert ctx.needs_onboarding
+
+        await process_turn.execute(ctx, audio=b"hola", now=_now())
+
+        _, system_prompt = llm.calls[0]
+        assert "currently speaking" not in system_prompt
+        assert "Always respond in the language with IETF code 'en'" in system_prompt
 
 
 class TestEndSession:

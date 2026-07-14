@@ -74,6 +74,10 @@ class ServerContext:
     # (e.g. the tutor's focus interpreter) — same model/host as every other adapter.
     llm_model: str
     llm_ollama_host: str | None
+    # Wizard-installed languages (FR-705): the subset of SUPPORTED_LANGUAGES whose TTS
+    # voices this installation actually pulled. Bounds onboarding selection (TR-103)
+    # and GA response-language mirroring (TR-313).
+    installed_languages: list[Language]
     user_repo: PSUserRepository
     persona_repo: PSPersonaRepository
     memory_brief_repo: PSMemoryBriefRepository
@@ -285,13 +289,18 @@ async def _handle(ws, ctx: ServerContext) -> None:
         turn_logger=turn_logger,
         language_detector=ctx.language_detector,
         selection_strategies=_build_selection_strategies(ctx),
+        installed_voices={
+            lang.code: KOKORO_DEFAULT_VOICES.get(lang.code, "") for lang in ctx.installed_languages
+        },
     )
     end_session = EndSession(turn_logger=turn_logger)
     complete_onboarding = CompleteOnboarding(user_repo=ctx.user_repo)
     edit_persona = EditPersona(persona_repo=ctx.persona_repo)
 
     if session.needs_onboarding:
-        supported = [lang.code for lang in SUPPORTED_LANGUAGES]
+        # Only installed languages are offered (FR-002/FR-705) — the primary language
+        # must be one whose TTS voice actually exists on this machine.
+        supported = [lang.code for lang in ctx.installed_languages]
         await ws.send(json.dumps({"type": "select_language", "supported": supported}))
 
     audio_buffer = b""
@@ -375,6 +384,24 @@ def main() -> None:
 
     cfg = load_config()
 
+    # Installed languages (FR-705): [languages].installed ∩ SUPPORTED_LANGUAGES, in
+    # SUPPORTED_LANGUAGES order. Key absent (config predates it) → everything supported,
+    # preserving pre-existing installs' behaviour. A code Memai can't support (e.g. a
+    # future wizard offering more than Kokoro covers) is ignored with a warning rather
+    # than failing startup.
+    if cfg.installed_languages:
+        installed_languages = [lang for lang in SUPPORTED_LANGUAGES if lang.code in cfg.installed_languages]
+        unsupported = sorted(set(cfg.installed_languages) - {lang.code for lang in SUPPORTED_LANGUAGES})
+        if unsupported:
+            print(f"[config] ignoring installed languages Memai does not support: {', '.join(unsupported)}")
+        if not installed_languages:
+            raise RuntimeError(
+                "[languages].installed contains no language Memai supports "
+                f"(supported: {', '.join(lang.code for lang in SUPPORTED_LANGUAGES)}) — re-run memai-setup"
+            )
+    else:
+        installed_languages = list(SUPPORTED_LANGUAGES)
+
     print("Connecting to database…")
     conn = postgres.connect(cfg.database_url)
     user_repo = PSUserRepository(conn)
@@ -404,6 +431,7 @@ def main() -> None:
         memory_disambiguate_threshold=cfg.memory_disambiguate_threshold,
         llm_model=cfg.llm_model,
         llm_ollama_host=cfg.llm_ollama_host,
+        installed_languages=installed_languages,
         user_repo=user_repo,
         persona_repo=PSPersonaRepository(conn),
         memory_brief_repo=PSMemoryBriefRepository(conn),

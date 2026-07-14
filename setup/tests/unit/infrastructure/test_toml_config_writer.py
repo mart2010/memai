@@ -39,6 +39,16 @@ def test_writes_tts_section_with_matching_device(tmp_path: Path):
     assert config["tts"]["device"] == "cpu"
 
 
+def test_writes_selected_languages_as_installed_languages(tmp_path: Path):
+    """Spec: FR-705 — the wizard's language selection is the installed-languages
+    contract the server reads back for onboarding and response mirroring."""
+    plan = InstallationPlan(languages=["en", "fr", "es"])
+
+    config = _write_and_read(tmp_path, plan)
+
+    assert config["languages"]["installed"] == ["en", "fr", "es"]
+
+
 def test_written_config_is_only_readable_by_owner(tmp_path: Path):
     # database.url may carry a plaintext password (password-auth fallback) —
     # this file must never be group/world-readable.

@@ -23,6 +23,10 @@ class ServerConfig:
     llm_ollama_host: str | None
     memory_merge_threshold: float
     memory_disambiguate_threshold: float
+    # Wizard-selected languages ([languages].installed, FR-705). Empty = key absent
+    # (config written before it existed) — the composition root then treats every
+    # SUPPORTED_LANGUAGES entry as installed.
+    installed_languages: tuple[str, ...] = ()
 
 
 def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
@@ -41,6 +45,7 @@ def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
     tts = raw.get("tts", {})
     llm = raw.get("llm", {})
     memory = raw.get("memory", {})
+    languages = raw.get("languages", {})
 
     return ServerConfig(
         ws_port=int(server.get("ws_port", 8765)),
@@ -56,4 +61,5 @@ def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
         llm_ollama_host=llm.get("ollama_host") or None,
         memory_merge_threshold=float(memory.get("merge_threshold", 0.93)),
         memory_disambiguate_threshold=float(memory.get("disambiguate_threshold", 0.75)),
+        installed_languages=tuple(languages.get("installed", [])),
     )

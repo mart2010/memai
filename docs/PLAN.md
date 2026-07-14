@@ -1977,3 +1977,60 @@ All tutor runtime machinery, buildable once Phase 11 provides content. Full desi
       wrong behavior) but a real edge case now that the tutor responds fully in
       Italian rather than code-switching into English for asides — not fixed here,
       flagged for whoever picks this up next.
+
+## Phase 13 — Installed-languages contract & GA response-language mirroring
+
+General (non-tutor) language handling review, 2026-07-14. Design settled in
+conversation: setup-selected languages = the languages the user may ever speak to
+Memai; the GA answers in whatever installed language the user is currently using;
+an uninstalled detected language gets a spoken primary-language reminder to re-run
+the wizard. Tutor-session language behaviour deliberately NOT touched — next
+discussion.
+
+- [x] Installed-languages contract (FR-705, 2026-07-14) — closed a real gap: the
+      wizard's `SelectLanguages` selection (`plan.languages`) drove voice downloads
+      but was never persisted, so the server had no idea which languages were
+      installed and offered the full hardcoded `SUPPORTED_LANGUAGES` at onboarding.
+      Now: `TomlConfigWriter.write_server_config` writes `[languages] installed`
+      to memai.toml (bootstrap-only placement is deliberate — it's a property of
+      the installation, changeable only by the wizard, needed pre-onboarding,
+      FR-701-consistent); server `load_config` reads it; composition root
+      intersects with `SUPPORTED_LANGUAGES` (unsupported codes warn+ignore, empty
+      intersection fails startup, absent key → all supported for pre-existing
+      configs); `select_language` now offers only the installed codes (FR-002/
+      TR-103).
+- [x] GA response-language mirroring (FR-105/FR-113/TR-313, same session) — the GA
+      replies in the current utterance's Whisper-detected language when it's
+      installed; detected-but-uninstalled composes a primary-language instruction
+      to remind the user + point at `memai-setup`. Implemented in `ProcessTurn`
+      (new `installed_voices` map: installed code → that language's default Kokoro
+      voice, wired from the composition root): per-turn system-prompt instruction
+      via `_compose_working_context`, number-spelling language and initial
+      synthesis voice follow the effective language (persona's registered voice
+      for the code when present, else the installed default, persona anchor when
+      mirroring its own language). GA-only (fixed-id check); strategy personas
+      keep their configured `response_language`; skipped on the onboarding turn.
+      **INV-14 reworded, not violated** (raised as a design conflict first): was
+      "no implicit language switching from detected speech", now "no *persistent*
+      language-setting change from detected speech" — mirroring is ephemeral,
+      recomputed each turn, writes nothing; `User.primary_language` and persona
+      `response_language` still move only on explicit request (FR-704 updated to
+      match). Known accepted risk: Whisper misdetection on very short utterances
+      can mis-trigger either branch — same calibration posture as TR-307.
+      **`User.secondary_languages` is now a flagged dead column**: never populated
+      anywhere, superseded by installed languages (secondary = installed −
+      primary, derivable); left in place, glossary marks it "removal pending".
+      6 new unit tests (`TestResponseLanguageMirroring`), 2 config tests, 1 setup
+      config-writer test; 226 unit green on laptop (`--ignore` the platformdirs-
+      blocked `test_config.py` module locally — it runs on the workstation).
+      Spec updated same commit: FR-002/105/113/704/705, INV-14, TR-103/313/505/951,
+      GLOSSARY (User row + *Installed languages* + *Response-language mirroring*),
+      `server/config/memai.example.toml` `[languages]` section.
+- [ ] Live smoke on the workstation: fresh onboarding shows only installed
+      languages; speak a second installed language to the GA (reply mirrors, voice
+      switches); speak an uninstalled language (primary-language reminder names
+      memai-setup). Workstation config catch-up: add `[languages] installed` to
+      its memai.toml (or leave absent for all-supported behaviour).
+- [ ] Next design discussion: language aspects of tutoring sessions (user speaking
+      the target language vs. mirroring, persona `languages` input-set semantics,
+      whether FR-113's reminder applies under a tutor persona).

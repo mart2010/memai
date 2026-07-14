@@ -1,6 +1,6 @@
 # Glossary — the Ubiquitous Language
 
-*Last verified against code: 2026-07-12*
+*Last verified against code: 2026-07-14*
 
 Terms are grouped in three tiers. Within Memai documents, code, tests, and
 conversation, these terms are used **exactly as defined here** — if a term feels
@@ -61,7 +61,9 @@ Memai's own model — the terms that carry the design. (Entities/value objects i
 
 | Term | Definition |
 |---|---|
-| **`User`** | The single human. Owns `primary_language` (null until onboarding), `secondary_languages` (switched only explicitly, INV-14), `idle_consolidation_minutes`. Single-user is a system-wide assumption (INV-3). |
+| **`User`** | The single human. Owns `primary_language` (null until onboarding; changed only explicitly, INV-14) and `idle_consolidation_minutes`. Single-user is a system-wide assumption (INV-3). (`secondary_languages` is a dead column: never populated — superseded by *installed languages*, from which secondary languages are derivable as installed − primary; removal pending.) |
+| **Installed languages** | The wizard-selected subset of `SUPPORTED_LANGUAGES` whose TTS voices were actually pulled at install time; recorded in `memai.toml` `[languages].installed` (bootstrap-only, FR-705). Bounds onboarding language selection and *response-language mirroring*; adding one means re-running `memai-setup`. |
+| **Response-language mirroring** | GA-only per-turn rule (FR-105/TR-313): reply in the current utterance's detected language when it is an installed language; an uninstalled detected language gets a primary-language reminder to re-run the wizard (FR-113). Ephemeral — recomputed every turn, nothing persisted (INV-14); strategy personas never mirror. |
 | **`AssistantPersona`** | A specialised assistant: own `system_prompt`, `response_language`, `voices` map, `speaking_rate`, and own scoped memory. Aggregate root of the persona context. |
 | **GeneralAssistant (GA)** | The one system persona (`is_system`, fixed UUID `…0001`), the cross-domain catch-all and the persona every session starts on. Cannot be removed or deactivated. |
 | **Persona switch** | Changing the `active_persona` mid-session, triggered by the LLM emitting a `[PERSONA:name]` *response prefix marker*. Deliberately distinct from the *voice cast* — switching personas changes who's conversing; the cast is which Kokoro voice narrates a given persona's own segments. |

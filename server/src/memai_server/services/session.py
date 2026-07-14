@@ -13,7 +13,9 @@ from ..domain.events import ConversationBoundaryDetected, ConversationBoundaryTy
 from ..domain.model import (
     DEFAULT_VOICE_ROLE,
     GENERAL_ASSISTANT_ID,
+    SUPPORTED_LANGUAGES,
     AssistantPersona,
+    Language,
     MemoryBrief,
     Speaker,
     Turn,
@@ -305,6 +307,8 @@ def _compose_working_context(
     wm: WorkingMemory,
     recalled_memories: list[MemoryItem],
     selected_item: SelectedItem | None = None,
+    mirror_language: Language | None = None,
+    uninstalled_language: Language | None = None,
 ) -> tuple[str, list[Message]]:
     prompt_parts: list[str] = []
     if len(wm.available_personas) > 1:
@@ -337,8 +341,27 @@ def _compose_working_context(
     if wm.needs_onboarding:
         prompt_parts.insert(0, _FIRST_LAUNCH_DIRECTIVE)
         prompt_parts.append(ONBOARDING_SCRIPT)
-    lang = wm.active_persona.response_language
-    if lang:
+    # Response-language instruction (FR-105/FR-113, TR-313). Three mutually exclusive
+    # cases, GA-only for the first two (ProcessTurn passes both overrides as None for
+    # every other persona): the user spoke an uninstalled language → answer in the
+    # primary language with a re-run-the-wizard reminder; the user spoke an installed
+    # language → mirror it this turn (ephemeral — nothing persisted, INV-14); otherwise
+    # the persona's own configured response language.
+    if uninstalled_language is not None and wm.user.primary_language is not None:
+        prompt_parts.append(
+            f"The user's last utterance was detected as the language with IETF code "
+            f"'{uninstalled_language.code}', which is not installed on this system. Respond entirely in "
+            f"the language with IETF code '{wm.user.primary_language.code}': briefly remind the user that "
+            f"'{uninstalled_language.code}' is not among the installed languages and that re-running the "
+            "memai-setup install wizard is how to add it, then answer their request as best you can."
+        )
+    elif mirror_language is not None:
+        prompt_parts.append(
+            f"The user is currently speaking the language with IETF code '{mirror_language.code}'. "
+            "Respond in that same language."
+        )
+    elif wm.active_persona.response_language:
+        lang = wm.active_persona.response_language
         prompt_parts.append(f"Always respond in the language with IETF code '{lang.code}'. Never switch language unless explicitly asked.")
     if wm.memory_brief:
         prompt_parts.append(wm.memory_brief.content)
@@ -441,6 +464,7 @@ class ProcessTurn:
         language_detector: LanguageDetector,
         selection_strategies: dict[UUID, PersonaSelectionPort] | None = None,
         rolling_window_size: int = 50,
+        installed_voices: dict[str, str] | None = None,
     ) -> None:
         self._stt = stt
         self._llm = llm
@@ -454,6 +478,15 @@ class ProcessTurn:
         # persona_id -> selection strategy; personas without one (e.g. GA) get no batch.
         self._selection_strategies = selection_strategies or {}
         self._rolling_window_size = rolling_window_size
+        # Installed-languages contract (FR-705/TR-313): language code -> that language's
+        # default TTS voice. Key membership decides whether GA mirrors a detected
+        # utterance language or delivers the not-installed reminder; the value picks the
+        # synthesis voice when mirroring into a language the persona's own voices map
+        # doesn't cover (falsy value → persona default anchor). None (tests, callers
+        # predating the contract) → every supported language, no dedicated voices.
+        if installed_voices is None:
+            installed_voices = dict.fromkeys((lang.code for lang in SUPPORTED_LANGUAGES), "")
+        self._installed_voices = installed_voices
         self._last_turn_end: float | None = None
 
     async def _next_selected_item(self, wm: WorkingMemory) -> SelectedItem | None:
@@ -521,12 +554,38 @@ class ProcessTurn:
         # as recall above.
         selected_item = await self._next_selected_item(wm)
 
+        # 5b. GA response-language mirroring (FR-105/FR-113, TR-313): the GA answers in
+        # whatever installed language the user just spoke; an uninstalled detected
+        # language gets a primary-language reminder to re-run the wizard. Per-turn and
+        # ephemeral — persona.response_language is never touched (INV-14). GA only:
+        # strategy personas (e.g. the tutor, where the user deliberately speaks the
+        # target language) keep their configured response language. Skipped on the
+        # onboarding turn — the introduction is always in the just-selected primary.
+        mirror_language: Language | None = None
+        uninstalled_language: Language | None = None
+        if (
+            wm.active_persona.id == GENERAL_ASSISTANT_ID
+            and not wm.needs_onboarding
+            and detected_language is not None
+        ):
+            if detected_language.code in self._installed_voices:
+                mirror_language = detected_language
+            else:
+                uninstalled_language = detected_language
+
         # 6. Stream the LLM response; resolve any leading [PERSONA:name]/boundary marker
         # as soon as enough tokens arrive, then synthesise each sentence via TTS as it
         # completes — instead of waiting for the entire reply before speaking a word.
-        system_prompt, messages = _compose_working_context(wm, recalled_memories, selected_item)
+        system_prompt, messages = _compose_working_context(
+            wm, recalled_memories, selected_item,
+            mirror_language=mirror_language, uninstalled_language=uninstalled_language,
+        )
         wm.needs_onboarding = False
         response_language = wm.active_persona.response_language
+        if mirror_language is not None:
+            response_language = mirror_language
+        elif uninstalled_language is not None and wm.user.primary_language is not None:
+            response_language = wm.user.primary_language
         lang_code = response_language.code if response_language else None
         speaking_rate = wm.active_persona.speaking_rate
         # Multi-voice cast: each complete segment's OWN dominant language picks the
@@ -541,6 +600,19 @@ class ProcessTurn:
         # infrastructure/language_detection.py) keeps whatever voice was already
         # active rather than force a switch.
         current_voice = wm.active_persona.default_voice
+        # Mirroring into a language other than the persona's own (TR-313): the default
+        # anchor is a voice OF the persona's language and would mangle another language's
+        # pronunciation (Kokoro voices are language-specific), so resolve the mirrored
+        # language's voice — the persona's registered voice for that code when one
+        # exists, otherwise the installation's default voice for it.
+        if mirror_language is not None and (
+            wm.active_persona.response_language is None
+            or mirror_language.code != wm.active_persona.response_language.code
+        ):
+            if mirror_language.code in wm.active_persona.voices:
+                current_voice = _session_voice(wm.active_persona, mirror_language.code, wm.session_id)
+            else:
+                current_voice = self._installed_voices.get(mirror_language.code) or current_voice
         cast_languages = tuple(k for k in wm.active_persona.voices if k != DEFAULT_VOICE_ROLE)
         native_lang = wm.user.primary_language.code if wm.user.primary_language else None
         detection_candidates = ((native_lang,) + cast_languages) if cast_languages and native_lang else ()

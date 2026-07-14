@@ -302,8 +302,10 @@ class SelectLanguages:
     is always explicit). It does NOT ask which one is primary — that choice
     happens live during your first conversation (onboarding; see CLAUDE.md
     WebSocket protocol's select_language/language_selected messages). This
-    step only decides which languages get engines/voices installed so that
-    later choice is actually possible."""
+    step decides which languages get engines/voices installed; the selection
+    is persisted to memai.toml as [languages].installed (FR-705) — the server
+    offers onboarding selection and response-language mirroring only within
+    this set, and adding a language later means re-running this wizard."""
 
     def __init__(self, catalogues: CatalogueRepository) -> None:
         self._catalogues = catalogues

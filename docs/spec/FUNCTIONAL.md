@@ -1,6 +1,6 @@
 # Functional Specification
 
-*Last verified against code: 2026-07-12*
+*Last verified against code: 2026-07-14*
 
 Externally observable behaviour, by capability. Terms per [GLOSSARY.md](GLOSSARY.md);
 ID and wording conventions per [SPEC.md](SPEC.md). Technical contracts (protocol,
@@ -11,8 +11,8 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
 - **FR-001** On first server start, the single `User` row must be created automatically
   (no manual SQL); `primary_language` starts null.
 - **FR-002** On client connect, when `User.primary_language` is null the server must
-  send `select_language` listing the supported language codes; the client must render a
-  terminal selection prompt and reply `language_selected` with the chosen code.
+  send `select_language` listing the installed language codes (FR-705); the client must
+  render a terminal selection prompt and reply `language_selected` with the chosen code.
 - **FR-003** Completing language selection must persist the primary language and set the
   GeneralAssistant's `response_language` and default voice to the language's default
   Kokoro voice (fallback `af_heart` for unknown codes).
@@ -37,7 +37,11 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
 - **FR-104** The reply must be synthesised and sent **incrementally** — sentence by
   sentence as the LLM streams — not after the full response completes.
 - **FR-105** The assistant must respond in the active persona's `response_language`
-  (instructed via system prompt) and speak at the persona's `speaking_rate`.
+  (instructed via system prompt) and speak at the persona's `speaking_rate` — with one
+  exception: the GeneralAssistant mirrors the user, replying in the current utterance's
+  detected language whenever it is an installed language (FR-705). Mirroring is per-turn
+  and ephemeral — no stored setting moves (INV-14) — and never applies to strategy
+  personas.
 - **FR-106** Spoken text must be cleaned for TTS: markdown emphasis/headers/rules and
   emoji stripped; digit sequences spelled out as words for languages where reliable
   (en, fr, es, it, pt), left to the TTS engine otherwise.
@@ -59,6 +63,10 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   `[TOPIC_BREAK]` splits conversations mid-session; `[TOPIC_CONTINUATION]` (valid only
   on a session's first turn) declares the session a continuation of the previous
   conversation. Markers are never spoken.
+- **FR-113** When the GeneralAssistant is active and the detected utterance language is
+  not an installed language, the reply must be in the user's primary language and must
+  remind the user that the language is not installed and that re-running the install
+  wizard (`memai-setup`) is how to add it.
 
 ## FR-2xx — Personas
 
@@ -196,5 +204,13 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
 - **FR-703** The client must support both deployments from one config file: `ssh_host`
   present → auto-establish (and auto-restart) an SSH tunnel before connecting;
   absent → connect to the local server directly.
-- **FR-704** Switching to a secondary language must only ever happen on explicit user
-  request (INV-14) — never inferred from detected speech language.
+- **FR-704** Persistent language settings — `User.primary_language` and any persona's
+  `response_language` — must only ever change on explicit user request (INV-14), never
+  inferred from detected speech language. The GeneralAssistant's per-turn response
+  mirroring (FR-105) is ephemeral and writes nothing.
+- **FR-705** The install wizard must record the selected languages in `memai.toml`
+  (`[languages].installed`) — the **installed languages**: the wizard-selected subset
+  of supported languages whose TTS voices actually exist on the machine. Onboarding
+  language selection (FR-002) and response mirroring (FR-105/FR-113) are bounded by
+  this set; adding a language means re-running `memai-setup`. A config without the key
+  (written before it existed) treats every supported language as installed.

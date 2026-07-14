@@ -54,6 +54,15 @@ device = "cuda"
 model = "aya-expanse"
 # ollama_host = "http://localhost:11434"  # uncomment if Ollama is not on localhost
 
+[languages]
+# The installed-languages contract (FR-705): the languages selected during
+# memai-setup, i.e. the ones whose TTS voices were actually pulled. Bounds the
+# onboarding primary-language selection and the GeneralAssistant's per-turn
+# response-language mirroring; a detected language outside this list triggers a
+# spoken reminder to re-run the wizard. Omitting the section treats every
+# supported language (SUPPORTED_LANGUAGES) as installed.
+installed = ["en", "fr", "es", "it", "pt", "ja", "zh-cn"]
+
 [memory]
 # Cosine similarity thresholds for the consolidation upsert decision (see CLAUDE.md's
 # "Upsert similarity threshold" section). Above merge_threshold: auto-merge into the

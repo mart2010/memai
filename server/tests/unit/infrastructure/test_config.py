@@ -49,3 +49,28 @@ class TestLoadConfigComputeDevice:
 
         assert cfg.stt_device == "cpu"
         assert cfg.stt_compute_type == "int8"
+
+
+class TestLoadConfigInstalledLanguages:
+    def test_installed_languages_read_from_languages_section(self, tmp_path: Path):
+        """Spec: TR-951, FR-705"""
+        path = _write_toml(
+            tmp_path,
+            """
+            [languages]
+            installed = ["en", "fr"]
+            """,
+        )
+
+        cfg = load_config(path)
+
+        assert cfg.installed_languages == ("en", "fr")
+
+    def test_installed_languages_empty_when_section_absent(self, tmp_path: Path):
+        """Spec: TR-951 — configs written before the key existed: empty tuple, the
+        composition root then treats all of SUPPORTED_LANGUAGES as installed."""
+        path = _write_toml(tmp_path, "")
+
+        cfg = load_config(path)
+
+        assert cfg.installed_languages == ()
