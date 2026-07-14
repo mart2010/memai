@@ -49,9 +49,10 @@ silently work around:
 
 ## Session start
 
-If `docs/PLAN.md` exists, read it first — project status, decisions, next task. Update
-its task markers (`[ ]`/`[~]`/`[x]`) as work progresses. PLAN.md is the phase history;
-the spec is the present tense.
+If `docs/PLAN.md` exists, read it first — project status and open work. Update its task
+markers (`[ ]`/`[~]`/`[x]`) as work progresses. The phase-by-phase history (findings,
+verification records) is archived in `docs/archive/PLAN_phases_1-13.md`; the spec is
+the present tense.
 
 ## Environment & running
 

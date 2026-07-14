@@ -116,8 +116,10 @@ against code* date in each document header for this purpose.
 - **CLAUDE.md** keeps session working rules (toolchain, testing style, hard reminders)
   and points here for all behavioural/architectural facts. Where the two disagree, the
   spec wins — and the disagreement is a bug to fix immediately.
-- **docs/PLAN.md** is the historical phase log (what was built when, findings). The
-  spec is the present tense; PLAN.md is the past tense.
+- **docs/PLAN.md** tracks the still-open work; the historical phase log (what was
+  built when, findings) is frozen in **docs/archive/PLAN_phases_1-13.md** — references
+  elsewhere to "PLAN.md Phase N" resolve there. The spec is the present tense; the
+  plan history is the past tense.
 - **docs/BRIEF_*.md** (and `docs/archive/`) record design rationale — the *why* behind
   requirements. The spec states the *what*; a requirement may point at a brief for
   rationale but must stand alone.
