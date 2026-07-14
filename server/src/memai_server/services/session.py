@@ -257,10 +257,18 @@ _EMOJI = re.compile(
 )
 
 
+# User turns are rendered to the LLM with a [lang:code] prefix (FR-114/TR-303), so a
+# model may mimic the convention in its own output — strip any such tag before TTS,
+# the same never-spoken rule as every other bracket marker.
+_LANG_TAG = re.compile(r"\[lang:[^\]]{0,20}\]\s*", re.IGNORECASE)
+
+
 def _strip_markdown(text: str) -> str:
-    """Drop markdown headers/rules/emphasis/code markers and emoji — LLMs emit them
-    despite instructions not to, and TTS either reads them aloud literally (e.g.
-    "hash", "asterisk") or renders them as unpronounceable glyphs."""
+    """Drop markdown headers/rules/emphasis/code markers, emoji, and mimicked
+    [lang:] tags — LLMs emit them despite instructions not to, and TTS either reads
+    them aloud literally (e.g. "hash", "asterisk") or renders them as
+    unpronounceable glyphs."""
+    text = _LANG_TAG.sub("", text)
     text = _MARKDOWN_HRULE.sub("", text)
     text = _MARKDOWN_HEADER.sub("", text)
     text = _MARKDOWN_EMPHASIS.sub("", text)
@@ -290,6 +298,18 @@ literal digits inconsistently, especially outside English."""
             return match.group(0)
 
     return _NUMBER.sub(_replace, text)
+
+
+def _render_turn_content(turn: Turn) -> str:
+    """User turns carry their STT-detected language into the LLM context as a
+    [lang:code] prefix (FR-114): during a tutor session it tells the model whether
+    the learner produced the target language, asked in their own, or — a third
+    language tag — likely stumbled on pronunciation; for the GA it is the evidence
+    behind the mirroring instruction. Rendering-only: stored turn content and
+    session logs stay clean (the log's "language" field already carries the code)."""
+    if turn.speaker == Speaker.USER and turn.language is not None:
+        return f"[lang:{turn.language.code}] {turn.content}"
+    return turn.content
 
 
 def _format_memory_item(item: MemoryItem) -> str:
@@ -360,7 +380,12 @@ def _compose_working_context(
             f"The user is currently speaking the language with IETF code '{mirror_language.code}'. "
             "Respond in that same language."
         )
-    elif wm.active_persona.response_language:
+    elif wm.active_persona.response_language and not any(
+        k != DEFAULT_VOICE_ROLE for k in wm.active_persona.voices
+    ):
+        # Suppressed for cast personas (non-default voices keys): a two-teacher cast
+        # deliberately speaks two languages per reply, and a "respond only in X"
+        # directive would fight the persona's own prompt (which owns language use).
         lang = wm.active_persona.response_language
         prompt_parts.append(f"Always respond in the language with IETF code '{lang.code}'. Never switch language unless explicitly asked.")
     if wm.memory_brief:
@@ -373,7 +398,7 @@ def _compose_working_context(
     messages: list[Message] = []
 
     if wm.session_tail:
-        tail_text = "\n".join(f"{t.speaker.value}: {t.content}" for t in wm.session_tail)
+        tail_text = "\n".join(f"{t.speaker.value}: {_render_turn_content(t)}" for t in wm.session_tail)
         messages.append(Message(role="system", content=f"Tail of previous session:\n{tail_text}"))
 
     if wm.rolling_summary:
@@ -383,7 +408,7 @@ def _compose_working_context(
         ))
     for turn in wm.recent_turns:
         role = "user" if turn.speaker == Speaker.USER else "assistant"
-        messages.append(Message(role=role, content=turn.content))
+        messages.append(Message(role=role, content=_render_turn_content(turn)))
 
     if selected_item is not None:
         # Same per-turn injection mechanism as RAG recall: a role-tagged context message,

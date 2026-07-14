@@ -58,6 +58,23 @@ Author **one main bundle per target language**, never per language *pair*:
   language, so the persona's own prompt only needs to say which language each
   speaker writes in, never a tag to emit (see `docs/spec/TECHNICAL.md` TR-305).
 
+## Language handling at runtime (what your prompt can rely on)
+
+- **The target language must be installed on the user's machine** — install fails
+  otherwise, naming the language and pointing at `memai-setup` (FR-609). You don't need
+  to defend against a missing voice in the prompt.
+- **Cast personas get no generic "respond in X" instruction** (FR-105): if your persona
+  declares cast voices, its system prompt fully owns language use — no override clause
+  needed, and `response_language` has no runtime effect for it.
+- **Every learner turn arrives prefixed with a `[lang:code]` tag** (FR-114) — the
+  STT-detected language of their speech. Worth a short prompt section telling the model
+  how to read it: target-language tag = production attempt, learner's-own-language tag =
+  question/aside, any *third* language tag = likely pronunciation stumble (the learner's
+  accent confused the recognizer) — re-elicit gently, never scold. Tell the model the
+  tags are inbound-only: never write one, never mention them aloud (a mimicked tag is
+  stripped before TTS, but don't rely on it). See `bundles/italian-a0-starter` for the
+  reference wording.
+
 ## Category taxonomy (tutor vocabulary)
 
 `category` is free text interpreted by the owning persona; the tutor's settled taxonomy:

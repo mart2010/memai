@@ -41,7 +41,9 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   exception: the GeneralAssistant mirrors the user, replying in the current utterance's
   detected language whenever it is an installed language (FR-705). Mirroring is per-turn
   and ephemeral — no stored setting moves (INV-14) — and never applies to strategy
-  personas.
+  personas. Cast personas (non-default `voices` keys) receive **no** generic
+  response-language instruction at all: a two-teacher cast deliberately speaks two
+  languages per reply, and language use is owned by the persona's own system prompt.
 - **FR-106** Spoken text must be cleaned for TTS: markdown emphasis/headers/rules and
   emoji stripped; digit sequences spelled out as words for languages where reliable
   (en, fr, es, it, pt), left to the TTS engine otherwise.
@@ -67,6 +69,14 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   not an installed language, the reply must be in the user's primary language and must
   remind the user that the language is not installed and that re-running the install
   wizard (`memai-setup`) is how to add it.
+- **FR-114** Every user turn must be rendered into the LLM context prefixed with its
+  detected language as a `[lang:code]` tag (all personas) — during a tutor session the
+  tag tells the model whether the learner produced the target language, spoke their own,
+  or (a third language) likely stumbled on pronunciation; for the GA it is the evidence
+  behind mirroring (FR-105). Tags are context-rendering only: stored turns and session
+  logs stay clean (the log's `language` field carries the code, TR-402), and a
+  `[lang:]` tag mimicked by the model in its response is stripped before TTS, never
+  spoken.
 
 ## FR-2xx — Personas
 
@@ -192,6 +202,11 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
 - **FR-608** A malformed bundle must be rejected as a whole with a format error naming
   the offence (missing manifest keys, unsupported `format_version`, unknown `[persona]`
   keys, malformed items); nothing partial is installed from a bundle that fails parsing.
+- **FR-609** Installing a persona-creating bundle must fail with a clear error — naming
+  the missing language and pointing at `memai-setup` — when any of the bundle's target
+  languages is not an installed language (FR-705): the session language pair is only
+  speakable when the target's TTS voices actually exist on the machine, and that must
+  surface at install time, not as a missing-voice failure mid-lesson.
 
 ## FR-7xx — Configuration & deployment
 

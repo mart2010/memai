@@ -20,6 +20,7 @@ from ..domain.model import (
     Language,
     MemoryType,
     Procedure,
+    resolve_installed_languages,
 )
 from .ports import (
     BundleInstallLog,
@@ -60,6 +61,10 @@ class InstallPersonaBundle:
         # Language -> Kokoro voice, same derivation as onboarding (the composition root
         # wires KOKORO_DEFAULT_VOICES); used only when [persona.voices] omits "default".
         default_voice_for: Callable[[Language], str],
+        # The installed languages (FR-705): a bundle whose target language has no TTS
+        # voice on this machine must fail at install, not at lesson time (FR-609).
+        # None (older callers, tests) → every supported language.
+        installed_languages: list[Language] | None = None,
     ) -> None:
         self._bundle_source = bundle_source
         self._persona_repo = persona_repo
@@ -68,6 +73,9 @@ class InstallPersonaBundle:
         self._unit_of_work = unit_of_work
         self._install_log = install_log
         self._default_voice_for = default_voice_for
+        self._installed_languages = (
+            installed_languages if installed_languages is not None else resolve_installed_languages(())
+        )
 
     def execute(self, path: Path) -> BundleInstallResult:
         bundle = self._bundle_source.load(path)  # raises BundleFormatError on malformation
@@ -180,6 +188,18 @@ class InstallPersonaBundle:
             raise BundleInstallError(
                 "cannot create the persona: no user with a primary language exists yet — "
                 "complete onboarding (first conversation) before installing bundles"
+            )
+
+        # A persona's target languages must be installed languages (FR-609): the
+        # session language pair is only speakable when the target's TTS voices were
+        # actually pulled at setup — fail here with a pointer at the wizard, not at
+        # lesson time with a missing-voice synthesis error. The primary language is
+        # not checked: onboarding selected it from the installed set by construction.
+        missing = [lang.code for lang in definition.languages if lang not in self._installed_languages]
+        if missing:
+            raise BundleInstallError(
+                f"cannot create the persona: bundle language(s) {', '.join(missing)} are not "
+                "installed on this system — re-run memai-setup to add them, then install again"
             )
 
         # Pair-independence: the bundle never embeds learner-language values, so the

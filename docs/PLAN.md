@@ -2026,11 +2026,57 @@ discussion.
       Spec updated same commit: FR-002/105/113/704/705, INV-14, TR-103/313/505/951,
       GLOSSARY (User row + *Installed languages* + *Response-language mirroring*),
       `server/config/memai.example.toml` `[languages]` section.
+- [x] Tutor-session language handling — "tag inbound, detect outbound" (2026-07-14,
+      same session). Design settled in conversation: a tutor session happens in
+      exactly TWO languages — the guide language (primary) and the learned language
+      — so `AssistantPersona.languages` finally gained its runtime meaning as the
+      **session language pair** (glossary term added; model.py comment updated;
+      bundle target list + primary, per the existing TR-904 install rule). A third
+      detected language during a lesson is read as a *pronunciation-stumble signal*
+      (the learner's accent confused Whisper), not a language switch — soft
+      evidence interpreted by the tutor's prompt, never hard logic (short clean
+      utterances misdetect too; richer signals — faster-whisper's per-segment
+      avg_logprob/no_speech_prob/language-probability distribution, currently
+      discarded — noted as a future exploration).
+      **Inbound tags (FR-114)**: every user turn is rendered into the LLM context
+      as `[lang:code] <content>` (`_render_turn_content`), for ALL personas —
+      tutor reads production/aside/stumble evidence, GA gets the visible basis of
+      its mirroring instruction. Rendering-only: stored turns and JSONL logs stay
+      clean (the log's separate `language` field already served offline
+      assessment). Applied to recent turns and the session tail; language-less
+      turns (old logs) render untagged. Defensive strip: a model mimicking the
+      convention in its output has `[lang:...]` removed before TTS/logging
+      (`_LANG_TAG` in `_strip_markdown`, TR-308).
+      **Outbound stays detection (user's proposal amended)**: the idea of having
+      the LLM language-tag its own response for TTS was rejected on the Phase 12
+      evidence — `[SPEAKER:]` tag emission was ~50% reliable and was retired for
+      per-segment `py3langid` detection (5/5 live); per-sentence tagging is
+      strictly more demanding, and the detection process already exists. Further
+      changes here wait for real tutoring sessions.
+      **Cast suppression (FR-105)**: personas with cast voices (non-default
+      `voices` keys) get NO generic "Always respond in X" instruction — it fought
+      the two-teacher design and the bundle prompt had to out-rank it in prose;
+      that override clause is now deleted from `bundles/italian-a0-starter` and
+      the prompt gained a "reading the learner's turns" section for the tags.
+      `response_language` has no runtime effect for cast personas (glossary
+      updated).
+      **Install guard (FR-609)**: `InstallPersonaBundle` fails persona creation
+      when a bundle target language isn't installed (clear error naming the
+      language + memai-setup), wired through `bundle_cli` via the new
+      `resolve_installed_languages()` domain helper (server.py refactored onto the
+      same helper). AUTHORING_BUNDLES.md gained a "Language handling at runtime"
+      section. 7 new unit tests (233 green on laptop, `--ignore` platformdirs
+      module); spec: FR-105/114/609, TR-303/308/904, glossary (AssistantPersona,
+      Session language pair, Language tag).
 - [ ] Live smoke on the workstation: fresh onboarding shows only installed
       languages; speak a second installed language to the GA (reply mirrors, voice
       switches); speak an uninstalled language (primary-language reminder names
-      memai-setup). Workstation config catch-up: add `[languages] installed` to
-      its memai.toml (or leave absent for all-supported behaviour).
-- [ ] Next design discussion: language aspects of tutoring sessions (user speaking
-      the target language vs. mirroring, persona `languages` input-set semantics,
-      whether FR-113's reminder applies under a tutor persona).
+      memai-setup); tutor lesson — confirm `[lang:]` tags appear in the composed
+      context (tutor-debug), the tutor treats a wrong-language attempt gently, and
+      no tag is ever spoken. Workstation config catch-up: add `[languages]
+      installed` to its memai.toml (or leave absent for all-supported behaviour).
+- [x] Next design discussion: language aspects of tutoring sessions — RESOLVED
+      2026-07-14, see the "tag inbound, detect outbound" item above. Remaining
+      language follow-ups deliberately wait for real tutoring sessions (user's
+      call): pronunciation-signal mining (Whisper confidence fields), any
+      constrained-STT experiment, `User.secondary_languages` column removal.

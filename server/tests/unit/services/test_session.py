@@ -725,6 +725,111 @@ class TestResponseLanguageMirroring:
         assert "Always respond in the language with IETF code 'en'" in system_prompt
 
 
+class TestLanguageTags:
+    """User-turn [lang:code] tags — rendered into the LLM context for every persona
+    (FR-114): the tutor reads them as production/aside/pronunciation-stumble
+    evidence, the GA as the basis of its mirroring instruction. Rendering-only:
+    stored content and logs stay clean, and a mimicked tag in the response is
+    stripped before TTS like every other bracket marker."""
+
+    @pytest.mark.asyncio
+    async def test_user_turn_rendered_with_language_tag(self):
+        """Spec: FR-114, TR-303"""
+        process_turn, _, wal, llm = _make_process_turn(
+            stt_transcript="vorrei un caffè", detected_language=Language("it"),
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"a", now=_now())
+
+        messages, _ = llm.calls[0]
+        user_messages = [m for m in messages if m.role == "user"]
+        assert user_messages[-1].content == "[lang:it] vorrei un caffè"
+        # Rendering-only: the stored/logged turn content carries no tag.
+        logged_user_turns = [t for _, t in wal.written if t.speaker == Speaker.USER]
+        assert logged_user_turns[-1].content == "vorrei un caffè"
+
+    @pytest.mark.asyncio
+    async def test_session_tail_user_turns_tagged_assistant_untagged(self):
+        """Spec: FR-114, TR-303"""
+        now = _now()
+        previous = SessionInfo(session_id=uuid4(), ended_at=now - timedelta(hours=1), clean_exit=True)
+        tail = [
+            Turn(timestamp=now, speaker=Speaker.USER, content="ciao", language=Language("it")),
+            Turn(timestamp=now, speaker=Speaker.ASSISTANT, content="Ciao! Ben fatto."),
+        ]
+        process_turn, _, _, llm = _make_process_turn()
+        use_case, _ = _make_start_session(previous=previous, tail_turns=tail)
+        ctx = use_case.execute(session_id=uuid4(), started_at=now)
+
+        await process_turn.execute(ctx, audio=b"a", now=now)
+
+        messages, _ = llm.calls[0]
+        tail_message = next(m for m in messages if "Tail of previous session" in m.content)
+        assert "user: [lang:it] ciao" in tail_message.content
+        assert "assistant: Ciao! Ben fatto." in tail_message.content
+
+    @pytest.mark.asyncio
+    async def test_user_turn_without_language_rendered_untagged(self):
+        """Spec: FR-114 — no detected language, no tag (e.g. tail lines from logs
+        written before the language field existed)."""
+        now = _now()
+        previous = SessionInfo(session_id=uuid4(), ended_at=now - timedelta(hours=1), clean_exit=True)
+        tail = [Turn(timestamp=now, speaker=Speaker.USER, content="hello there")]
+        process_turn, _, _, llm = _make_process_turn()
+        use_case, _ = _make_start_session(previous=previous, tail_turns=tail)
+        ctx = use_case.execute(session_id=uuid4(), started_at=now)
+
+        await process_turn.execute(ctx, audio=b"a", now=now)
+
+        messages, _ = llm.calls[0]
+        tail_message = next(m for m in messages if "Tail of previous session" in m.content)
+        assert "user: hello there" in tail_message.content
+        assert "[lang:" not in tail_message.content
+
+    @pytest.mark.asyncio
+    async def test_mimicked_lang_tag_in_response_is_never_spoken(self):
+        """Spec: FR-114, TR-308 — a model imitating the inbound tag convention must
+        not have the tag read aloud or logged."""
+        tts = FakeTTSService()
+        process_turn, _, _, _ = _make_process_turn(
+            llm_response="[lang:en] Hello there. [lang:it] Ciao a tutti.", tts=tts,
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        result = await process_turn.execute(ctx, audio=b"a", now=_now())
+
+        assert "[lang:" not in result.assistant_content
+        assert all("[lang:" not in text for text, _, _ in tts.synthesised)
+        assert "Hello there." in result.assistant_content
+        assert "Ciao a tutti." in result.assistant_content
+
+    @pytest.mark.asyncio
+    async def test_cast_persona_gets_no_generic_response_language_instruction(self):
+        """Spec: FR-105, TR-303 — a two-teacher cast deliberately speaks two
+        languages per reply; the persona's own prompt owns language use, so the
+        generic 'always respond in X' directive is suppressed."""
+        now = _now()
+        cast_tutor = AssistantPersona(
+            id=uuid4(), name="Tutor", system_prompt="Teach Italian.",
+            languages=[Language("it"), Language("en")], response_language=Language("it"),
+            voices={"default": "vd", "it": "vt"}, is_system=False,
+            created_at=now, updated_at=now, strategy="language_tutor",
+        )
+        process_turn, _, _, llm = _make_process_turn()
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=now)
+        ctx.active_persona = cast_tutor
+
+        await process_turn.execute(ctx, audio=b"a", now=now)
+
+        _, system_prompt = llm.calls[0]
+        assert "Always respond in the language" not in system_prompt
+        assert "currently speaking" not in system_prompt  # and no GA mirroring either
+
+
 class TestEndSession:
     def test_turn_logger_closed_with_clean_exit(self):
         """Spec: TR-402"""

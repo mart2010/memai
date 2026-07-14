@@ -14,6 +14,7 @@ from pathlib import Path
 
 import truststore
 
+from .domain.model import resolve_installed_languages
 from .infrastructure import postgres
 from .infrastructure.bundle_toml import TomlPersonaBundleSource
 from .infrastructure.config import load_config
@@ -73,6 +74,9 @@ def _install(path: Path) -> int:
         # Same native-teacher derivation as onboarding (see server.py's language_selected
         # handler) — used only when the bundle's [persona.voices] omits "default".
         default_voice_for=lambda language: KOKORO_DEFAULT_VOICES.get(language.code, "af_heart"),
+        # Same installed-languages resolution as the server's composition root (FR-705):
+        # a bundle targeting a language with no TTS voice on this machine fails here.
+        installed_languages=resolve_installed_languages(cfg.installed_languages),
     )
 
     print(f"Installing bundle from {path}…")

@@ -99,6 +99,7 @@ class _Harness:
         bundle: PersonaBundle,
         user: User | None = "unset",
         memory_repo: FakeMemoryRepository | None = None,
+        installed_languages: list[Language] | None = None,
     ) -> None:
         if user == "unset":
             user = User(id=uuid4(), primary_language=Language("fr"))
@@ -120,6 +121,7 @@ class _Harness:
             unit_of_work=self.unit_of_work,
             install_log=self.install_log,
             default_voice_for=self._derive_voice,
+            installed_languages=installed_languages,
         )
 
     def _derive_voice(self, language: Language) -> str:
@@ -190,6 +192,27 @@ class TestPersonaCreation:
         harness = _Harness(_bundle(persona=_definition()), user=User(id=uuid4(), primary_language=None))
         with pytest.raises(BundleInstallError, match="onboarding"):
             harness.use_case.execute(BUNDLE_PATH)
+
+    def test_fails_when_target_language_not_installed(self):
+        """Spec: FR-609, TR-904 — a bundle whose target language has no TTS voice on
+        this machine fails at install with a pointer at the wizard, not at lesson
+        time with a missing-voice synthesis error."""
+        harness = _Harness(
+            _bundle(persona=_definition()),  # target: es
+            installed_languages=[Language("en"), Language("fr")],
+        )
+        with pytest.raises(BundleInstallError, match="es.*memai-setup"):
+            harness.use_case.execute(BUNDLE_PATH)
+        assert harness.persona_repo.get_by_key(PERSONA_KEY) is None  # nothing created
+
+    def test_installs_when_target_language_installed(self):
+        """Spec: FR-609"""
+        harness = _Harness(
+            _bundle(persona=_definition()),
+            installed_languages=[Language("es"), Language("fr")],
+        )
+        result = harness.use_case.execute(BUNDLE_PATH)
+        assert result.persona_created is True
 
 
 class TestExistingPersonaAttach:

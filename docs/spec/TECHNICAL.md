@@ -136,9 +136,14 @@ design discussion, never a patch.
   turn → rolling-summary check.
 - **TR-303** Working-context composition (`_compose_working_context`): system prompt =
   persona prompt ⊕ onboarding directives (first launch) ⊕ response-language
-  instruction ⊕ memory brief ⊕ recalled memories ⊕ persona list (when > 1). Messages =
-  session tail (as one system message) ⊕ rolling summary ⊕ recent turns; a selected
-  item is injected as a system message immediately before the current user turn.
+  instruction (mirroring/uninstalled variants per TR-313; suppressed entirely for cast
+  personas — non-default `voices` keys — whose own prompt owns language use, FR-105) ⊕
+  memory brief ⊕ recalled memories ⊕ persona list (when > 1). Messages = session tail
+  (as one system message) ⊕ rolling summary ⊕ recent turns; a selected item is injected
+  as a system message immediately before the current user turn. User turns (recent and
+  tail) are rendered with their detected-language `[lang:code]` prefix
+  (`_render_turn_content`, FR-114) — rendering-only, stored content untouched; a turn
+  without a recorded language renders untagged.
 - **TR-304** Response prefix grammar: `[PERSONA:name]` and `[FOCUS: wish]` are
   scanned for anywhere within the first `_PREFIX_SCAN_WINDOW_CHARS` characters of the
   response (not only at position zero — real models routinely preface a tag-bearing
@@ -172,9 +177,10 @@ design discussion, never a patch.
 - **TR-308** Sentence-level synthesis: segments split on `.` `!` `?`, including
   retroactively splitting a multi-sentence chunk that arrives in one piece (e.g. via
   TR-304's force-resolve) into its constituent sentences rather than only checking
-  whether the whole chunk ends on one; each segment is markdown/emoji-stripped and
-  number-spelled (num2words for en/fr/es/it/pt only) before TTS; empty segments are
-  skipped.
+  whether the whole chunk ends on one; each segment is markdown/emoji-stripped,
+  cleansed of any mimicked `[lang:]` tag (FR-114 — models can imitate the inbound
+  user-turn convention), and number-spelled (num2words for en/fr/es/it/pt only) before
+  TTS; empty segments are skipped.
 - **TR-309** Rolling summary: when `total_turn_count % 50 == 0`, the oldest 25 recent
   turns are LLM-summarised into (or merged with) `rolling_summary` and dropped from the
   window.
@@ -377,9 +383,12 @@ only validation layer.
   `User.primary_language` via the composition root's language→voice map), optional
   `settings` (copied verbatim) and `strategy`. Unknown keys are rejected.
 - **TR-904** Install algorithm: resolve persona by `persona_key` (create from
-  `[persona]` when absent — requires completed onboarding; error when neither exists;
-  existing persona + `[persona]` → notice, definition ignored). Persona `languages` =
-  bundle list + primary language appended iff absent. Then per lesson, one transaction;
+  `[persona]` when absent — requires completed onboarding AND every bundle target
+  language installed (FR-609, checked against `resolve_installed_languages` of the same
+  `[languages].installed` the server reads); error when neither persona nor definition
+  exists; existing persona + `[persona]` → notice, definition ignored). Persona
+  `languages` = bundle list + primary language appended iff absent — the *session
+  language pair*. Then per lesson, one transaction;
   per item, upsert as `UNSEEN` with same-run sibling exclusion (separate id sets per
   memory type). A failed run is recovered by re-running (committed lessons merge via
   TR-604).

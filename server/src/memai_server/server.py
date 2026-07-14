@@ -13,7 +13,13 @@ import psycopg
 import truststore
 import websockets
 
-from .domain.model import DEFAULT_VOICE_ROLE, Language, SUPPORTED_LANGUAGES, User
+from .domain.model import (
+    DEFAULT_VOICE_ROLE,
+    SUPPORTED_LANGUAGES,
+    Language,
+    User,
+    resolve_installed_languages,
+)
 from .infrastructure import postgres
 from .infrastructure.config import load_config
 from .infrastructure.embedding import SentenceTransformerEmbeddingService
@@ -389,8 +395,8 @@ def main() -> None:
     # preserving pre-existing installs' behaviour. A code Memai can't support (e.g. a
     # future wizard offering more than Kokoro covers) is ignored with a warning rather
     # than failing startup.
+    installed_languages = resolve_installed_languages(cfg.installed_languages)
     if cfg.installed_languages:
-        installed_languages = [lang for lang in SUPPORTED_LANGUAGES if lang.code in cfg.installed_languages]
         unsupported = sorted(set(cfg.installed_languages) - {lang.code for lang in SUPPORTED_LANGUAGES})
         if unsupported:
             print(f"[config] ignoring installed languages Memai does not support: {', '.join(unsupported)}")
@@ -399,8 +405,6 @@ def main() -> None:
                 "[languages].installed contains no language Memai supports "
                 f"(supported: {', '.join(lang.code for lang in SUPPORTED_LANGUAGES)}) — re-run memai-setup"
             )
-    else:
-        installed_languages = list(SUPPORTED_LANGUAGES)
 
     print("Connecting to database…")
     conn = postgres.connect(cfg.database_url)

@@ -26,6 +26,16 @@ SUPPORTED_LANGUAGES: list[Language] = [
 ]
 
 
+def resolve_installed_languages(installed_codes: tuple[str, ...] | list[str]) -> list[Language]:
+    """The installed languages (FR-705): the wizard-selected codes intersected with
+    SUPPORTED_LANGUAGES, in SUPPORTED_LANGUAGES order. Empty codes (config predates
+    the [languages] key) → everything supported. Unsupported codes are silently
+    dropped here — callers that want to warn or fail compare the result themselves."""
+    if not installed_codes:
+        return list(SUPPORTED_LANGUAGES)
+    return [lang for lang in SUPPORTED_LANGUAGES if lang.code in installed_codes]
+
+
 class EngagementLevel(IntEnum):
     UNSEEN = 0
     MENTIONED = 1
@@ -77,7 +87,10 @@ class AssistantPersona:
     id: UUID
     name: str
     system_prompt: str
-    languages: list[Language]  # languages this persona accepts as input; empty = primary language only
+    # The session language pair(s): input languages expected while this persona is
+    # active (a tutor's bundle target list + the primary language, appended at install).
+    # Empty = no restriction (the GA accepts any installed language).
+    languages: list[Language]
     response_language: Language  # language this persona responds in; drives TTS voice selection
     voices: dict[str, str]      # IETF language code (or DEFAULT_VOICE_ROLE) -> Kokoro voice identifier
     is_system: bool
