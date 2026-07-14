@@ -53,6 +53,40 @@ def test_password_auth_builds_dsn_from_defaults():
     assert plan.database_url == "postgresql://memai:@localhost:5432/memai"
 
 
+def test_rerun_offers_keep_current_connection_as_default():
+    """FR-706 — re-run pre-fill: the recorded DSN is offered first (password
+    masked in the label), is the default, and is still verified when kept."""
+    verifier = FakeConnectionVerifier(postgres_ok=True, pgvector_ok=True)
+    step = ConfigureDatabaseConnection(verifier)
+    prompter = FakeWizardPrompter(select_answers=["keep"])
+    plan = InstallationPlan(
+        database_url="postgresql://memai:s3cret@dbhost:5432/memai", from_existing_install=True
+    )
+
+    step.run(plan, prompter)
+
+    _, choices, default = prompter.select_calls[0]
+    assert choices[0].value == "keep"
+    assert "s3cret" not in choices[0].label
+    assert "***" in choices[0].label
+    assert default == "keep"
+    assert plan.database_url == "postgresql://memai:s3cret@dbhost:5432/memai"
+    assert verifier.verified_urls == ["postgresql://memai:s3cret@dbhost:5432/memai"]
+
+
+def test_fresh_run_has_no_keep_option():
+    verifier = FakeConnectionVerifier(postgres_ok=True, pgvector_ok=True)
+    step = ConfigureDatabaseConnection(verifier)
+    prompter = FakeWizardPrompter(select_answers=["peer"])
+    plan = InstallationPlan()
+
+    step.run(plan, prompter)
+
+    _, choices, default = prompter.select_calls[0]
+    assert all(c.value != "keep" for c in choices)
+    assert default is None
+
+
 def test_pgvector_missing_warns_but_does_not_raise():
     verifier = FakeConnectionVerifier(postgres_ok=True, pgvector_ok=False, pgvector_message="not installed")
     step = ConfigureDatabaseConnection(verifier)

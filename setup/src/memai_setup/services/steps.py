@@ -8,7 +8,7 @@ from typing import Protocol
 from ..domain.language_coverage import offered_languages
 from ..domain.languages import format_language
 from ..domain.model import FitLevel
-from ..domain.plan import InstallationPlan, Topology
+from ..domain.plan import InstallationPlan, Topology, masked_database_url
 from ..domain.services import LLM_SELECTION_HEADROOM_GB, STT_SELECTION_TTS_HEADROOM_GB, assess_fit
 from .errors import WizardAborted
 from .ports import (
@@ -131,14 +131,23 @@ class ConfigureDatabaseConnection:
         self._verifier = verifier
 
     def run(self, plan: InstallationPlan, prompter: WizardPrompter) -> None:
-        choice = prompter.select(
-            "How should Mémai connect to PostgreSQL?",
-            [
-                PromptChoice("peer", "Local peer authentication (recommended) — no password stored"),
-                PromptChoice("password", "Host + password (remote or custom Postgres setup)"),
-            ],
-        )
-        if choice == "peer":
+        choices = [
+            PromptChoice("peer", "Local peer authentication (recommended) — no password stored"),
+            PromptChoice("password", "Host + password (remote or custom Postgres setup)"),
+        ]
+        default = None
+        if plan.from_existing_install:
+            # Re-run (FR-706): keeping the recorded connection is the default; it is
+            # still verified below like any freshly entered one.
+            choices.insert(
+                0, PromptChoice("keep", f"Keep current connection — {masked_database_url(plan.database_url)}")
+            )
+            default = "keep"
+        choice = prompter.select("How should Mémai connect to PostgreSQL?", choices, default=default)
+        if choice == "keep":
+            database_url = plan.database_url
+            failure_hint = self._peer_auth_hint() if database_url == self._PEER_AUTH_URL else ""
+        elif choice == "peer":
             database_url = self._PEER_AUTH_URL
             failure_hint = self._peer_auth_hint()
         else:
@@ -268,17 +277,20 @@ class SelectLLM:
             fit = assess_fit(entry.vram, vram_gb, LLM_SELECTION_HEADROOM_GB)
             warning = "" if fit.level != FitLevel.WONT_FIT else " ⚠"
             recommended = " (recommended)" if entry.recommended else ""
+            current = " (current)" if entry.model_id == plan.llm_model_id else ""
             # Enforced structurally, not left to catalogue description prose —
             # see the `reasoning` field comment in domain/model.py.
             reasoning_warning = " ⚠ reasoning model — <think> block is spoken aloud" if entry.reasoning else ""
             choices.append(
                 PromptChoice(
                     entry.model_id,
-                    f"{entry.display_name}{recommended} — {fit.message}{warning}{reasoning_warning}",
+                    f"{entry.display_name}{current}{recommended} — {fit.message}{warning}{reasoning_warning}",
                 )
             )
 
-        plan.llm_model_id = prompter.select("Choose a language model:", choices)
+        # On a re-run the currently installed model is the highlighted default
+        # (FR-706); on a fresh run llm_model_id is None and no default applies.
+        plan.llm_model_id = prompter.select("Choose a language model:", choices, default=plan.llm_model_id)
         try:
             self._installer.pull_llm(plan.llm_model_id)
         except (OSError, subprocess.SubprocessError) as exc:
@@ -305,7 +317,10 @@ class SelectLanguages:
     step decides which languages get engines/voices installed; the selection
     is persisted to memai.toml as [languages].installed (FR-705) — the server
     offers onboarding selection and response-language mirroring only within
-    this set, and adding a language later means re-running this wizard."""
+    this set, and adding a language later means re-running this wizard.
+    On a re-run (plan pre-filled from the existing config, FR-706) the
+    already-installed languages come pre-checked, so adding one never
+    silently drops the rest of [languages].installed."""
 
     def __init__(self, catalogues: CatalogueRepository) -> None:
         self._catalogues = catalogues
@@ -314,7 +329,16 @@ class SelectLanguages:
         offered = sorted(
             offered_languages(self._catalogues.load_stt_catalogue(), self._catalogues.load_tts_catalogue())
         )
-        choices = [PromptChoice(code, format_language(code)) for code in offered]
+        already_installed = set(plan.languages)
+        if already_installed:
+            prompter.info(
+                "Already-installed languages are pre-selected — check more to add them. "
+                "Unchecking one removes it from the server's installed list (its voice "
+                "files stay on disk)."
+            )
+        choices = [
+            PromptChoice(code, format_language(code), checked=code in already_installed) for code in offered
+        ]
         plan.languages = prompter.select_many(
             "Which languages should Mémai understand and speak? Select your main language plus "
             "any others you might also use — you'll pick which one to start with during your "
@@ -358,7 +382,12 @@ class ResolveSTTEngine:
             recommended = " (recommended)" if model.recommended else ""
             choices.append(PromptChoice(model.name, f"{model.name}{recommended} — {fit.message}{warning}"))
 
-        plan.whisper_model = prompter.select(f"Choose a Whisper model size ({engine.engine}):", choices)
+        # Re-run default (FR-706): the currently configured model, when it is one of
+        # the catalogued sizes (a hand-edited model_path pointing at a directory
+        # simply matches nothing and no default applies).
+        plan.whisper_model = prompter.select(
+            f"Choose a Whisper model size ({engine.engine}):", choices, default=plan.whisper_model
+        )
         try:
             self._installer.download_whisper_model(plan.whisper_model)
         except Exception as exc:  # noqa: BLE001 — huggingface_hub can raise many exception types on network failure

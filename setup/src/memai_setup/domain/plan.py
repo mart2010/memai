@@ -1,10 +1,19 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from enum import Enum, auto
 
 from .model import LanguageCode
+
+_DSN_PASSWORD = re.compile(r"(://[^:/@]+):[^@]*(@)")
+
+
+def masked_database_url(url: str) -> str:
+    """A DSN safe to echo back to the terminal: the password (if any) replaced
+    with '***'. Peer-auth DSNs have no password and pass through unchanged."""
+    return _DSN_PASSWORD.sub(r"\1:***\2", url)
 
 
 class Topology(Enum):
@@ -38,6 +47,11 @@ class InstallationPlan:
     # server/config/memai.example.toml. GenerateConfig and SetupSchema both
     # read this field rather than duplicating the literal.
     database_url: str = "postgresql://memai:changeme@localhost:5432/memai"
+    # True when this plan was pre-filled from a prior install's memai.toml
+    # (ExistingInstallDetector): steps then present the recorded state as
+    # defaults — pre-checked languages, current LLM/Whisper selections, a
+    # keep-current database option — instead of starting from nothing.
+    from_existing_install: bool = False
 
     _topology_locked: bool = field(default=False, repr=False, compare=False)
 

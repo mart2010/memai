@@ -92,17 +92,44 @@ def test_select_llm_flags_reasoning_models_in_choice_label():
     catalogues = FakeCatalogueRepository(
         llm_entries=(_entry("qwen3:14b", "Qwen3 14B", 10, 14, recommended=False, reasoning=True),)
     )
-    captured_choices = {}
-
-    class RecordingPrompter(FakeWizardPrompter):
-        def select(self, message, choices):
-            captured_choices["choices"] = choices
-            return super().select(message, choices)
-
     step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24), FakeModelInstaller())
-    prompter = RecordingPrompter(select_answers=["qwen3:14b"])
+    prompter = FakeWizardPrompter(select_answers=["qwen3:14b"])
     plan = InstallationPlan()
 
     step.run(plan, prompter)
 
-    assert "reasoning model" in captured_choices["choices"][0].label
+    _, choices, _ = prompter.select_calls[0]
+    assert "reasoning model" in choices[0].label
+
+
+def test_select_llm_rerun_defaults_to_current_model_and_marks_it():
+    """FR-706 — re-run pre-fill: the recorded model is the highlighted default
+    and its label says so."""
+    catalogues = FakeCatalogueRepository(
+        llm_entries=(
+            _entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),
+            _entry("qwen3:14b", "Qwen3 14B", 10, 14, recommended=False, reasoning=True),
+        )
+    )
+    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24), FakeModelInstaller())
+    prompter = FakeWizardPrompter(select_answers=["aya-expanse"])
+    plan = InstallationPlan(llm_model_id="aya-expanse", from_existing_install=True)
+
+    step.run(plan, prompter)
+
+    _, choices, default = prompter.select_calls[0]
+    assert default == "aya-expanse"
+    assert "(current)" in choices[0].label
+    assert "(current)" not in choices[1].label
+
+
+def test_select_llm_fresh_run_has_no_default():
+    catalogues = FakeCatalogueRepository(llm_entries=(_entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),))
+    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24), FakeModelInstaller())
+    prompter = FakeWizardPrompter(select_answers=["aya-expanse"])
+    plan = InstallationPlan()
+
+    step.run(plan, prompter)
+
+    _, _, default = prompter.select_calls[0]
+    assert default is None

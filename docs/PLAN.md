@@ -2068,12 +2068,35 @@ discussion.
       section. 7 new unit tests (233 green on laptop, `--ignore` platformdirs
       module); spec: FR-105/114/609, TR-303/308/904, glossary (AssistantPersona,
       Session language pair, Language tag).
+- [x] Wizard re-run pre-fill (FR-706, 2026-07-14, same session) — closed the
+      long-standing `FileExistingInstallDetector` TODO ("re-run pre-fill isn't
+      implemented yet — starting a fresh wizard run instead"), which the FR-705
+      contract had just turned from a papercut into a footgun: a re-run that
+      selected only the language being ADDED would overwrite
+      `[languages].installed` and silently break the previously installed ones.
+      Now: the detector parses memai.toml into a pre-filled
+      `InstallationPlan(from_existing_install=True)` (db url, whisper model,
+      device, llm model, installed languages; `ssh_host` ⇒ split-host topology
+      locked, otherwise topology is honestly re-asked — server-side configs of
+      the two topologies are indistinguishable; malformed toml degrades to a
+      fresh run). `RunInstallWizard` shows an "Existing installation detected"
+      banner with the full current state (DSN password masked via
+      `masked_database_url`). Step defaults: `SelectLanguages` pre-checks
+      installed languages (new `PromptChoice.checked` + questionary checkbox
+      `checked=`), `SelectLLM`/`ResolveSTTEngine` highlight the current choice
+      (new `select(default=)` port param; current LLM labeled "(current)"),
+      `ConfigureDatabaseConnection` offers keep-current as the default (still
+      verified). `DetectComputeDevice` deliberately still re-detects hardware
+      fresh. 10 new setup tests (73 passing; the 2 chmod tests remain
+      Windows-unfixable, flagged separately); two pre-existing test-local
+      prompter subclasses updated to the recording fake.
 - [ ] Live smoke on the workstation: fresh onboarding shows only installed
       languages; speak a second installed language to the GA (reply mirrors, voice
       switches); speak an uninstalled language (primary-language reminder names
       memai-setup); tutor lesson — confirm `[lang:]` tags appear in the composed
       context (tutor-debug), the tutor treats a wrong-language attempt gently, and
-      no tag is ever spoken. Workstation config catch-up: add `[languages]
+      no tag is ever spoken; re-run memai-setup and confirm the existing-install
+      banner + pre-checked languages. Workstation config catch-up: add `[languages]
       installed` to its memai.toml (or leave absent for all-supported behaviour).
 - [x] Next design discussion: language aspects of tutoring sessions — RESOLVED
       2026-07-14, see the "tag inbound, detect outbound" item above. Remaining

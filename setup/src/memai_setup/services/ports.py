@@ -12,6 +12,9 @@ from ..domain.plan import InstallationPlan
 class PromptChoice:
     value: str
     label: str
+    # Pre-selected in a select_many checkbox — how re-runs show what's already
+    # installed (FR-706). Ignored by single-choice select().
+    checked: bool = False
 
 
 class WizardPrompter(Protocol):
@@ -19,7 +22,11 @@ class WizardPrompter(Protocol):
     runs; FakeWizardPrompter replays scripted answers in unit tests — no
     unittest.mock, per CLAUDE.md testing conventions."""
 
-    def select(self, message: str, choices: list[PromptChoice]) -> str: ...
+    def select(self, message: str, choices: list[PromptChoice], default: str | None = None) -> str:
+        """`default` is the value to pre-highlight (e.g. the currently installed
+        LLM on a re-run); a value not present among `choices` is ignored."""
+        ...
+
     def select_many(self, message: str, choices: list[PromptChoice]) -> list[str]: ...
     def confirm(self, message: str, default: bool = True) -> bool: ...
     def text(self, message: str, default: str = "") -> str: ...

@@ -50,11 +50,17 @@ class FakeWizardPrompter:
         self.info_messages: list[str] = []
         self.confirm_messages: list[str] = []
         self.headings: list[tuple[str, list[str]]] = []
+        # Recorded calls, so tests can assert on offered choices, checked
+        # pre-selection, and the select default (re-run pre-fill, FR-706).
+        self.select_calls: list[tuple[str, list[PromptChoice], str | None]] = []
+        self.select_many_calls: list[tuple[str, list[PromptChoice]]] = []
 
-    def select(self, message: str, choices: list[PromptChoice]) -> str:
+    def select(self, message: str, choices: list[PromptChoice], default: str | None = None) -> str:
+        self.select_calls.append((message, list(choices), default))
         return self._select_answers.pop(0)
 
     def select_many(self, message: str, choices: list[PromptChoice]) -> list[str]:
+        self.select_many_calls.append((message, list(choices)))
         return self._select_many_answers.pop(0)
 
     def confirm(self, message: str, default: bool = True) -> bool:

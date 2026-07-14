@@ -229,3 +229,11 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   language selection (FR-002) and response mirroring (FR-105/FR-113) are bounded by
   this set; adding a language means re-running `memai-setup`. A config without the key
   (written before it existed) treats every supported language as installed.
+- **FR-706** Re-running the install wizard must start from the recorded installation
+  state, not from nothing: the existing `memai.toml` is parsed and its current settings
+  shown up front; already-installed languages come pre-checked in the language
+  selection (so adding one never silently drops the rest of `[languages].installed`);
+  the current LLM and Whisper choices are the highlighted defaults (current LLM marked
+  in its label); the recorded database connection is offered as a keep-current default
+  (still verified). Topology is locked when inferable (`ssh_host` ⇒ split-host client),
+  asked again otherwise; a malformed config degrades to a fresh run.

@@ -7,14 +7,16 @@ from ..services.ports import PromptChoice
 
 
 class QuestionaryPrompter:
-    def select(self, message: str, choices: list[PromptChoice]) -> str:
-        return questionary.select(
-            message, choices=[questionary.Choice(c.label, value=c.value) for c in choices]
-        ).ask()
+    def select(self, message: str, choices: list[PromptChoice], default: str | None = None) -> str:
+        qchoices = [questionary.Choice(c.label, value=c.value) for c in choices]
+        # questionary wants the Choice object (or exact title) as default — resolve
+        # from the value, ignoring a default that isn't among the choices.
+        default_choice = next((qc for qc in qchoices if qc.value == default), None)
+        return questionary.select(message, choices=qchoices, default=default_choice).ask()
 
     def select_many(self, message: str, choices: list[PromptChoice]) -> list[str]:
         return questionary.checkbox(
-            message, choices=[questionary.Choice(c.label, value=c.value) for c in choices]
+            message, choices=[questionary.Choice(c.label, value=c.value, checked=c.checked) for c in choices]
         ).ask()
 
     def confirm(self, message: str, default: bool = True) -> bool:

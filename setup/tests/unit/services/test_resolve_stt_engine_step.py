@@ -54,20 +54,14 @@ def test_reserves_headroom_for_the_already_chosen_llm():
         ),
     )
     catalogues = FakeCatalogueRepository(llm_entries=(_llm_entry("aya-expanse", 8),), stt_entries=stt_entries)
-    captured = {}
-
-    class RecordingPrompter(FakeWizardPrompter):
-        def select(self, message, choices):
-            captured["choices"] = choices
-            return super().select(message, choices)
-
     step = ResolveSTTEngine(catalogues, FakeGPUDetector(vram_gb=12), FakeModelInstaller())
-    prompter = RecordingPrompter(select_answers=["large-v3-turbo"])
+    prompter = FakeWizardPrompter(select_answers=["large-v3-turbo"])
     plan = InstallationPlan(llm_model_id="aya-expanse")
 
     step.run(plan, prompter)
 
-    assert "⚠" in captured["choices"][0].label
+    _, choices, _ = prompter.select_calls[0]
+    assert "⚠" in choices[0].label
 
 
 def test_download_failure_warns_but_does_not_raise():
