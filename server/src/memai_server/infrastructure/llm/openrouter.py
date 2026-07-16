@@ -12,12 +12,13 @@ _DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct"
 
 
 # ---------------------------------------------------------------------------
-# Offline path — synchronous one-shot calls. The live conversational pair
-# (OpenRouterLLMService, OpenRouterRecallIntentDetector) moved to
-# openai_compatible.py (FR-707/TR-955) since they're now a generic
-# any-OpenAI-compatible-endpoint adapter, not an OpenRouter-specific one —
-# this offline family stays under the OpenRouter name/defaults since it isn't
-# wired into the composition root yet (see TR-953).
+# Offline path — synchronous one-shot calls. The live conversational LLM
+# (OpenRouterLLMService) moved to openai_compatible.py (FR-707/TR-955) since
+# it's now a generic any-OpenAI-compatible-endpoint adapter, not an
+# OpenRouter-specific one — this offline family stays under the OpenRouter
+# name/defaults since it isn't wired into the composition root yet (see
+# TR-953). Its former recall-intent-detection twin was retired outright, not
+# moved — see RecallGate (FR-309/TR-314).
 # ---------------------------------------------------------------------------
 
 class OpenRouterWorthinessEvaluator:

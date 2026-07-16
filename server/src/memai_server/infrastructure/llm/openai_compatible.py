@@ -1,10 +1,6 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
-import json
-
 import openai
 
-from ...domain.events import RecallSource, RecallTriggered
-from ...domain.model import MemoryType
 from ...services.ports import Message
 
 
@@ -17,6 +13,11 @@ from ...services.ports import Message
 # check it at all, but the openai client still wants some string in the
 # Authorization header, so a missing key is coalesced to a placeholder rather
 # than left unset.
+#
+# Recall gating (FR-309/TR-314) no longer needs a provider-specific twin here —
+# it moved from a per-turn LLM classification call to a persona-scoped, local
+# threshold policy (RecallGate), so it no longer varies with [llm].provider at
+# all. Only the main conversational completion above still does.
 # ---------------------------------------------------------------------------
 
 class OpenAICompatibleLLMService:
@@ -37,45 +38,3 @@ class OpenAICompatibleLLMService:
             content = chunk.choices[0].delta.content
             if content:
                 yield content
-
-
-class OpenAICompatibleRecallIntentDetector:
-    """Live, per-turn recall-intent check (see ProcessTurn) — moves together
-    with OpenAICompatibleLLMService rather than staying on local Ollama, so a
-    GPU-less install doesn't pay a slow local-CPU inference cost on every
-    single turn before the (now fast, remote) reply even starts."""
-
-    def __init__(self, base_url: str, model: str, api_key: str | None = None) -> None:
-        self._client = openai.OpenAI(api_key=api_key or "not-required", base_url=base_url)
-        self._model = model
-
-    def detect(self, text: str) -> RecallTriggered | None:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Detect if the user wants to recall past memories. "
-                        'If yes, respond with JSON: {"recall": true, "query": "<search query>", '
-                        '"memory_types": ["episode"|"concept"|"procedure", ...]}. '
-                        "Include only the relevant memory type(s). "
-                        'If no recall intent, respond with {"recall": false}.'
-                    ),
-                },
-                {"role": "user", "content": text},
-            ],
-            response_format={"type": "json_object"},
-        )
-        try:
-            data = json.loads(response.choices[0].message.content or "")
-        except (json.JSONDecodeError, AttributeError):
-            return None
-        if not data.get("recall"):
-            return None
-        query = data.get("query", text)
-        valid_values = {m.value for m in MemoryType}
-        memory_types = tuple(
-            MemoryType(t) for t in data.get("memory_types", []) if t in valid_values
-        ) or tuple(MemoryType)
-        return RecallTriggered(query=query, memory_types=memory_types, source=RecallSource.USER)

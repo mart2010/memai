@@ -17,6 +17,7 @@ from .enrichment import ClusterProposer, LanguageTutorEnrichmentStrategy, Propos
 from .cluster_ollama import OllamaClusterProposer
 from .focus_ollama import OllamaFocusInterpreter
 from .judge_ollama import OllamaPracticeJudge
+from .recall_gate import LanguageTutorRecallGate
 
 __all__ = [
     "STRATEGY_NAME",
@@ -24,6 +25,7 @@ __all__ = [
     "FocusInterpreter",
     "LanguageTutorAssessmentStrategy",
     "LanguageTutorEnrichmentStrategy",
+    "LanguageTutorRecallGate",
     "LanguageTutorSelectionStrategy",
     "OllamaClusterProposer",
     "OllamaFocusInterpreter",

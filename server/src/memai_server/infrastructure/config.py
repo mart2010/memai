@@ -24,11 +24,12 @@ class ServerConfig:
     # Live-conversation LLM backend (FR-707/TR-955). "ollama" (default) reuses
     # llm_model/llm_ollama_host above for the live path too, exactly as before this
     # setting existed — fully backward compatible with configs that predate it.
-    # "openai_compatible" swaps only the live path (LLMService + RecallIntentDetector,
-    # see ProcessTurn) to a remote HTTP endpoint; the offline pipeline (consolidation,
-    # MemoryBrief, tutor strategy helpers) always stays on llm_model/llm_ollama_host,
-    # regardless of this setting — a GPU-less/CPU-only offline run is fine, per design
-    # decision, just slower.
+    # "openai_compatible" swaps only the main conversational LLM (see ProcessTurn) to
+    # a remote HTTP endpoint; the offline pipeline (consolidation, MemoryBrief, tutor
+    # strategy helpers) always stays on llm_model/llm_ollama_host, regardless of this
+    # setting — a GPU-less/CPU-only offline run is fine, per design decision, just
+    # slower. Recall gating (FR-309/TR-314) doesn't read this field at all anymore —
+    # it's local threshold logic now, not an LLM call.
     llm_provider: str
     llm_base_url: str | None  # required when llm_provider == "openai_compatible"
     llm_remote_model: str | None  # required when llm_provider == "openai_compatible"

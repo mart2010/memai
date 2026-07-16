@@ -1,6 +1,6 @@
 # Glossary — the Ubiquitous Language
 
-*Last verified against code: 2026-07-14*
+*Last verified against code: 2026-07-16*
 
 Terms are grouped in three tiers. Within Memai documents, code, tests, and
 conversation, these terms are used **exactly as defined here** — if a term feels
@@ -106,7 +106,8 @@ Memai's own model — the terms that carry the design. (Entities/value objects i
 
 | Term | Definition |
 |---|---|
-| **Recall** | Utterance-triggered memory lookup: a `RecallIntentDetector` spots explicit recall intent ("remember when…"), the query is embedded, top-5 similar items (persona-scoped for concepts/procedures) are injected into the turn's context. Reactive. |
+| **Recall** | Utterance-triggered memory lookup: the turn's own text is embedded (no separate query extraction) and top-5 similar items (persona-scoped for concepts/procedures) are injected into the turn's context, whenever a `RecallGate` allows it. Reactive. |
+| **Recall gate** | The persona-scoped policy (`RecallGate`) on whether a turn's recall search runs at all — `should_embed` short-circuits trivial short utterances before any embedding is computed (persona-specific: GA skips them, a language tutor doesn't), `should_search` skips a fresh DB round trip when the turn's embedding is nearly identical to *any* prior search this session (the whole `recall_history`, not just the last one — nothing new can enter memory mid-session, INV-1, so an earlier match is just as good), reusing that search's cached results instead. Replaces the earlier `RecallIntentDetector` (an LLM call classifying explicit "remember when…" intent) with local, deterministic logic — every persona resolves to some gate, unlike the three ports below. |
 | **Selection** | Persona-driven proactive injection via `PersonaSelectionPort`: a batch of `SelectedItem`s fetched lazily on the persona's first active turn, consumed **one item per turn**. Proactive counterpart to recall. |
 | **Selection batch** | The fetched item list per persona in working memory. Key presence = already fetched; an exhausted batch is not re-queried; only a *focus* change replaces it. |
 | **Focus** | The user's expressed session wish ("just review old words"), carried **verbatim** from a `[FOCUS: …]` marker to `select_items(focus=…)`; interpreted only by the strategy. `None` = default learning path. |

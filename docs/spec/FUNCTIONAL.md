@@ -1,6 +1,6 @@
 # Functional Specification
 
-*Last verified against code: 2026-07-14*
+*Last verified against code: 2026-07-16*
 
 Externally observable behaviour, by capability. Terms per [GLOSSARY.md](GLOSSARY.md);
 ID and wording conventions per [SPEC.md](SPEC.md). Technical contracts (protocol,
@@ -111,9 +111,11 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
 - **FR-301** After conversations are consolidated (offline), the assistant must know
   their content in later sessions through three memory types: episodes (events),
   concepts (knowledge), procedures (know-how).
-- **FR-302** When the user expresses explicit recall intent ("remember when…"), the
-  matching memories (top 5 by similarity; concepts/procedures scoped to the active
-  persona, episodes global) must be injected into that turn's context.
+- **FR-302** Every substantive user turn must be checked against long-term memory (not
+  gated on an explicit phrase like "remember when…" — FR-309 governs which turns count
+  as substantive); the matching memories (top 5 by similarity; concepts/procedures
+  scoped to the active persona, episodes global) must be injected into that turn's
+  context.
 - **FR-303** Concept/procedure knowledge must be persona-scoped end-to-end: the same
   name under different personas is different knowledge, with independent engagement.
 - **FR-304** Repeated encounters must enrich, not duplicate: near-identical extracted
@@ -126,6 +128,16 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   a per-conversation worthiness judgment. Concepts/procedures are extracted regardless.
 - **FR-308** A fresh memory brief must be generated after each offline run that
   consolidated at least one conversation, and be in place for the next session start.
+- **FR-309** Whether a turn triggers a recall search at all is a persona-scoped policy
+  (a `RecallGate`), not a fixed rule: the general assistant skips trivial short replies
+  (a handful of words or fewer) since they carry no searchable content, while a persona
+  for which short replies are meaningful — e.g. a language tutor, where "which word
+  would you like to practice?" is answered with a single word — always searches
+  regardless of length. Independently, a turn whose embedding is nearly identical to
+  *any* prior search this session (for the active persona) — not only the most recent
+  one — skips a fresh search and reuses that search's results: correct, not just an
+  optimisation, because nothing new can enter long-term memory mid-session (INV-1), so
+  a repeat of any earlier query would deterministically return the same thing again.
 
 ## FR-4xx — Offline processing & durability
 

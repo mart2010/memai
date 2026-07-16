@@ -1,6 +1,6 @@
 # Technical Specification
 
-*Last verified against code: 2026-07-14*
+*Last verified against code: 2026-07-16*
 
 Internal contracts: architecture, protocol, formats, data model, algorithms. Terms per
 [GLOSSARY.md](GLOSSARY.md); conventions per [SPEC.md](SPEC.md). File references anchor
@@ -130,7 +130,7 @@ design discussion, never a patch.
   (skipped during onboarding), and the session tail — previous session's last
   `session_tail_turns` (10) turns iff it ended within
   `session_continuation_threshold_hours` (24). Fails fast when User or GA is missing.
-- **TR-302** Turn sequence: STT → log user turn → recall detection (embed query,
+- **TR-302** Turn sequence: STT → log user turn → recall gate (TR-314; embed turn text,
   `search` top 5, persona-scoped) → lazy selection fetch/consume (TR-306) → compose
   working context → stream LLM → per-sentence TTS → resolve markers → log assistant
   turn → rolling-summary check.
@@ -206,6 +206,35 @@ design discussion, never a patch.
   construction: recomputed per turn, persists nothing (INV-14). Whisper misdetection on
   very short utterances can mis-trigger either branch — accepted, same calibration
   posture as TR-307.
+- **TR-314** Recall gating (`RecallGate`, FR-309): replaces the earlier per-turn LLM
+  classification call (`RecallIntentDetector`, retired) with local, deterministic
+  logic — no LLM call, no JSON parsing, no dependency on `[llm].provider`.
+  `should_embed(text)` runs first, before any embedding is computed: `DefaultRecallGate`
+  (used by GA and any persona without an override) returns `False` for utterances under
+  `min_words` (3), a word-count floor chosen over a character count since it tracks
+  "is there searchable content here" consistently across languages;
+  `LanguageTutorRecallGate` overrides this to always return `True` — a tutor session's
+  single-word vocabulary answers are exactly the content worth searching. When
+  `should_embed` is `True`, the turn's raw text (not an extracted query — there is no
+  extraction step anymore) is embedded and compared, via `domain.model.cosine_similarity`
+  (in-process, no DB round trip), against **every** entry in
+  `WorkingMemory.recall_history[persona_id]` — the embedding and results of every
+  utterance that actually triggered a real search for the active persona this session,
+  oldest first — not only the most recent entry: nothing new can enter long-term memory
+  mid-session (INV-1), so a repeat of any earlier query, not only the immediately
+  preceding one, would deterministically return the same results again.
+  `should_search(max_similarity)` receives the highest similarity across that whole
+  history (`None` if the history is empty — always search on the first turn) and
+  returns `True` when it is `None` or below `dedup_threshold` (0.93, reusing the
+  existing merge-threshold "same thing" bar); at or above it, the DB round trip is
+  skipped and the best-matching historical entry's cached results are reused as-is,
+  appended as a new entry to `recall_history` only when a real search actually runs.
+  `search()` is called with every `MemoryType` (no type restriction — the old
+  detector's type classification is not replaced by an equivalent, since the existing
+  top-5-by-similarity ranking already surfaces the right items across types). Gate
+  resolution mirrors `selection_strategies`: `ProcessTurn._recall_gates.get(persona_id,
+  default_recall_gate)` — the one difference from `PersonaSelectionPort` et al. being
+  that every persona resolves to *some* gate, never a no-op.
 
 ## TR-4xx — Session logs & replay
 
@@ -430,21 +459,19 @@ only validation layer.
   OpenAI-compatible pair that TR-955 documents as wired in).
 - **TR-954** Outbound TLS uses the OS trust store (`truststore`) — corporate-proxy
   resilience for any adapter that still touches the network.
-- **TR-955** Live conversation (`ProcessTurn`'s main reply, `LLMService.complete()`, and
-  its per-turn recall-intent check, `RecallIntentDetector.detect()`) is the only part of
-  the pipeline `[llm].provider` affects (FR-707): `"ollama"` (default) uses
-  `OllamaLLMService`/`OllamaRecallIntentDetector` against `[llm].model`/`ollama_host`,
-  same as before this setting existed; `"openai_compatible"` uses
-  `OpenAICompatibleLLMService`/`OpenAICompatibleRecallIntentDetector`
-  (`infrastructure/llm/openai_compatible.py`, a generic `openai.AsyncOpenAI`/`OpenAI`
-  client against `[llm].base_url`, any OpenAI-compatible provider — OpenRouter, OpenAI,
-  a self-hosted server; a missing `api_key` is coalesced to a placeholder string, since
-  the client library requires some value even against endpoints that don't check it)
-  against `[llm].base_url`/`remote_model`/`api_key`. Both live ports move together,
-  deliberately: recall-intent detection fires every turn before the main reply starts,
-  so leaving it on local Ollama while the main completion goes remote would still pay a
-  CPU-inference latency tax every turn on a GPU-less install. Every other LLM-touching
-  port (offline judgment adapters, TR-953; `GenerateMemoryBrief`, via a dedicated
+- **TR-955** Live conversation's main reply (`ProcessTurn`'s call to
+  `LLMService.complete()`) is the only part of the pipeline `[llm].provider` affects
+  (FR-707): `"ollama"` (default) uses `OllamaLLMService` against `[llm].model`/
+  `ollama_host`, same as before this setting existed; `"openai_compatible"` uses
+  `OpenAICompatibleLLMService` (`infrastructure/llm/openai_compatible.py`, a generic
+  `openai.AsyncOpenAI` client against `[llm].base_url`, any OpenAI-compatible provider —
+  OpenRouter, OpenAI, a self-hosted server; a missing `api_key` is coalesced to a
+  placeholder string, since the client library requires some value even against
+  endpoints that don't check it) against `[llm].base_url`/`remote_model`/`api_key`.
+  Recall gating (TR-314) does *not* move with this setting — it stopped being an LLM
+  call at all when `RecallIntentDetector` was retired in favour of `RecallGate`, so it
+  no longer has a live-provider dimension to branch on. Every other LLM-touching port
+  (offline judgment adapters, TR-953; `GenerateMemoryBrief`, via a dedicated
   `ServerContext.offline_llm` instance never aliased to the live `llm`; Ollama-backed
   persona-strategy helpers, e.g. the tutor's focus interpreter) always stays on the
   local Ollama model, unaffected by this setting — a GPU-less/CPU-only offline run is

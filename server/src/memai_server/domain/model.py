@@ -36,6 +36,23 @@ def resolve_installed_languages(installed_codes: tuple[str, ...] | list[str]) ->
     return [lang for lang in SUPPORTED_LANGUAGES if lang.code in installed_codes]
 
 
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Pure Python cosine similarity in [-1, 1] between two embedding vectors —
+    used by RecallGate.should_search (FR-309/TR-314) to compare a turn's embedding
+    against the last one that actually triggered a memory search this session,
+    entirely in-process (no DB round trip; pgvector's own `<=>` operator is a
+    separate, unrelated comparison against stored items). Does not assume
+    L2-normalised input, unlike a plain dot product, so it stays correct against
+    any EmbeddingService implementation, real or fake. Returns 0.0 for a
+    zero-magnitude vector rather than dividing by zero."""
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    norm_a = sum(x * x for x in a) ** 0.5
+    norm_b = sum(y * y for y in b) ** 0.5
+    if norm_a == 0.0 or norm_b == 0.0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
 class EngagementLevel(IntEnum):
     UNSEEN = 0
     MENTIONED = 1

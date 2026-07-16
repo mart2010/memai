@@ -17,11 +17,12 @@ from ..domain.model import (
     AssistantPersona,
     Language,
     MemoryBrief,
+    MemoryType,
     Speaker,
     Turn,
     User,
+    cosine_similarity,
 )
-from ..domain.protocols import RecallIntentDetector
 from .ports import (
     EmbeddingService,
     LanguageDetector,
@@ -32,6 +33,7 @@ from .ports import (
     Message,
     PersonaRepository,
     PersonaSelectionPort,
+    RecallGate,
     SelectedItem,
     SessionLogReader,
     STTService,
@@ -67,6 +69,17 @@ class WorkingMemory:
     # so an exhausted batch is not re-queried. A [FOCUS: ...] marker replaces the active
     # persona's batch with a focus-steered re-fetch.
     selection_batches: dict[UUID, list[SelectedItem]] = field(default_factory=dict)
+    # RecallGate cache (FR-309/TR-314), keyed by persona id: every (embedding, results)
+    # pair from an utterance that actually triggered a real memory search for that
+    # persona this session, oldest first — persona-keyed because memory search is
+    # itself persona-scoped, so a GA-context embedding is not a meaningful comparison
+    # for a tutor-context one. The *whole* history is kept and compared against, not
+    # just the last entry, because nothing new can enter long-term memory mid-session
+    # (INV-1): the searchable set is frozen for the conversation's duration, so a
+    # repeat of any earlier query — not only the immediately preceding one — would
+    # deterministically return the same results again. Absent/empty key = no search
+    # has happened yet for that persona.
+    recall_history: dict[UUID, list[tuple[list[float], list[MemoryItem]]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -483,11 +496,12 @@ class ProcessTurn:
         tts: TTSService,
         embedding_service: EmbeddingService,
         memory_repo: MemoryRepository,
-        recall_detector: RecallIntentDetector,
+        default_recall_gate: RecallGate,
         persona_repo: PersonaRepository,
         turn_logger: TurnLogger,
         language_detector: LanguageDetector,
         selection_strategies: dict[UUID, PersonaSelectionPort] | None = None,
+        recall_gates: dict[UUID, RecallGate] | None = None,
         rolling_window_size: int = 50,
         installed_voices: dict[str, str] | None = None,
     ) -> None:
@@ -496,12 +510,16 @@ class ProcessTurn:
         self._tts = tts
         self._embedding_service = embedding_service
         self._memory_repo = memory_repo
-        self._recall_detector = recall_detector
         self._persona_repo = persona_repo
         self._turn_logger = turn_logger
         self._language_detector = language_detector
         # persona_id -> selection strategy; personas without one (e.g. GA) get no batch.
         self._selection_strategies = selection_strategies or {}
+        # persona_id -> RecallGate override (e.g. the tutor's); every other persona,
+        # GA included, falls back to default_recall_gate (FR-309/TR-314) — unlike
+        # selection_strategies above, recall gating is never a no-op.
+        self._recall_gates = recall_gates or {}
+        self._default_recall_gate = default_recall_gate
         self._rolling_window_size = rolling_window_size
         # Installed-languages contract (FR-705/TR-313): language code -> that language's
         # default TTS voice. Key membership decides whether GA mirrors a detected
@@ -560,19 +578,40 @@ class ProcessTurn:
         wm.recent_turns.append(user_turn)
         wm.total_turn_count += 1
 
-        # 4. Recall intent → enrich working context from LTM
+        # 4. Recall gate → enrich working context from LTM (FR-309/TR-314). Replaces the
+        # old per-turn LLM classification call with a persona-scoped, local threshold
+        # policy: should_embed() short-circuits trivial utterances before any embedding
+        # is computed; should_search() then skips the DB round trip when this turn's
+        # embedding is nearly identical to ANY prior search this session (not just the
+        # last one — nothing new can enter memory mid-session, INV-1, so a repeat of
+        # any earlier query would return the same thing again), reusing that prior
+        # search's cached results instead.
         recalled_memories: list[MemoryItem] = []
-        recall = await asyncio.to_thread(self._recall_detector.detect, text)
-        if recall:
-            embedding = await asyncio.to_thread(self._embedding_service.embed, recall.query)
-            search_results = await asyncio.to_thread(
-                self._memory_repo.search,
-                embedding,
-                recall.memory_types,
-                top_n=5,
-                persona_id=wm.active_persona.id,
-            )
-            recalled_memories = [item for _, item in search_results]
+        persona_id = wm.active_persona.id
+        gate = self._recall_gates.get(persona_id, self._default_recall_gate)
+        if gate.should_embed(text):
+            embedding = await asyncio.to_thread(self._embedding_service.embed, text)
+            history = wm.recall_history.get(persona_id, [])
+            if history:
+                similarities = (
+                    (cosine_similarity(embedding, past_embedding), past_results)
+                    for past_embedding, past_results in history
+                )
+                max_similarity, best_match = max(similarities, key=lambda pair: pair[0])
+            else:
+                max_similarity, best_match = None, []
+            if gate.should_search(max_similarity):
+                search_results = await asyncio.to_thread(
+                    self._memory_repo.search,
+                    embedding,
+                    tuple(MemoryType),
+                    top_n=5,
+                    persona_id=persona_id,
+                )
+                recalled_memories = [item for _, item in search_results]
+                wm.recall_history.setdefault(persona_id, []).append((embedding, recalled_memories))
+            else:
+                recalled_memories = best_match
 
         # 5. Persona-selected item — batch fetched lazily on the active persona's first
         # turn, then one item per turn, injected via the same context-message mechanism

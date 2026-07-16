@@ -2,7 +2,7 @@ from datetime import datetime, UTC
 from pathlib import Path
 from uuid import UUID
 
-from memai_server.domain.events import ConversationBoundaryType, RecallTriggered
+from memai_server.domain.events import ConversationBoundaryType
 from memai_server.domain.model import (
     AssistantPersona,
     Conversation,
@@ -359,12 +359,33 @@ class FakeTurnLogger:
 # Domain protocol fakes
 # ---------------------------------------------------------------------------
 
-class FakeRecallIntentDetector:
-    def __init__(self, result: RecallTriggered | None = None) -> None:
-        self.result = result
+class FakeRecallGate:
+    """Records every call for assertions; both decisions default to "always proceed"
+    so most tests don't have to think about gating. `should_search_queue`, if given,
+    is popped in call order for tests exercising a sequence of different decisions
+    across turns — same pattern as FakeLanguageDetector's `results` queue."""
 
-    def detect(self, text: str) -> RecallTriggered | None:
-        return self.result
+    def __init__(
+        self,
+        should_embed_result: bool = True,
+        should_search_result: bool = True,
+        should_search_queue: list[bool] | None = None,
+    ) -> None:
+        self.should_embed_result = should_embed_result
+        self.should_search_result = should_search_result
+        self._should_search_queue = list(should_search_queue) if should_search_queue else None
+        self.should_embed_calls: list[str] = []
+        self.should_search_calls: list[float | None] = []
+
+    def should_embed(self, text: str) -> bool:
+        self.should_embed_calls.append(text)
+        return self.should_embed_result
+
+    def should_search(self, max_similarity_to_prior_searches: float | None) -> bool:
+        self.should_search_calls.append(max_similarity_to_prior_searches)
+        if self._should_search_queue:
+            return self._should_search_queue.pop(0)
+        return self.should_search_result
 
 
 class FakeWorthinessEvaluator:

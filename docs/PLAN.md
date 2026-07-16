@@ -27,6 +27,66 @@ tracks work still to do.
 
 ## Next up
 
+- [x] **Recall gating replaces the per-turn LLM classification call (2026-07-16,
+      FR-309/TR-314)** — prototyped per discussion: `RecallIntentDetector` (an LLM call
+      classifying "remember when…" intent + extracting a query + memory types on
+      *every* turn, local or remote) was judged fragile/over-designed and retired
+      outright, not kept alongside the replacement. New `RecallGate` port
+      (`services/ports.py`, in the persona-extension-port family) — `should_embed(text)`
+      short-circuits trivial short utterances before any embedding is computed;
+      `should_search(max_similarity_to_prior_searches)` skips a fresh DB round trip when
+      the turn's embedding is nearly identical to *any* prior search this session for
+      the active persona — not only the immediately preceding one — reusing that
+      search's cached results instead of paying for another lookup. Persona-scoped like
+      `PersonaSelectionPort` et al., but with a real default rather than a no-op
+      fallback: `DefaultRecallGate` (`infrastructure/recall_gate.py`, `min_words=3`,
+      `dedup_threshold=0.93` — the latter reuses the existing merge-threshold "same
+      thing" bar rather than a new placeholder) covers GA and anything unregistered;
+      `LanguageTutorRecallGate(DefaultRecallGate)` overrides only `should_embed` to
+      always return `True` — a tutor's one-word vocabulary answers are exactly the
+      content worth searching, unlike GA's throwaway "yes"/"ok" replies. New pure
+      `domain.model.cosine_similarity` (general formula, doesn't assume L2-normalised
+      input) compares the current turn's embedding against **every** entry in
+      `WorkingMemory.recall_history[persona_id]` (persona-keyed list, oldest first, of
+      every real search's embedding + results this session) entirely in-process — no DB
+      round trip for this comparison, distinct from pgvector's own `<=>` operator. No
+      more type-restricted search (`memory_types` classification) or extracted-query
+      text — the turn's raw text is embedded directly and every `MemoryType` is
+      searched, since the existing top-5-by-similarity ranking already sorts it out and
+      the old classification step bought less precision than it looked like.
+      **Design refinement caught before commit**: comparing only against the *last*
+      search (the first cut) missed that nothing new can enter long-term memory
+      mid-session (INV-1) — the searchable set is frozen for the whole conversation, so
+      a repeat of *any* earlier query, not only the immediately preceding one, would
+      deterministically return the same results again. Reworked to cache every real
+      search this session (not just the latest) and take the max similarity across the
+      whole history — same port signature, no interface change, just what the argument
+      represents and what `ProcessTurn` computes before calling it.
+      **Real side-effect, not a target of this change**: removing recall from the live
+      path also simplified server.py's provider branch — recall no longer needs an
+      OpenAI-compatible twin at all (it was never really an LLM call's business to vary
+      with `[llm].provider`), so `OpenAICompatibleRecallIntentDetector` was deleted
+      rather than kept. `RecallTriggered`/`RecallSource` (domain events) and
+      `RecallIntentDetector` (domain protocol) removed entirely — nothing else
+      constructed them once the mechanism was gone, and this project doesn't keep
+      orphaned code around "just in case."
+      265 server unit tests green (up from 245 — new `test_cosine_similarity.py`,
+      `test_recall_gate.py`, `TestRecallGating` in `test_session.py` including a
+      dedicated test proving an *older*, non-latest history entry is found and reused
+      over a more recent unrelated one; the existing weak recall test was rewritten to
+      actually assert recalled content reaches the LLM's system prompt, not just that
+      some LLM call happened). `ruff check` clean on every touched file. Spec: FR-302
+      reworded (no longer "explicit recall intent"), new FR-309; TR-302 reworded, new
+      TR-314; TR-955 corrected (recall no longer varies with `[llm].provider`);
+      GLOSSARY's `Recall` entry rewritten, new `Recall gate` entry.
+      **Not yet live-verified**: word-count/dedup-threshold defaults (3 words, 0.93)
+      are reasoned choices, not calibrated against real conversations — same
+      calibration-pending posture as every other threshold in this project. Worth
+      watching once real usage exists: does 3 words correctly separate "yes"/"no" from
+      genuine short recalls; does 0.93 dedup correctly catch topic-repeats without
+      suppressing a genuinely new question phrased similarly to a recent one; whether
+      an unbounded per-persona `recall_history` list ever needs a cap in practice (not
+      added speculatively — realistic session lengths keep it small).
 - [x] **Wizard: identify non-NVIDIA GPUs (2026-07-16)** — prerequisite for the public-LLM
       item below, done first per discussion: a real AMD Ryzen AI APU box (Linux) had
       Ollama accelerating the LLM perfectly well, but the wizard's `NvidiaSmiGPUDetector`

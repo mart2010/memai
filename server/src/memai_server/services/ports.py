@@ -150,7 +150,9 @@ class MemoryRepository(Protocol):
 # ---------------------------------------------------------------------------
 # Persona extension ports — persona-agnostic contracts; each persona's strategy
 # implementation (Infrastructure layer) owns all persona-specific vocabulary.
-# GA registers no strategies; all three ports are optional per persona.
+# GA registers no selection/enrichment/assessment strategies — those three are
+# optional per persona. RecallGate (below) is the exception: every persona has
+# one, GA included, falling back to a default rather than a no-op.
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
@@ -205,6 +207,39 @@ class PersonaAssessmentPort(Protocol):
         conversation: Conversation,
         touched_items: Sequence[MemoryItem],
     ) -> Sequence[ItemAssessment]: ...
+
+
+class RecallGate(Protocol):
+    """Live hook (FR-309/TR-314) — persona-scoped policy on whether a turn's recall
+    search is worth running at all, replacing a per-turn LLM classification call
+    (the old RecallIntentDetector). Unlike the three ports above, every persona gets
+    one: an unregistered persona (e.g. GA) falls back to a DefaultRecallGate rather
+    than a no-op, since recall applies to ordinary conversation, not just advanced
+    personas opting in to extra behaviour."""
+
+    def should_embed(self, text: str) -> bool:
+        """Called first, before any embedding is computed — a cheap, text-only
+        short-circuit for utterances unlikely to need memory context at all (e.g. a
+        one-word reply to the GA). A persona for which short replies are meaningful
+        (e.g. a language tutor's single-word vocabulary answers) overrides this to
+        always return True."""
+        ...
+
+    def should_search(self, max_similarity_to_prior_searches: float | None) -> bool:
+        """Called only when should_embed() returned True.
+        `max_similarity_to_prior_searches` is the highest cosine similarity
+        (domain.model.cosine_similarity) between this turn's embedding and the
+        embedding of *any* utterance that actually triggered a real DB search this
+        session for the active persona — not just the immediately preceding one.
+        None if no search has happened yet (always search then). Comparing against
+        the *whole* session's search history, not only the last search, is correct
+        specifically because nothing new can enter long-term memory mid-session
+        (INV-1): the set of insertable content is frozen for the whole conversation,
+        so a repeat of any earlier query would deterministically return the same
+        results again. A high similarity means the best-matching prior search's
+        cached results are still the best available answer, so a fresh DB round trip
+        is skipped in favour of reusing them."""
+        ...
 
 
 # ---------------------------------------------------------------------------

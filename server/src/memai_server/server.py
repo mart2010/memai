@@ -20,7 +20,6 @@ from .domain.model import (
     User,
     resolve_installed_languages,
 )
-from .domain.protocols import RecallIntentDetector
 from .infrastructure import postgres
 from .infrastructure.config import load_config
 from .infrastructure.embedding import SentenceTransformerEmbeddingService
@@ -29,6 +28,7 @@ from .infrastructure.json_file import JSONLSessionLogReader, JSONLSessionReplayR
 from .infrastructure.language_tutor import (
     LanguageTutorAssessmentStrategy,
     LanguageTutorEnrichmentStrategy,
+    LanguageTutorRecallGate,
     LanguageTutorSelectionStrategy,
     OllamaClusterProposer,
     OllamaFocusInterpreter,
@@ -40,7 +40,6 @@ from .infrastructure.llm import (
     OllamaDisambiguationEvaluator,
     OllamaLLMService,
     OllamaMemorySynthesizer,
-    OllamaRecallIntentDetector,
     OllamaWorthinessEvaluator,
 )
 from .infrastructure.postgres import (
@@ -51,11 +50,12 @@ from .infrastructure.postgres import (
     PSUnitOfWork,
     PSUserRepository,
 )
+from .infrastructure.recall_gate import DefaultRecallGate
 from .infrastructure.stt import FasterWhisperSTTService
 from .infrastructure.tts import KOKORO_DEFAULT_VOICES, KokoroTTSService
 from .services.memory import ConsolidateMemory, EnrichMemory, GenerateMemoryBrief
 from .services.persona import EditPersona
-from .services.ports import LLMService, PersonaAssessmentPort, PersonaEnrichmentPort, PersonaSelectionPort
+from .services.ports import LLMService, PersonaAssessmentPort, PersonaEnrichmentPort, PersonaSelectionPort, RecallGate
 from .services.replay import TurnLogReplayer
 from .services.session import EndSession, ProcessTurn, StartSession
 from .services.user import CompleteOnboarding
@@ -83,8 +83,8 @@ class ServerContext:
     # The local Ollama model/host — always used for the offline pipeline (extraction,
     # worthiness, disambiguation, synthesis, GenerateMemoryBrief via offline_llm) and
     # every Ollama-backed strategy helper (e.g. the tutor's focus interpreter),
-    # regardless of what `llm`/`recall_detector` above are live-configured to. A
-    # GPU-less/CPU-only offline run is fine, per design decision, just slower.
+    # regardless of what `llm` above is live-configured to. A GPU-less/CPU-only
+    # offline run is fine, per design decision, just slower.
     llm_model: str
     llm_ollama_host: str | None
     # Dedicated instance for GenerateMemoryBrief (offline) — deliberately never `llm`
@@ -101,10 +101,11 @@ class ServerContext:
     memory_brief_repo: PSMemoryBriefRepository
     memory_repo: PSMemoryRepository
     conversation_repo: PSConversationRepository
-    # Live, per-turn (ProcessTurn) — moves with `llm` above (FR-707/TR-955): a remote
-    # live LLM with recall detection left on slow local CPU Ollama would still pay that
-    # latency tax every turn before the (now fast) reply even starts.
-    recall_detector: RecallIntentDetector
+    # Live, per-turn (ProcessTurn) recall policy (FR-309/TR-314) — persona-scoped;
+    # unlike `llm` above, does not vary with [llm].provider at all (it's local
+    # threshold logic, no LLM call). default_recall_gate covers GA and any persona
+    # without a registered override.
+    default_recall_gate: DefaultRecallGate
     worthiness_evaluator: OllamaWorthinessEvaluator
     disambiguator: OllamaDisambiguationEvaluator
     synthesizer: OllamaMemorySynthesizer
@@ -215,6 +216,14 @@ SELECTION_STRATEGY_FACTORIES: dict[str, Callable[["ServerContext"], PersonaSelec
     ),
 }
 
+# Live, same registry shape (FR-309/TR-314) — but unlike the three above, a persona
+# without an entry here does NOT get a no-op: ProcessTurn falls back to
+# ctx.default_recall_gate, since recall gating applies to ordinary conversation too,
+# not just advanced personas opting in.
+RECALL_GATE_FACTORIES: dict[str, Callable[["ServerContext"], RecallGate]] = {
+    LANGUAGE_TUTOR: lambda ctx: LanguageTutorRecallGate(),
+}
+
 
 # Same registry, offline half: assessment strategies run inside the consolidation
 # pipeline and are constructed against the offline_* repos/connection.
@@ -261,6 +270,10 @@ def _build_selection_strategies(ctx: "ServerContext") -> dict[UUID, PersonaSelec
     return _build_strategies(ctx, SELECTION_STRATEGY_FACTORIES, ctx.persona_repo)
 
 
+def _build_recall_gates(ctx: "ServerContext") -> dict[UUID, RecallGate]:
+    return _build_strategies(ctx, RECALL_GATE_FACTORIES, ctx.persona_repo)
+
+
 def _build_assessment_strategies(ctx: "ServerContext") -> dict[UUID, PersonaAssessmentPort]:
     return _build_strategies(ctx, ASSESSMENT_STRATEGY_FACTORIES, ctx.offline_persona_repo)
 
@@ -305,11 +318,12 @@ async def _handle(ws, ctx: ServerContext) -> None:
         tts=ctx.tts,
         embedding_service=ctx.embedding_service,
         memory_repo=ctx.memory_repo,
-        recall_detector=ctx.recall_detector,
+        default_recall_gate=ctx.default_recall_gate,
         persona_repo=ctx.persona_repo,
         turn_logger=turn_logger,
         language_detector=ctx.language_detector,
         selection_strategies=_build_selection_strategies(ctx),
+        recall_gates=_build_recall_gates(ctx),
         installed_voices={
             lang.code: KOKORO_DEFAULT_VOICES.get(lang.code, "") for lang in ctx.installed_languages
         },
@@ -435,20 +449,19 @@ def main() -> None:
     # remote endpoint when configured. offline_llm is always a separate, always-Ollama
     # instance (see ServerContext's docstring on it) — even when provider == "ollama",
     # where the two happen to be equivalent, keeping construction uniform is simpler and
-    # safer than special-casing "reuse `llm`" for one provider only.
+    # safer than special-casing "reuse `llm`" for one provider only. Recall gating
+    # (FR-309/TR-314) does not branch on provider at all — it's local threshold logic,
+    # not an LLM call, so default_recall_gate below is built the same way regardless.
     if cfg.llm_provider == "openai_compatible":
-        from .infrastructure.llm import OpenAICompatibleLLMService, OpenAICompatibleRecallIntentDetector
+        from .infrastructure.llm import OpenAICompatibleLLMService
 
         llm: LLMService = OpenAICompatibleLLMService(
             base_url=cfg.llm_base_url, model=cfg.llm_remote_model, api_key=cfg.llm_api_key,
         )
-        recall_detector: RecallIntentDetector = OpenAICompatibleRecallIntentDetector(
-            base_url=cfg.llm_base_url, model=cfg.llm_remote_model, api_key=cfg.llm_api_key,
-        )
     else:
         llm = OllamaLLMService(model=cfg.llm_model, host=cfg.llm_ollama_host)
-        recall_detector = OllamaRecallIntentDetector(model=cfg.llm_model, host=cfg.llm_ollama_host)
     offline_llm = OllamaLLMService(model=cfg.llm_model, host=cfg.llm_ollama_host)
+    default_recall_gate = DefaultRecallGate()
     tts = KokoroTTSService(device=cfg.tts_device)
     print("Loading embedding model…")
     embedding_service = SentenceTransformerEmbeddingService()
@@ -474,7 +487,7 @@ def main() -> None:
         memory_brief_repo=PSMemoryBriefRepository(conn),
         memory_repo=PSMemoryRepository(conn),
         conversation_repo=PSConversationRepository(conn),
-        recall_detector=recall_detector,
+        default_recall_gate=default_recall_gate,
         worthiness_evaluator=OllamaWorthinessEvaluator(model=cfg.llm_model, host=cfg.llm_ollama_host),
         disambiguator=OllamaDisambiguationEvaluator(model=cfg.llm_model, host=cfg.llm_ollama_host),
         synthesizer=OllamaMemorySynthesizer(model=cfg.llm_model, host=cfg.llm_ollama_host),

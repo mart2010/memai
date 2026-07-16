@@ -1,11 +1,11 @@
 # Memai
 
-**AI should make you sharper, not dumber.**
+**AI should make you sharper, not stupid!**
 
 Memai is a voice assistant built to help you actually grow — real expertise, real
 knowledge, built through natural conversation, away from a keyboard — instead of quietly
 doing your thinking for you. And it does that without asking you to hand your
-conversations, your knowledge, or your personal life over to a commercial AI company to
+conversations, your knowledge, or your personal life over to a large AI company to
 get there: by default, Memai runs entirely on your own hardware, using open-source
 models, so growing your knowledge with it never means giving it away.
 

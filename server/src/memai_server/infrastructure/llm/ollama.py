@@ -3,8 +3,7 @@ import json
 
 import ollama
 
-from ...domain.events import RecallSource, RecallTriggered
-from ...domain.model import Concept, Conversation, Episode, Language, MemoryType, Procedure
+from ...domain.model import Concept, Conversation, Episode, Language, Procedure
 from ...services.ports import ExtractionResult, MemoryItem, Message
 from ._common import _conversation_language, _extraction_system_prompt, _format_conversation, _parse_extraction
 
@@ -59,43 +58,6 @@ class OllamaWorthinessEvaluator:
             ],
         )
         return "yes" in response.message.content.strip().lower()
-
-
-class OllamaRecallIntentDetector:
-    def __init__(self, model: str = "llama3.3", host: str | None = None) -> None:
-        self._client = ollama.Client(host=host)
-        self._model = model
-
-    def detect(self, text: str) -> RecallTriggered | None:
-        response = self._client.chat(
-            model=self._model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Detect if the user wants to recall past memories. "
-                        'If yes, respond with JSON: {"recall": true, "query": "<search query>", '
-                        '"memory_types": ["episode"|"concept"|"procedure", ...]}. '
-                        "Include only the relevant memory type(s). "
-                        'If no recall intent, respond with {"recall": false}.'
-                    ),
-                },
-                {"role": "user", "content": text},
-            ],
-            format="json",
-        )
-        try:
-            data = json.loads(response.message.content)
-        except (json.JSONDecodeError, AttributeError):
-            return None
-        if not data.get("recall"):
-            return None
-        query = data.get("query", text)
-        valid_values = {m.value for m in MemoryType}
-        memory_types = tuple(
-            MemoryType(t) for t in data.get("memory_types", []) if t in valid_values
-        ) or tuple(MemoryType)
-        return RecallTriggered(query=query, memory_types=memory_types, source=RecallSource.USER)
 
 
 class OllamaMemorySynthesizer:

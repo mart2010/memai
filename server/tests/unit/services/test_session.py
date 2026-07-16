@@ -2,14 +2,13 @@ import pytest
 from datetime import datetime, UTC, timedelta
 from uuid import UUID, uuid4
 
-from memai_server.domain.events import ConversationBoundaryType, RecallTriggered
+from memai_server.domain.events import ConversationBoundaryType
 from memai_server.domain.model import (
     AssistantPersona,
     Concept,
     GENERAL_ASSISTANT_ID,
     Language,
     MemoryBrief,
-    MemoryType,
     Speaker,
     Turn,
     User,
@@ -25,7 +24,7 @@ from tests.fakes.fakes import (
     FakeMemoryRepository,
     FakePersonaRepository,
     FakePersonaSelectionPort,
-    FakeRecallIntentDetector,
+    FakeRecallGate,
     FakeSessionLogReader,
     FakeSTTService,
     FakeTTSService,
@@ -86,7 +85,6 @@ def _make_start_session(
 def _make_process_turn(
     stt_transcript: str = "hello",
     llm_response: str = "Hello there.",
-    recall_result: RecallTriggered | None = None,
     detected_language: Language = Language("en"),
     rolling_window_size: int = 100,
     selection_strategies: dict | None = None,
@@ -94,6 +92,9 @@ def _make_process_turn(
     tts: FakeTTSService | None = None,
     language_detector: FakeLanguageDetector | None = None,
     installed_voices: dict[str, str] | None = None,
+    default_recall_gate: FakeRecallGate | None = None,
+    recall_gates: dict | None = None,
+    embedding_service: FakeEmbeddingService | None = None,
 ) -> tuple[ProcessTurn, FakeMemoryRepository, FakeTurnLogger, FakeLLMService]:
     memory_repo = FakeMemoryRepository()
     wal = FakeTurnLogger()
@@ -105,13 +106,14 @@ def _make_process_turn(
         stt=FakeSTTService(transcript=stt_transcript, language=detected_language),
         llm=llm,
         tts=tts or FakeTTSService(),
-        embedding_service=FakeEmbeddingService(),
+        embedding_service=embedding_service or FakeEmbeddingService(),
         memory_repo=memory_repo,
-        recall_detector=FakeRecallIntentDetector(result=recall_result),
+        default_recall_gate=default_recall_gate or FakeRecallGate(),
         persona_repo=persona_repo,
         turn_logger=wal,
         language_detector=language_detector or FakeLanguageDetector(),
         selection_strategies=selection_strategies,
+        recall_gates=recall_gates,
         rolling_window_size=rolling_window_size,
         installed_voices=installed_voices,
     )
@@ -204,18 +206,19 @@ class TestProcessTurn:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_recall_path_enriches_context(self):
-        """Spec: FR-302, TR-302"""
-        recall_event = RecallTriggered(query="python tips", memory_types=(MemoryType.CONCEPT,))
-        process_turn, _, _, llm = _make_process_turn(
+    async def test_recall_search_enriches_context_with_matching_memory(self):
+        """Spec: FR-302, FR-309, TR-302, TR-314"""
+        process_turn, memory_repo, _, llm = _make_process_turn(
             stt_transcript="remember when we talked about python",
-            recall_result=recall_event,
         )
+        memory_repo.search_results = [(0.9, _concept("python tips", id_=1))]
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
 
         await process_turn.execute(ctx, audio=b"audio", now=_now())
-        assert llm.calls
+
+        _, system_prompt = llm.calls[0]
+        assert "python tips" in system_prompt
 
     @pytest.mark.asyncio
     async def test_topic_break_fires_boundary_event(self):
@@ -496,6 +499,116 @@ class TestProcessTurn:
         calls_before = len(llm.calls)
         await process_turn.execute(ctx, audio=b"a", now=_now())
         assert len(llm.calls) > calls_before
+
+
+class TestRecallGating:
+    """Spec: FR-309, TR-314 — RecallGate replaces the old per-turn LLM classification
+    call with persona-scoped, local threshold logic. See
+    tests/unit/infrastructure/test_recall_gate.py for the real gates' own policy
+    logic (word count, dedup threshold); these tests only cover how ProcessTurn
+    wires a gate's decisions into whether it searches at all."""
+
+    @pytest.mark.asyncio
+    async def test_gate_declining_to_embed_means_no_search_call_at_all(self):
+        gate = FakeRecallGate(should_embed_result=False)
+        process_turn, memory_repo, _, _ = _make_process_turn(default_recall_gate=gate)
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"audio", now=_now())
+
+        assert gate.should_embed_calls == ["hello"]
+        assert memory_repo.search_calls == []
+
+    @pytest.mark.asyncio
+    async def test_gate_declining_to_search_still_calls_should_embed_first(self):
+        gate = FakeRecallGate(should_embed_result=True, should_search_result=False)
+        process_turn, memory_repo, _, _ = _make_process_turn(default_recall_gate=gate)
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"audio", now=_now())
+
+        assert gate.should_embed_calls == ["hello"]
+        assert memory_repo.search_calls == []
+
+    @pytest.mark.asyncio
+    async def test_first_turn_ever_passes_none_as_max_similarity(self):
+        gate = FakeRecallGate()
+        process_turn, _, _, _ = _make_process_turn(default_recall_gate=gate)
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"audio", now=_now())
+
+        assert gate.should_search_calls == [None]
+
+    @pytest.mark.asyncio
+    async def test_declined_search_reuses_last_real_searchs_cached_results(self):
+        """The second turn's should_search() call declines — its LLM context must
+        still contain what the first (real) search found, not come up empty."""
+        gate = FakeRecallGate(should_search_queue=[True, False])
+        process_turn, memory_repo, _, llm = _make_process_turn(default_recall_gate=gate)
+        memory_repo.search_results = [(0.9, _concept("python tips", id_=1))]
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        await process_turn.execute(ctx, audio=b"first turn", now=_now())
+        await process_turn.execute(ctx, audio=b"second turn", now=_now())
+
+        assert len(memory_repo.search_calls) == 1  # only the first turn actually searched
+        _, second_system_prompt = llm.calls[1]
+        assert "python tips" in second_system_prompt
+
+    @pytest.mark.asyncio
+    async def test_declined_search_matches_against_the_whole_session_history_not_just_the_last_entry(self):
+        """Spec: FR-309, TR-314 — nothing new can enter memory mid-session (INV-1), so
+        comparing against every prior search this session (not only the most recent
+        one) is correct, not just an optimisation. Seeds two historical entries: an
+        older one whose embedding exactly matches this turn's, and a more recent,
+        unrelated one — proves the older match is found and reused, and the unrelated
+        one does not leak into context."""
+        embedding_service = FakeEmbeddingService(vector=[1.0, 0.0])
+        gate = FakeRecallGate(should_embed_result=True, should_search_result=False)
+        process_turn, memory_repo, _, llm = _make_process_turn(
+            default_recall_gate=gate, embedding_service=embedding_service,
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+        old_match = _concept("old topic", id_=1)
+        recent_unrelated = _concept("unrelated topic", id_=2)
+        ctx.recall_history[GENERAL_ASSISTANT_ID] = [
+            ([1.0, 0.0], [old_match]),  # older, identical embedding to this turn's
+            ([0.0, 1.0], [recent_unrelated]),  # more recent, but orthogonal (similarity 0)
+        ]
+
+        await process_turn.execute(ctx, audio=b"audio", now=_now())
+
+        assert gate.should_search_calls[-1] == pytest.approx(1.0)
+        _, system_prompt = llm.calls[0]
+        assert "old topic" in system_prompt
+        assert "unrelated topic" not in system_prompt
+
+    @pytest.mark.asyncio
+    async def test_persona_specific_gate_overrides_the_default(self):
+        """A persona with its own registered RecallGate uses it instead of
+        default_recall_gate — mirrors selection_strategies' per-persona lookup."""
+        tutor = _tutor_persona()
+        tutor_gate = FakeRecallGate(should_embed_result=False)
+        default_gate = FakeRecallGate(should_embed_result=True)
+        process_turn, memory_repo, _, _ = _make_process_turn(
+            default_recall_gate=default_gate,
+            recall_gates={tutor.id: tutor_gate},
+        )
+        use_case, _ = _make_start_session()
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+        ctx.active_persona = tutor
+
+        await process_turn.execute(ctx, audio=b"audio", now=_now())
+
+        assert tutor_gate.should_embed_calls == ["hello"]
+        assert default_gate.should_embed_calls == []
+        assert memory_repo.search_calls == []
 
 
 class TestSpeakerCast:

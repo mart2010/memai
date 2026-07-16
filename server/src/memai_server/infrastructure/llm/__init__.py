@@ -4,16 +4,15 @@ from .ollama import (
     OllamaDisambiguationEvaluator,
     OllamaLLMService,
     OllamaMemorySynthesizer,
-    OllamaRecallIntentDetector,
     OllamaWorthinessEvaluator,
 )
 
 # The OpenRouter family (offline evaluators only — see openrouter.py) is a cloud-gateway
 # *alternative* to the fully-local default, not wired into the composition root yet
-# (TR-953). The OpenAI-compatible pair (live conversation: FR-707/TR-955) *is* wired in,
-# conditionally, by server.py. Both re-exported lazily so importing this package (or the
-# Ollama family) never requires the `openai` client package at runtime on a fully-local
-# deployment.
+# (TR-953). OpenAICompatibleLLMService (live conversation only: FR-707/TR-955) *is*
+# wired in, conditionally, by server.py. Both re-exported lazily so importing this
+# package (or the Ollama family) never requires the `openai` client package at runtime
+# on a fully-local deployment.
 _OPENROUTER_EXPORTS = frozenset({
     "OpenRouterWorthinessEvaluator",
     "OpenRouterMemorySynthesizer",
@@ -22,7 +21,6 @@ _OPENROUTER_EXPORTS = frozenset({
 })
 _OPENAI_COMPATIBLE_EXPORTS = frozenset({
     "OpenAICompatibleLLMService",
-    "OpenAICompatibleRecallIntentDetector",
 })
 
 
@@ -39,7 +37,6 @@ def __getattr__(name: str):
 __all__ = [
     "OllamaLLMService",
     "OllamaWorthinessEvaluator",
-    "OllamaRecallIntentDetector",
     "OllamaMemorySynthesizer",
     "OllamaDisambiguationEvaluator",
     "OllamaConsolidationExtractor",
