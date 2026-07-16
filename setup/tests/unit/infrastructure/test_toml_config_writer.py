@@ -49,6 +49,48 @@ def test_writes_selected_languages_as_installed_languages(tmp_path: Path):
     assert config["languages"]["installed"] == ["en", "fr", "es"]
 
 
+def test_ollama_provider_writes_only_model_no_extra_llm_keys(tmp_path: Path):
+    """Spec: FR-707 — the common case's [llm] section is unchanged from before
+    this setting existed."""
+    plan = InstallationPlan(llm_model_id="aya-expanse", llm_provider="ollama")
+
+    config = _write_and_read(tmp_path, plan)
+
+    assert config["llm"] == {"model": "aya-expanse"}
+
+
+def test_openai_compatible_provider_writes_provider_base_url_and_remote_model(tmp_path: Path):
+    """Spec: FR-707"""
+    plan = InstallationPlan(
+        llm_model_id="aya-expanse",
+        llm_provider="openai_compatible",
+        llm_base_url="https://openrouter.ai/api/v1",
+        llm_remote_model="meta-llama/llama-3.3-70b-instruct",
+    )
+
+    config = _write_and_read(tmp_path, plan)
+
+    assert config["llm"]["model"] == "aya-expanse"
+    assert config["llm"]["provider"] == "openai_compatible"
+    assert config["llm"]["base_url"] == "https://openrouter.ai/api/v1"
+    assert config["llm"]["remote_model"] == "meta-llama/llama-3.3-70b-instruct"
+    assert "api_key" not in config["llm"]
+
+
+def test_openai_compatible_provider_writes_api_key_when_present(tmp_path: Path):
+    """Spec: FR-707"""
+    plan = InstallationPlan(
+        llm_provider="openai_compatible",
+        llm_base_url="https://openrouter.ai/api/v1",
+        llm_remote_model="some-model",
+        llm_api_key="sk-example",
+    )
+
+    config = _write_and_read(tmp_path, plan)
+
+    assert config["llm"]["api_key"] == "sk-example"
+
+
 def test_written_config_is_only_readable_by_owner(tmp_path: Path):
     # database.url may carry a plaintext password (password-auth fallback) —
     # this file must never be group/world-readable.

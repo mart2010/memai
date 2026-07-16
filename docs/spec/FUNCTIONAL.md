@@ -237,3 +237,13 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   in its label); the recorded database connection is offered as a keep-current default
   (still verified). Topology is locked when inferable (`ssh_host` ⇒ split-host client),
   asked again otherwise; a malformed config degrades to a fresh run.
+- **FR-707** The install wizard must let the user choose how live conversation is
+  powered: local via Ollama (default), or a remote OpenAI-compatible HTTP endpoint
+  (any provider — OpenRouter, OpenAI, a self-hosted server, ...), for installs without a
+  local GPU capable of fast live inference. Minimal remote configuration: a base URL and
+  a model name are required; an API key is optional (some self-hosted endpoints don't
+  require one). This choice affects only the live conversational path (the main reply
+  and per-turn recall-intent detection, TR-955) — the offline memory pipeline
+  (consolidation, memory brief generation, and Ollama-backed persona-strategy helpers
+  such as the language tutor's focus interpreter) always runs on a local Ollama model
+  regardless, so a GPU-less install accepts it running slower, not remotely.

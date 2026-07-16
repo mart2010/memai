@@ -33,6 +33,14 @@ class InstallationPlan:
 
     topology: Topology | None = None
     llm_model_id: str | None = None
+    # Live-conversation LLM backend (FR-707): "ollama" (default) or
+    # "openai_compatible". Always decoupled from llm_model_id above, which is the
+    # local Ollama model the offline memory pipeline uses regardless of this
+    # choice — see ConfigureLLMProvider/SelectLLM.
+    llm_provider: str = "ollama"
+    llm_base_url: str | None = None
+    llm_remote_model: str | None = None
+    llm_api_key: str | None = None
     languages: list[LanguageCode] = field(default_factory=list)
     whisper_model: str | None = None
     tts_engine_by_language: dict[LanguageCode, str] = field(default_factory=dict)

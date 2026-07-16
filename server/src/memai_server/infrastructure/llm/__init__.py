@@ -8,16 +8,21 @@ from .ollama import (
     OllamaWorthinessEvaluator,
 )
 
-# The OpenRouter family is a cloud-gateway *alternative* to the fully-local default —
-# re-exported lazily so importing this package (or the Ollama family) never requires the
-# `openai` client package at runtime on a fully-local deployment.
+# The OpenRouter family (offline evaluators only — see openrouter.py) is a cloud-gateway
+# *alternative* to the fully-local default, not wired into the composition root yet
+# (TR-953). The OpenAI-compatible pair (live conversation: FR-707/TR-955) *is* wired in,
+# conditionally, by server.py. Both re-exported lazily so importing this package (or the
+# Ollama family) never requires the `openai` client package at runtime on a fully-local
+# deployment.
 _OPENROUTER_EXPORTS = frozenset({
-    "OpenRouterLLMService",
     "OpenRouterWorthinessEvaluator",
-    "OpenRouterRecallIntentDetector",
     "OpenRouterMemorySynthesizer",
     "OpenRouterDisambiguationEvaluator",
     "OpenRouterConsolidationExtractor",
+})
+_OPENAI_COMPATIBLE_EXPORTS = frozenset({
+    "OpenAICompatibleLLMService",
+    "OpenAICompatibleRecallIntentDetector",
 })
 
 
@@ -25,6 +30,9 @@ def __getattr__(name: str):
     if name in _OPENROUTER_EXPORTS:
         from . import openrouter
         return getattr(openrouter, name)
+    if name in _OPENAI_COMPATIBLE_EXPORTS:
+        from . import openai_compatible
+        return getattr(openai_compatible, name)
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
@@ -36,4 +44,5 @@ __all__ = [
     "OllamaDisambiguationEvaluator",
     "OllamaConsolidationExtractor",
     *sorted(_OPENROUTER_EXPORTS),
+    *sorted(_OPENAI_COMPATIBLE_EXPORTS),
 ]

@@ -119,6 +119,34 @@ def test_select_llm_amd_gpu_without_memory_estimate_falls_back_to_undetectable_w
     assert any("could not detect" in m.lower() for m in prompter.info_messages)
 
 
+def test_select_llm_prompt_mentions_offline_pipeline_when_provider_is_remote():
+    """Spec: FR-707 — SelectLLM always runs (it picks the offline pipeline's
+    Ollama model), but the prompt text should say so when live conversation
+    was just configured to go remote, so the two steps don't read as
+    contradicting each other."""
+    catalogues = FakeCatalogueRepository(llm_entries=(_entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),))
+    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24), FakeModelInstaller())
+    prompter = FakeWizardPrompter(select_answers=["aya-expanse"])
+    plan = InstallationPlan(llm_provider="openai_compatible")
+
+    step.run(plan, prompter)
+
+    message, _, _ = prompter.select_calls[0]
+    assert "offline" in message.lower()
+
+
+def test_select_llm_prompt_is_plain_when_provider_is_ollama():
+    catalogues = FakeCatalogueRepository(llm_entries=(_entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),))
+    step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=24), FakeModelInstaller())
+    prompter = FakeWizardPrompter(select_answers=["aya-expanse"])
+    plan = InstallationPlan()
+
+    step.run(plan, prompter)
+
+    message, _, _ = prompter.select_calls[0]
+    assert message == "Choose a language model:"
+
+
 def test_select_llm_flags_reasoning_models_in_choice_label():
     catalogues = FakeCatalogueRepository(
         llm_entries=(_entry("qwen3:14b", "Qwen3 14B", 10, 14, recommended=False, reasoning=True),)

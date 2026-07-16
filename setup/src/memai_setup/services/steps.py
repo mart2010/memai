@@ -62,9 +62,10 @@ class ShowWelcome:
         "STT, TTS, and the LLM. AMD GPUs are auto-detected by Ollama and accelerate "
         "the LLM only — STT/TTS have no AMD-accelerated path yet and always run on CPU",
         "With no GPU at all, everything still works: STT/TTS run comfortably on CPU "
-        "(benchmarked fast on modern hardware), but LLM responses run via Ollama on CPU "
-        "too and will be noticeably slower depending on model size — there is currently "
-        "no cloud or alternative LLM service configured as a fallback",
+        "(benchmarked fast on modern hardware); the offline memory pipeline (consolidation, "
+        "memory brief) also runs fine on CPU via Ollama, just slower. Live conversation can "
+        "either use local Ollama on CPU too (noticeably slower depending on model size) or, "
+        "a few steps from now, a remote OpenAI-compatible API instead — your choice",
         "SSH server + key auth on the server machine — only if you'll use split-host "
         "(see below); not needed for single-host",
         "PortAudio — macOS/Linux client only (`brew install portaudio` / `apt install "
@@ -264,8 +265,65 @@ class DetectComputeDevice:
             )
 
 
+class ConfigureLLMProvider:
+    """Flow step 6, before SelectLLM's Ollama catalogue (now step 7) — decides
+    how LIVE conversation is powered (FR-707/TR-955): local via Ollama
+    (default, fully private), or a remote OpenAI-compatible HTTP endpoint
+    (OpenRouter, OpenAI, a self-hosted vLLM/LM Studio server, ...) for
+    installs without a local GPU capable of fast live inference. Minimal
+    remote config, per design discussion: base_url + model name, optional
+    api_key (some self-hosted endpoints don't check one at all — a blank
+    answer is stored as None, not an empty string).
+
+    Does not touch the offline memory pipeline at all — that always runs on
+    a local Ollama model regardless of this choice, picked next by
+    SelectLLM whether or not this step went remote."""
+
+    def run(self, plan: InstallationPlan, prompter: WizardPrompter) -> None:
+        ollama_current = " (current)" if plan.from_existing_install and plan.llm_provider == "ollama" else ""
+        remote_current = (
+            " (current)" if plan.from_existing_install and plan.llm_provider == "openai_compatible" else ""
+        )
+        choices = [
+            PromptChoice(
+                "ollama",
+                f"Local, via Ollama{ollama_current} (fully private, needs a decent local GPU or CPU)",
+            ),
+            PromptChoice(
+                "openai_compatible",
+                f"Remote OpenAI-compatible API{remote_current} (OpenRouter, OpenAI, a self-hosted "
+                "endpoint, ...) — faster live conversation without a local GPU, at the cost of "
+                "sending conversation text to that provider",
+            ),
+        ]
+        plan.llm_provider = prompter.select(
+            "How should live conversation be powered?", choices, default=plan.llm_provider
+        )
+        if plan.llm_provider != "openai_compatible":
+            return
+
+        plan.llm_base_url = prompter.text(
+            "Endpoint base URL (OpenAI-compatible, e.g. https://openrouter.ai/api/v1):",
+            default=plan.llm_base_url or "",
+        )
+        plan.llm_remote_model = prompter.text(
+            "Model name, exactly as the endpoint expects it "
+            "(e.g. meta-llama/llama-3.3-70b-instruct):",
+            default=plan.llm_remote_model or "",
+        )
+        api_key = prompter.text(
+            "API key (leave blank if the endpoint doesn't require one):",
+            default=plan.llm_api_key or "",
+        )
+        plan.llm_api_key = api_key or None
+        prompter.info(
+            "The offline memory pipeline (consolidation, memory brief) always uses a local "
+            "Ollama model regardless of this choice — you'll pick that next."
+        )
+
+
 class SelectLLM:
-    """Flow steps 6-7. Presents every catalogue entry with a plain-English fit
+    """Flow steps 7-8. Presents every catalogue entry with a plain-English fit
     hint — never filters the list, per CLAUDE.md ("user always sees all
     options, never a filtered list"). Pulls the chosen model via Ollama before
     returning, matching the original flow doc's step 5 ("LLM selection +
@@ -276,7 +334,15 @@ class SelectLLM:
     gpu.detect_gpu() *does* feed into this step's own sizing math (not just
     its message) when it carries a memory estimate — Ollama genuinely uses
     that GPU for LLM inference (confirmed on a real AMD Ryzen AI APU box),
-    unlike STT/TTS, which have no non-CUDA accelerated path at all."""
+    unlike STT/TTS, which have no non-CUDA accelerated path at all.
+
+    Always runs, regardless of what ConfigureLLMProvider (previous step)
+    decided for live conversation (FR-707/TR-955): the offline memory
+    pipeline (consolidation, memory brief, tutor strategy helpers)
+    unconditionally needs a local Ollama model, even on an install whose
+    live conversation is powered by a remote endpoint instead. The prompt
+    text says so explicitly in that case, so choosing a model here doesn't
+    read as contradicting the remote choice just made."""
 
     def __init__(self, catalogues: CatalogueRepository, gpu: GPUDetector, installer: ModelInstaller) -> None:
         self._catalogues = catalogues
@@ -321,9 +387,16 @@ class SelectLLM:
                 )
             )
 
+        prompt_text = (
+            "Choose a local Ollama model for the offline memory pipeline "
+            "(consolidation, memory brief) — live conversation uses the remote endpoint "
+            "just configured:"
+            if plan.llm_provider == "openai_compatible"
+            else "Choose a language model:"
+        )
         # On a re-run the currently installed model is the highlighted default
         # (FR-706); on a fresh run llm_model_id is None and no default applies.
-        plan.llm_model_id = prompter.select("Choose a language model:", choices, default=plan.llm_model_id)
+        plan.llm_model_id = prompter.select(prompt_text, choices, default=plan.llm_model_id)
         try:
             self._installer.pull_llm(plan.llm_model_id)
         except (OSError, subprocess.SubprocessError) as exc:
@@ -339,7 +412,7 @@ class SelectLLM:
 
 
 class SelectLanguages:
-    """Flow step 8. Offers languages covered by at least one installable STT
+    """Flow step 9. Offers languages covered by at least one installable STT
     engine and at least one TTS engine (see domain/language_coverage.py).
     Multi-select — this is deliberately "which languages should Mémai support,"
     covering both your main language and any optional/secondary ones in one
@@ -381,7 +454,7 @@ class SelectLanguages:
 
 
 class ResolveSTTEngine:
-    """Flow step 9. Mainly a Whisper model-size choice today (VRAM vs.
+    """Flow step 10. Mainly a Whisper model-size choice today (VRAM vs.
     accuracy/latency tradeoff — see large-v3-turbo in stt_catalogue.toml), not
     an engine choice, since faster-whisper covers ~99 languages
     unconditionally. Engines without `has_adapter` (e.g. whisper.cpp) are
@@ -440,7 +513,7 @@ class ResolveSTTEngine:
 
 
 class ResolveTTSEngines:
-    """Flow step 10. Per selected language, if only one engine covers it,
+    """Flow step 11. Per selected language, if only one engine covers it,
     install that one; if multiple engines cover it (e.g. both Kokoro and Piper
     offer English), let the user pick rather than silently defaulting to one —
     voice variety/quality is a stated goal, not just coverage. Bundled engines
@@ -491,7 +564,7 @@ class ResolveTTSEngines:
 
 
 class DownloadEmbeddingModel:
-    """Flow step 10b. Pre-downloads the embedding model used for memory
+    """Flow step 11b. Pre-downloads the embedding model used for memory
     consolidation (`intfloat/multilingual-e5-large`, hardcoded in
     SentenceTransformerEmbeddingService). Unlike the LLM/Whisper/TTS steps
     above, there is nothing to choose here — the embedding model is a fixed
@@ -517,14 +590,10 @@ class DownloadEmbeddingModel:
 
 
 class GenerateConfig:
-    """Flow step 11. Single-host also writes the client config (step 10b in the
+    """Flow step 12. Single-host also writes the client config (step 10b in the
     original flow doc — see project_wizard_brainstorm memory); split-host
     defers client config to a separate `memai-setup --client` run on the
-    client machine (not yet wired into cli.py). Writes a couple of fields
-    InstallationPlan doesn't have a dedicated collection step for yet
-    (plan.database_url defaults to the same connection string shipped in
-    server/config/memai.example.toml) — no "collect Postgres connection"
-    step exists, see docs/PLAN.md."""
+    client machine (not yet wired into cli.py)."""
 
     def __init__(self, writer: ConfigWriter) -> None:
         self._writer = writer
@@ -538,7 +607,7 @@ class GenerateConfig:
 
 
 class SetupSchema:
-    """Flow step 12. Delegates to SchemaRunner, which must apply
+    """Flow step 13. Delegates to SchemaRunner, which must apply
     migrations/001_initial_schema.sql idempotently — the SQL itself uses
     `IF NOT EXISTS`/`ON CONFLICT DO NOTHING` throughout, so a straightforward
     re-apply is safe with no migration framework needed."""
@@ -552,7 +621,7 @@ class SetupSchema:
 
 
 class RunHealthChecks:
-    """Flow step 13. Runs a list of HealthCheck instances (currently just
+    """Flow step 14. Runs a list of HealthCheck instances (currently just
     Ollama) and reports pass/fail via prompter. Postgres isn't re-checked
     here — ConfigureDatabaseConnection already verified it thoroughly, and
     SetupSchema (just before this step) would have failed loudly if the

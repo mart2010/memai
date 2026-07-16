@@ -20,6 +20,7 @@ from .services.run_wizard import RunInstallWizard
 from .services.steps import (
     CheckPrerequisites,
     ConfigureDatabaseConnection,
+    ConfigureLLMProvider,
     DetectComputeDevice,
     DownloadEmbeddingModel,
     GenerateConfig,
@@ -61,6 +62,7 @@ def _install_steps(
         ConfigureDatabaseConnection(verifier),
         CheckPrerequisites(prerequisite_checks),
         DetectComputeDevice(gpu),
+        ConfigureLLMProvider(),
         SelectLLM(catalogues, gpu, installer),
         SelectLanguages(catalogues),
         ResolveSTTEngine(catalogues, gpu, installer),
@@ -106,10 +108,17 @@ def main() -> None:
         sys.exit(1)
 
     start_cmd = r".venv\Scripts\memai-server" if sys.platform.startswith("win") else ".venv/bin/memai-server"
+    if plan.llm_provider == "openai_compatible":
+        llm_summary = (
+            f"Live conversation: {plan.llm_remote_model} @ {plan.llm_base_url} "
+            f"| Offline pipeline: {plan.llm_model_id} (Ollama)"
+        )
+    else:
+        llm_summary = f"Selected LLM: {plan.llm_model_id}"
     prompter.heading(
         "Mémai setup complete!",
         [
-            f"Selected LLM: {plan.llm_model_id}",
+            llm_summary,
             "Start the server with:",
             f"  cd server && {start_cmd}",
         ],

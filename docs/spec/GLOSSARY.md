@@ -19,7 +19,7 @@ General AI/audio engineering vocabulary, as used in this project.
 |---|---|
 | **STT** (speech-to-text) | Transcribing audio into text. Memai: `faster-whisper`, which also auto-detects the spoken *language* per *utterance*. |
 | **TTS** (text-to-speech) | Synthesising audio from text. Memai: Kokoro, one multilingual model, one *voice* selected per synthesis call. |
-| **LLM** (large language model) | The conversational/reasoning model. Memai: a local model served by **Ollama** (default `aya-expanse`), streamed token by token. |
+| **LLM** (large language model) | The conversational/reasoning model, streamed token by token. Memai: local via **Ollama** (default `aya-expanse`) for everything by default; live conversation only may instead use a remote OpenAI-compatible endpoint (`[llm].provider = "openai_compatible"`, FR-707/TR-955) — the offline memory pipeline and every Ollama-backed strategy helper always stay local regardless. |
 | **VAD** (voice activity detection) | Classifying an *audio frame* as speech or silence. Memai: `webrtcvad` on the client, aggressiveness 2. |
 | **Audio frame** | The smallest audio unit the client processes: 30 ms of 16 kHz mono audio (480 samples). VAD operates per frame. |
 | **Audio buffer** | Server-side accumulation of binary audio frames for the current *utterance*, flushed to STT on *end-of-utterance*. |

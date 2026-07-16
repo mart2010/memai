@@ -3,9 +3,8 @@ import json
 
 import openai
 
-from ...domain.events import RecallSource, RecallTriggered
-from ...domain.model import Concept, Conversation, Episode, Language, MemoryType, Procedure
-from ...services.ports import ExtractionResult, MemoryItem, Message
+from ...domain.model import Concept, Conversation, Episode, Language, Procedure
+from ...services.ports import ExtractionResult, MemoryItem
 from ._common import _conversation_language, _extraction_system_prompt, _format_conversation, _parse_extraction
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
@@ -13,36 +12,12 @@ _DEFAULT_MODEL = "meta-llama/llama-3.3-70b-instruct"
 
 
 # ---------------------------------------------------------------------------
-# Live path — async streaming
-# ---------------------------------------------------------------------------
-
-class OpenRouterLLMService:
-    def __init__(
-        self,
-        api_key: str,
-        model: str = _DEFAULT_MODEL,
-        base_url: str = _DEFAULT_BASE_URL,
-    ) -> None:
-        self._client = openai.AsyncOpenAI(api_key=api_key, base_url=base_url)
-        self._model = model
-
-    async def complete(self, messages: list[Message], system_prompt: str):
-        openai_messages = [{"role": "system", "content": system_prompt}]
-        for m in messages:
-            openai_messages.append({"role": m.role, "content": m.content})
-        stream = await self._client.chat.completions.create(
-            model=self._model,
-            messages=openai_messages,
-            stream=True,
-        )
-        async for chunk in stream:
-            content = chunk.choices[0].delta.content
-            if content:
-                yield content
-
-
-# ---------------------------------------------------------------------------
-# Offline path — synchronous one-shot calls
+# Offline path — synchronous one-shot calls. The live conversational pair
+# (OpenRouterLLMService, OpenRouterRecallIntentDetector) moved to
+# openai_compatible.py (FR-707/TR-955) since they're now a generic
+# any-OpenAI-compatible-endpoint adapter, not an OpenRouter-specific one —
+# this offline family stays under the OpenRouter name/defaults since it isn't
+# wired into the composition root yet (see TR-953).
 # ---------------------------------------------------------------------------
 
 class OpenRouterWorthinessEvaluator:
@@ -73,48 +48,6 @@ class OpenRouterWorthinessEvaluator:
             ],
         )
         return "yes" in (response.choices[0].message.content or "").strip().lower()
-
-
-class OpenRouterRecallIntentDetector:
-    def __init__(
-        self,
-        api_key: str,
-        model: str = _DEFAULT_MODEL,
-        base_url: str = _DEFAULT_BASE_URL,
-    ) -> None:
-        self._client = openai.OpenAI(api_key=api_key, base_url=base_url)
-        self._model = model
-
-    def detect(self, text: str) -> RecallTriggered | None:
-        response = self._client.chat.completions.create(
-            model=self._model,
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Detect if the user wants to recall past memories. "
-                        'If yes, respond with JSON: {"recall": true, "query": "<search query>", '
-                        '"memory_types": ["episode"|"concept"|"procedure", ...]}. '
-                        "Include only the relevant memory type(s). "
-                        'If no recall intent, respond with {"recall": false}.'
-                    ),
-                },
-                {"role": "user", "content": text},
-            ],
-            response_format={"type": "json_object"},
-        )
-        try:
-            data = json.loads(response.choices[0].message.content or "")
-        except (json.JSONDecodeError, AttributeError):
-            return None
-        if not data.get("recall"):
-            return None
-        query = data.get("query", text)
-        valid_values = {m.value for m in MemoryType}
-        memory_types = tuple(
-            MemoryType(t) for t in data.get("memory_types", []) if t in valid_values
-        ) or tuple(MemoryType)
-        return RecallTriggered(query=query, memory_types=memory_types, source=RecallSource.USER)
 
 
 class OpenRouterMemorySynthesizer:

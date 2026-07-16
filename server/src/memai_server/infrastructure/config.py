@@ -21,6 +21,18 @@ class ServerConfig:
     tts_device: str | None
     llm_model: str
     llm_ollama_host: str | None
+    # Live-conversation LLM backend (FR-707/TR-955). "ollama" (default) reuses
+    # llm_model/llm_ollama_host above for the live path too, exactly as before this
+    # setting existed — fully backward compatible with configs that predate it.
+    # "openai_compatible" swaps only the live path (LLMService + RecallIntentDetector,
+    # see ProcessTurn) to a remote HTTP endpoint; the offline pipeline (consolidation,
+    # MemoryBrief, tutor strategy helpers) always stays on llm_model/llm_ollama_host,
+    # regardless of this setting — a GPU-less/CPU-only offline run is fine, per design
+    # decision, just slower.
+    llm_provider: str
+    llm_base_url: str | None  # required when llm_provider == "openai_compatible"
+    llm_remote_model: str | None  # required when llm_provider == "openai_compatible"
+    llm_api_key: str | None  # optional even when llm_provider == "openai_compatible"
     memory_merge_threshold: float
     memory_disambiguate_threshold: float
     # Wizard-selected languages ([languages].installed, FR-705). Empty = key absent
@@ -47,6 +59,19 @@ def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
     memory = raw.get("memory", {})
     languages = raw.get("languages", {})
 
+    llm_provider = llm.get("provider", "ollama")
+    if llm_provider not in ("ollama", "openai_compatible"):
+        raise RuntimeError(
+            f"[llm].provider must be 'ollama' or 'openai_compatible', got {llm_provider!r}"
+        )
+    llm_base_url = llm.get("base_url") or None
+    llm_remote_model = llm.get("remote_model") or None
+    if llm_provider == "openai_compatible" and not (llm_base_url and llm_remote_model):
+        raise RuntimeError(
+            "[llm].provider = 'openai_compatible' requires both [llm].base_url and "
+            "[llm].remote_model to be set"
+        )
+
     return ServerConfig(
         ws_port=int(server.get("ws_port", 8765)),
         log_dir=Path(server.get("log_dir", "logs/sessions")),
@@ -59,6 +84,10 @@ def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
         tts_device=tts.get("device"),
         llm_model=llm.get("model", "aya-expanse"),
         llm_ollama_host=llm.get("ollama_host") or None,
+        llm_provider=llm_provider,
+        llm_base_url=llm_base_url,
+        llm_remote_model=llm_remote_model,
+        llm_api_key=llm.get("api_key") or None,
         memory_merge_threshold=float(memory.get("merge_threshold", 0.93)),
         memory_disambiguate_threshold=float(memory.get("disambiguate_threshold", 0.75)),
         installed_languages=tuple(languages.get("installed", [])),

@@ -72,3 +72,32 @@ def test_partial_config_prefills_only_present_fields(tmp_path: Path):
 
 def test_malformed_config_degrades_to_fresh_run(tmp_path: Path):
     assert _detector(tmp_path, "[server\nnot toml at all").load_existing_plan() is None
+
+
+def test_prefills_default_ollama_provider_when_llm_provider_key_absent(tmp_path: Path):
+    """Spec: FR-707 — configs written before this setting existed prefill the
+    plan's own "ollama" default, not None."""
+    plan = _detector(tmp_path, _FULL_CONFIG).load_existing_plan()
+
+    assert plan is not None
+    assert plan.llm_provider == "ollama"
+    assert plan.llm_base_url is None
+
+
+def test_prefills_openai_compatible_provider_and_remote_fields(tmp_path: Path):
+    """Spec: FR-707"""
+    content = """
+    [llm]
+    model = "aya-expanse"
+    provider = "openai_compatible"
+    base_url = "https://openrouter.ai/api/v1"
+    remote_model = "meta-llama/llama-3.3-70b-instruct"
+    api_key = "sk-example"
+    """
+    plan = _detector(tmp_path, content).load_existing_plan()
+
+    assert plan is not None
+    assert plan.llm_provider == "openai_compatible"
+    assert plan.llm_base_url == "https://openrouter.ai/api/v1"
+    assert plan.llm_remote_model == "meta-llama/llama-3.3-70b-instruct"
+    assert plan.llm_api_key == "sk-example"

@@ -58,5 +58,13 @@ class FileExistingInstallDetector:
             plan.compute_device = stt["device"]
         if llm.get("model"):
             plan.llm_model_id = llm["model"]
+        if llm.get("provider"):
+            plan.llm_provider = llm["provider"]
+        if llm.get("base_url"):
+            plan.llm_base_url = llm["base_url"]
+        if llm.get("remote_model"):
+            plan.llm_remote_model = llm["remote_model"]
+        if llm.get("api_key"):
+            plan.llm_api_key = llm["api_key"]
         plan.languages = list(languages.get("installed", []))
         return plan

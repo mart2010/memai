@@ -20,6 +20,7 @@ from .domain.model import (
     User,
     resolve_installed_languages,
 )
+from .domain.protocols import RecallIntentDetector
 from .infrastructure import postgres
 from .infrastructure.config import load_config
 from .infrastructure.embedding import SentenceTransformerEmbeddingService
@@ -54,7 +55,7 @@ from .infrastructure.stt import FasterWhisperSTTService
 from .infrastructure.tts import KOKORO_DEFAULT_VOICES, KokoroTTSService
 from .services.memory import ConsolidateMemory, EnrichMemory, GenerateMemoryBrief
 from .services.persona import EditPersona
-from .services.ports import PersonaAssessmentPort, PersonaEnrichmentPort, PersonaSelectionPort
+from .services.ports import LLMService, PersonaAssessmentPort, PersonaEnrichmentPort, PersonaSelectionPort
 from .services.replay import TurnLogReplayer
 from .services.session import EndSession, ProcessTurn, StartSession
 from .services.user import CompleteOnboarding
@@ -69,17 +70,28 @@ from .services.user import CompleteOnboarding
 class ServerContext:
     conn: psycopg.Connection
     stt: FasterWhisperSTTService
-    llm: OllamaLLMService
+    # Live conversation only (ProcessTurn) — OllamaLLMService by default, or
+    # OpenAICompatibleLLMService when [llm].provider = "openai_compatible"
+    # (FR-707/TR-955). Never used for the offline pipeline — see offline_llm.
+    llm: LLMService
     tts: KokoroTTSService
     embedding_service: SentenceTransformerEmbeddingService
     language_detector: Py3LangidLanguageDetector
     log_dir: Path
     memory_merge_threshold: float
     memory_disambiguate_threshold: float
-    # Exposed for strategy factories that construct their own LLM-backed helpers
-    # (e.g. the tutor's focus interpreter) — same model/host as every other adapter.
+    # The local Ollama model/host — always used for the offline pipeline (extraction,
+    # worthiness, disambiguation, synthesis, GenerateMemoryBrief via offline_llm) and
+    # every Ollama-backed strategy helper (e.g. the tutor's focus interpreter),
+    # regardless of what `llm`/`recall_detector` above are live-configured to. A
+    # GPU-less/CPU-only offline run is fine, per design decision, just slower.
     llm_model: str
     llm_ollama_host: str | None
+    # Dedicated instance for GenerateMemoryBrief (offline) — deliberately never `llm`
+    # above: offline stays on local Ollama regardless of the live provider choice, so a
+    # remote-LLM install doesn't silently start sending brief-generation prompts to a
+    # third party too. Always Ollama, so always constructible even when `llm` isn't.
+    offline_llm: OllamaLLMService
     # Wizard-installed languages (FR-705): the subset of SUPPORTED_LANGUAGES whose TTS
     # voices this installation actually pulled. Bounds onboarding selection (TR-103)
     # and GA response-language mirroring (TR-313).
@@ -89,7 +101,10 @@ class ServerContext:
     memory_brief_repo: PSMemoryBriefRepository
     memory_repo: PSMemoryRepository
     conversation_repo: PSConversationRepository
-    recall_detector: OllamaRecallIntentDetector
+    # Live, per-turn (ProcessTurn) — moves with `llm` above (FR-707/TR-955): a remote
+    # live LLM with recall detection left on slow local CPU Ollama would still pay that
+    # latency tax every turn before the (now fast) reply even starts.
+    recall_detector: RecallIntentDetector
     worthiness_evaluator: OllamaWorthinessEvaluator
     disambiguator: OllamaDisambiguationEvaluator
     synthesizer: OllamaMemorySynthesizer
@@ -167,7 +182,7 @@ async def _run_offline_pipeline(ctx: ServerContext) -> None:
     )
     enriched = await asyncio.to_thread(enrich.execute)
     if processed:
-        brief_gen = GenerateMemoryBrief(llm=ctx.llm, memory_brief_repo=ctx.offline_memory_brief_repo)
+        brief_gen = GenerateMemoryBrief(llm=ctx.offline_llm, memory_brief_repo=ctx.offline_memory_brief_repo)
         await brief_gen.execute(datetime.now(UTC))
     print(f"[offline] replayed={replayed} consolidated={processed} enriched={enriched}")
 
@@ -416,7 +431,24 @@ def main() -> None:
 
     print("Loading Whisper model…")
     stt = FasterWhisperSTTService(cfg.stt_model_path, device=cfg.stt_device, compute_type=cfg.stt_compute_type)
-    llm = OllamaLLMService(model=cfg.llm_model, host=cfg.llm_ollama_host)
+    # Live conversation (FR-707/TR-955): local Ollama by default, or any OpenAI-compatible
+    # remote endpoint when configured. offline_llm is always a separate, always-Ollama
+    # instance (see ServerContext's docstring on it) — even when provider == "ollama",
+    # where the two happen to be equivalent, keeping construction uniform is simpler and
+    # safer than special-casing "reuse `llm`" for one provider only.
+    if cfg.llm_provider == "openai_compatible":
+        from .infrastructure.llm import OpenAICompatibleLLMService, OpenAICompatibleRecallIntentDetector
+
+        llm: LLMService = OpenAICompatibleLLMService(
+            base_url=cfg.llm_base_url, model=cfg.llm_remote_model, api_key=cfg.llm_api_key,
+        )
+        recall_detector: RecallIntentDetector = OpenAICompatibleRecallIntentDetector(
+            base_url=cfg.llm_base_url, model=cfg.llm_remote_model, api_key=cfg.llm_api_key,
+        )
+    else:
+        llm = OllamaLLMService(model=cfg.llm_model, host=cfg.llm_ollama_host)
+        recall_detector = OllamaRecallIntentDetector(model=cfg.llm_model, host=cfg.llm_ollama_host)
+    offline_llm = OllamaLLMService(model=cfg.llm_model, host=cfg.llm_ollama_host)
     tts = KokoroTTSService(device=cfg.tts_device)
     print("Loading embedding model…")
     embedding_service = SentenceTransformerEmbeddingService()
@@ -435,13 +467,14 @@ def main() -> None:
         memory_disambiguate_threshold=cfg.memory_disambiguate_threshold,
         llm_model=cfg.llm_model,
         llm_ollama_host=cfg.llm_ollama_host,
+        offline_llm=offline_llm,
         installed_languages=installed_languages,
         user_repo=user_repo,
         persona_repo=PSPersonaRepository(conn),
         memory_brief_repo=PSMemoryBriefRepository(conn),
         memory_repo=PSMemoryRepository(conn),
         conversation_repo=PSConversationRepository(conn),
-        recall_detector=OllamaRecallIntentDetector(model=cfg.llm_model, host=cfg.llm_ollama_host),
+        recall_detector=recall_detector,
         worthiness_evaluator=OllamaWorthinessEvaluator(model=cfg.llm_model, host=cfg.llm_ollama_host),
         disambiguator=OllamaDisambiguationEvaluator(model=cfg.llm_model, host=cfg.llm_ollama_host),
         synthesizer=OllamaMemorySynthesizer(model=cfg.llm_model, host=cfg.llm_ollama_host),

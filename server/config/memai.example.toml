@@ -24,7 +24,7 @@ log_dir = "logs/sessions"
 # Standard libpq DSN. memai-setup defaults to peer auth (Linux/macOS) — no
 # password stored anywhere, since Postgres and the server always run on the
 # same machine: postgresql:///memai?user=memai (empty host = local Unix
-# socket; requires a one-time pg_ident.conf mapping, see docs/INSTALL_SERVER.md).
+# socket; requires a one-time pg_ident.conf mapping, see docs/INSTALLATION.md).
 # Falls back to a password DSN below for remote Postgres or Windows (which has
 # no `peer` auth — its equivalent, `sspi`, isn't yet supported here).
 url = "postgresql://memai:changeme@localhost:5432/memai"
@@ -48,11 +48,24 @@ compute_type = "float16"
 device = "cuda"
 
 [llm]
-# Avoid large (~70B-class) models — they don't fit in VRAM alongside Whisper +
-# Kokoro and get cold-reloaded between turns. Avoid reasoning models (e.g.
-# qwen3) — their <think> blocks get spoken aloud.
+# `model`/`ollama_host` are always the local Ollama model for the offline memory
+# pipeline (consolidation, memory brief, tutor strategy helpers) regardless of
+# `provider` below (FR-707/TR-955) — a GPU-less/CPU-only offline run is fine,
+# just slower. Avoid large (~70B-class) models — they don't fit in VRAM alongside
+# Whisper + Kokoro and get cold-reloaded between turns. Avoid reasoning models
+# (e.g. qwen3) — their <think> blocks get spoken aloud.
 model = "aya-expanse"
 # ollama_host = "http://localhost:11434"  # uncomment if Ollama is not on localhost
+
+# Live conversation only (the main reply + per-turn recall-intent detection) can
+# instead use a remote OpenAI-compatible endpoint — e.g. no local GPU capable of
+# fast live inference. Omit entirely (or set provider = "ollama") to keep live
+# conversation local too, using model/ollama_host above — the default, and fully
+# backward compatible with configs written before this existed.
+# provider = "openai_compatible"
+# base_url = "https://openrouter.ai/api/v1"  # any OpenAI-compatible endpoint
+# remote_model = "meta-llama/llama-3.3-70b-instruct"
+# api_key = ""  # optional — some self-hosted endpoints don't require one
 
 [languages]
 # The installed-languages contract (FR-705): the languages selected during

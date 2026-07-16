@@ -50,21 +50,69 @@ tracks work still to do.
       already-tracked Windows chmod gap). Not yet live-verified against a real AMD box in
       this session (this laptop has none) — worth confirming on the Strix Halo workstation
       next time it's touched.
-- [ ] **Phase 14 (proposed) — Public/cloud LLM adapter as a wizard-selectable option**:
-      now unblocked by the item above (a GPU-less or AMD-only box can be told apart from
-      "genuinely nothing local can run this well"). `OpenRouterLLMService` and its sibling
-      adapters already exist (`infrastructure/llm/openrouter.py`, Phase 3), but `SelectLLM`
-      never offers them — today's wizard only ever lists local Ollama models. Goal: when no
-      capable local GPU is found, the wizard recommends configuring a public/open LLM API
-      endpoint instead (just a URL + optional key — matches the OpenAI-compatible shape
-      `OpenRouterLLMService` already speaks) — while STT/TTS/embeddings/memory stay fully
-      local (CPU is fine for embeddings; that work is offline anyway) — matches the
-      "Deployment alternatives" table already documented in the root README. Not yet
-      scoped: how the wizard collects/stores the endpoint URL + key (`memai.toml` is
-      bootstrap-only per FR-701 — a `User`/config field question), whether/how this is
-      surfaced as an explicit privacy tradeoff in the wizard UI, and interaction with
-      `CheckPrerequisites` (no local Ollama check needed if cloud-only). Discuss and scope
-      before implementing.
+- [x] **Public/cloud LLM adapter as a wizard-selectable option (2026-07-16, FR-707/TR-955)**
+      — live conversation can now use any OpenAI-compatible remote endpoint (OpenRouter,
+      OpenAI, a self-hosted vLLM/LM Studio server, ...), toml-direct API-key storage per
+      discussion (same precedent as `database.url`'s plaintext password, 0600-permissioned).
+      **Split out `OpenAICompatibleLLMService`/`OpenAICompatibleRecallIntentDetector`**
+      (new `infrastructure/llm/openai_compatible.py`) from `OpenRouterLLMService`/
+      `OpenRouterRecallIntentDetector` — they were already a generic
+      `openai.AsyncOpenAI(api_key=, base_url=)` wrapper defaulting to openrouter.ai, so
+      the rename/move is mostly a naming-accuracy fix (CLAUDE.md's push-back-on-imprecise-
+      naming rule), not new logic; `base_url`/`model` now required (no generic default
+      makes sense), `api_key` optional (coalesced to a placeholder string — the openai
+      client wants some value even against endpoints that don't check one). The offline
+      OpenRouter family (worthiness/disambiguation/synthesis/extraction) is untouched,
+      stays un-wired (TR-953).
+      **Real design gap found and fixed before wiring**: `RecallIntentDetector.detect()`
+      is ALSO a live, per-turn, blocking-before-reply LLM call (`ProcessTurn`, before the
+      main completion) — moves together with `LLMService`, not left on local Ollama, or a
+      remote-live install would still pay a CPU-inference tax every turn.
+      **Second real gap found**: `GenerateMemoryBrief` (offline) was reusing the same
+      `ctx.llm` object as live conversation — swapping `ctx.llm` to remote would have
+      silently sent brief-generation prompts to the third party too. Fixed: new
+      `ServerContext.offline_llm`, a dedicated always-Ollama `OllamaLLMService` instance,
+      never aliased to the live `llm` (two instances constructed even when both are
+      "ollama" — simpler/safer than special-casing one provider).
+      **Config** (`infrastructure/config.py`): `[llm].provider` ("ollama" default |
+      "openai_compatible"), `base_url`, `remote_model`, `api_key` — fail-fast
+      `RuntimeError` at config-load time if `openai_compatible` is missing `base_url`/
+      `remote_model`. `model`/`ollama_host` keep meaning "the local Ollama model," now
+      always for the offline pipeline regardless of `provider` — fully backward
+      compatible (absent `provider` ⇒ `"ollama"`, identical behaviour to before this
+      existed). `server.py`'s composition root branches once on `cfg.llm_provider`;
+      the `openai_compatible` import stays inside that branch (not a static top-level
+      import) so a fully-local deployment's import graph doesn't touch `openai` at all,
+      matching the existing lazy-reexport posture in `infrastructure/llm/__init__.py`.
+      **Wizard**: new `ConfigureLLMProvider` step (before `SelectLLM`, now flow step 6 —
+      every later step's docstring number shifted +1) asks local-vs-remote, collects
+      `base_url`/`remote_model`/optional `api_key` when remote (blank key ⇒ `None`, not
+      `""`); re-run pre-fill marks the current choice `(current)`, matching `SelectLLM`'s
+      convention. `SelectLLM` (unchanged catalogue/pull logic) always still runs
+      regardless of the live choice — its prompt text says so explicitly when provider is
+      remote, so picking an Ollama model right after choosing "remote" doesn't read as
+      contradictory. `ShowWelcome`'s stale "no cloud fallback" prerequisite bullet fixed;
+      `cli.py`'s completion summary now reports both the live and offline model when
+      remote. `TomlConfigWriter` omits `provider`/`base_url`/`remote_model`/`api_key`
+      entirely for the common local case (minimal-diff-for-default posture, matching
+      `tts_device` etc.) — the reader's own defaults have to be right for that to be
+      correct, so the two were designed and tested together.
+      **Spec**: FR-707 (FUNCTIONAL.md), TR-951/952/953 updated + new TR-955
+      (TECHNICAL.md), GLOSSARY's `LLM` entry (TECHNICAL.md/GLOSSARY.md);
+      `server/config/memai.example.toml` documents the new keys (also fixed a stale
+      `docs/INSTALL_SERVER.md` cross-reference left over from the doc-consolidation
+      commit). 245 server unit tests green (up from 233 — 12 new `test_config.py` cases;
+      that module needed a local `platformdirs` shim to even collect on this laptop's
+      frozen venv, same known gap as ever, not a new one) + 98 setup unit tests green (2
+      pre-existing Windows chmod failures, unrelated). `ruff check` clean on every touched
+      file in both packages.
+      **Not yet live-verified**: no real OpenAI-compatible endpoint, no GPU-less box, and
+      no `openai`/`psycopg` in this laptop's frozen venv to actually run `memai-server`
+      end-to-end here — next real verification needs a workstation (or any box) with
+      network access to a real endpoint, confirming: `uv sync` picks up `openai` cleanly,
+      a live turn actually completes via the remote endpoint, recall detection round-trips
+      correctly, and the offline pipeline still produces a memory brief via local Ollama
+      while `provider = "openai_compatible"` is set.
 - [ ] **Native Windows `memai-server` support** — found while consolidating the
       install docs (2026-07-16): `uv sync` in `server/` fails on Windows building
       `numpy==1.26.4` from source (`mesonpy.build_wheel` error, no C/C++ compiler found;

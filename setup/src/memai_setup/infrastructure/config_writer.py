@@ -52,7 +52,18 @@ class TomlConfigWriter:
             "compute_type": "float16" if device == "cuda" else "int8",
         }
         config["tts"] = {"device": device}
-        config["llm"] = {"model": plan.llm_model_id or "aya-expanse"}
+        # `model`/`ollama_host` are always the local Ollama model for the offline memory
+        # pipeline (FR-707) — provider/base_url/remote_model/api_key are omitted entirely
+        # for the common "ollama" case, keeping written configs minimal/unchanged from
+        # before this setting existed; only present when live conversation is remote.
+        llm_config = {"model": plan.llm_model_id or "aya-expanse"}
+        if plan.llm_provider == "openai_compatible":
+            llm_config["provider"] = plan.llm_provider
+            llm_config["base_url"] = plan.llm_base_url or ""
+            llm_config["remote_model"] = plan.llm_remote_model or ""
+            if plan.llm_api_key:
+                llm_config["api_key"] = plan.llm_api_key
+        config["llm"] = llm_config
         # The wizard-selected languages ARE the installed-languages contract: the
         # server offers onboarding language selection and GA response-language
         # mirroring only within this set (FR-705). Absent (configs written before

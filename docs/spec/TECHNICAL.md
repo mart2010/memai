@@ -406,20 +406,46 @@ only validation layer.
   `[server] ws_port=8765, log_dir="logs/sessions"`; `[database] url` (libpq DSN; peer
   auth default on Linux/macOS); `[stt] model_path, device cuda|cpu, compute_type`
   (float16↔cuda, int8↔cpu); `[tts] device` (absent → Kokoro auto-detect); `[llm]
-  model="aya-expanse", ollama_host?`; `[memory] merge_threshold=0.93,
+  model="aya-expanse", ollama_host?` (always: the local Ollama model for the offline
+  pipeline, TR-955), plus `provider="ollama"|"openai_compatible"` (default `"ollama"`,
+  omitted from written configs in the common case), and, only when `provider =
+  "openai_compatible"`: `base_url`, `remote_model` (both required), `api_key` (optional)
+  — the live-conversation backend, FR-707; `[memory] merge_threshold=0.93,
   disambiguate_threshold=0.75`; `[languages] installed=[codes]` (the installed
   languages, FR-705 — absent → all of `SUPPORTED_LANGUAGES`). Bootstrap-before-DB
   settings only (FR-701); installed languages qualify because they are a property of
   the installation (which TTS voices were pulled), changeable only via the wizard.
 - **TR-952** Models: STT `faster-whisper` (beam 5, auto language); LLM via Ollama
-  streaming (avoid ~70B-class models — VRAM eviction/cold-reload; avoid
+  streaming, or an OpenAI-compatible remote endpoint for live conversation only
+  (TR-955) — avoid ~70B-class Ollama models (VRAM eviction/cold-reload; avoid
   reasoning models — `<think>` blocks get spoken); TTS Kokoro (one lazily-created
   pipeline per voice-prefix language, output resampled 24 kHz → 16 kHz float32);
-  embeddings `intfloat/multilingual-e5-large` (1024-dim).
-- **TR-953** LLM-backed judgment adapters (recall intent, worthiness, disambiguation,
-  synthesis, extraction, tutor focus/judge/cluster) all use the same configured
-  model/host as the conversational LLM. OpenRouter twins of the LLM adapters exist in
-  `infrastructure/llm/openrouter.py` but are not wired into the composition root
-  (deployment-alternative groundwork).
+  embeddings `intfloat/multilingual-e5-large` (1024-dim, always local/CPU-or-GPU —
+  never remote, TR-955).
+- **TR-953** Offline LLM-backed judgment adapters (worthiness, disambiguation,
+  synthesis, extraction, tutor judge/cluster) all use the same configured local Ollama
+  model/host, regardless of `[llm].provider` (TR-955). OpenRouter twins of this offline
+  family exist in `infrastructure/llm/openrouter.py` but are not wired into the
+  composition root (deployment-alternative groundwork, distinct from the live
+  OpenAI-compatible pair that TR-955 documents as wired in).
 - **TR-954** Outbound TLS uses the OS trust store (`truststore`) — corporate-proxy
   resilience for any adapter that still touches the network.
+- **TR-955** Live conversation (`ProcessTurn`'s main reply, `LLMService.complete()`, and
+  its per-turn recall-intent check, `RecallIntentDetector.detect()`) is the only part of
+  the pipeline `[llm].provider` affects (FR-707): `"ollama"` (default) uses
+  `OllamaLLMService`/`OllamaRecallIntentDetector` against `[llm].model`/`ollama_host`,
+  same as before this setting existed; `"openai_compatible"` uses
+  `OpenAICompatibleLLMService`/`OpenAICompatibleRecallIntentDetector`
+  (`infrastructure/llm/openai_compatible.py`, a generic `openai.AsyncOpenAI`/`OpenAI`
+  client against `[llm].base_url`, any OpenAI-compatible provider — OpenRouter, OpenAI,
+  a self-hosted server; a missing `api_key` is coalesced to a placeholder string, since
+  the client library requires some value even against endpoints that don't check it)
+  against `[llm].base_url`/`remote_model`/`api_key`. Both live ports move together,
+  deliberately: recall-intent detection fires every turn before the main reply starts,
+  so leaving it on local Ollama while the main completion goes remote would still pay a
+  CPU-inference latency tax every turn on a GPU-less install. Every other LLM-touching
+  port (offline judgment adapters, TR-953; `GenerateMemoryBrief`, via a dedicated
+  `ServerContext.offline_llm` instance never aliased to the live `llm`; Ollama-backed
+  persona-strategy helpers, e.g. the tutor's focus interpreter) always stays on the
+  local Ollama model, unaffected by this setting — a GPU-less/CPU-only offline run is
+  accepted as slower, not moved off-machine.
