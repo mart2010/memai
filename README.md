@@ -1,10 +1,17 @@
 # Memai
 
-**Your personal AI voice assistant — 100% private, 100% local, never leaves your home network.**
+**AI should make you sharper, not dumber.**
 
-No cloud. No subscriptions. No data ever sent to a third party. Memai runs entirely on
-your own hardware, using open-source models, and keeps every conversation, memory, and
-learned insight locked inside your home network.
+Memai is a voice assistant built to help you actually grow — real expertise, real
+knowledge, built through natural conversation, away from a keyboard — instead of quietly
+doing your thinking for you. And it does that without asking you to hand your
+conversations, your knowledge, or your personal life over to a commercial AI company to
+get there: by default, Memai runs entirely on your own hardware, using open-source
+models, so growing your knowledge with it never means giving it away.
+
+No local GPU capable of fast inference? Memai still runs — live conversation can
+optionally use a remote LLM provider instead, an explicit choice you make, not a hidden
+default. See [Local by default](#local-by-default) below.
 
 ---
 
@@ -121,17 +128,18 @@ Microphone → [VAD] → WebSocket → [STT] → [LLM stream] → [TTS] → WebS
 | Component | Runs on | Role |
 |---|---|---|
 | `client/` | Your everyday machine (Windows, macOS, Linux) | Captures audio, plays back speech, auto-opens SSH tunnel to server |
-| `server/` | Any NVIDIA GPU-equipped machine (Linux recommended; Windows with CUDA untested) | STT → LLM → TTS pipeline, persistent memory, consolidation |
+| `server/` | Linux or macOS (native Windows not yet supported — see [docs/INSTALLATION.md](docs/INSTALLATION.md)). A GPU speeds things up but isn't required — CPU-only works, just slower | STT → LLM → TTS pipeline, persistent memory, consolidation |
 
-**All models run locally:**
+**Every model runs locally by default:**
 
-| Task | Model |
-|---|---|
-| Speech-to-text | `faster-whisper` |
-| Language model | `aya-expanse` via `ollama` (streamed) |
-| Text-to-speech | `Kokoro`, CUDA-accelerated |
-| Embeddings | `multilingual-e5-large` (1024-dim) |
-| Vector search | PostgreSQL + `pgvector` (HNSW index) |
+| Task | Model | Optionally remote? |
+|---|---|---|
+| Speech-to-text | `faster-whisper` | no |
+| Language model (live conversation) | `aya-expanse` via `ollama` (streamed) | **yes** — see [Local by default](#local-by-default) |
+| Language model (offline memory pipeline) | `aya-expanse` via `ollama` | no — always local, regardless of the above |
+| Text-to-speech | `Kokoro`, GPU-accelerated when available | no |
+| Embeddings | `multilingual-e5-large` (1024-dim) | no |
+| Vector search | PostgreSQL + `pgvector` (HNSW index) | no |
 
 ---
 
@@ -162,43 +170,46 @@ configured by voice — no CLI arguments, no config files to edit.
 
 ---
 
-## Privacy by design
+## Local by default
+
+Memai's default install is fully local and air-gapped-capable — this is the recommended
+setup, and the one the install wizard configures unless you tell it otherwise:
 
 - **Zero external calls.** No API keys, no telemetry, no model downloads after setup.
-- **Your data, your disk.** Conversations are written to local JSONL files; structured memory lives in your PostgreSQL instance.
-- **Air-gapped capable.** Once models are downloaded, the system runs with no internet access whatsoever.
-- **Live/offline boundary.** During a conversation, only flat files are written. Heavy processing (DB writes, LLM extraction, embedding generation) happens offline, after the session ends — keeping latency low and your conversation data from touching a DB in real time.
+- **Your data, your disk.** Conversations are written to local JSONL files; structured
+  memory lives in your own PostgreSQL instance.
+- **Air-gapped capable.** Once models are downloaded, everything runs with no internet
+  access at all.
+- **Live/offline boundary.** During a conversation, only flat files are written. Heavy
+  processing (DB writes, LLM extraction, embedding generation) happens offline, after the
+  session ends — keeping latency low and your conversation data off any database in real
+  time.
 
----
+**Not everyone has a GPU capable of fast local inference, though** — and that shouldn't
+be the reason Memai doesn't work for you. Live conversation (only) can instead use a
+remote OpenAI-compatible LLM endpoint — OpenRouter, OpenAI, a self-hosted `vLLM`/LM
+Studio server, anything speaking that protocol — an explicit choice made once during
+setup, not a silent fallback. Everything else is unaffected: your memory, your
+embeddings, your speech pipeline, and even the *offline* half of the memory system
+(the pass that extracts and consolidates what you've learned) always run on your own
+machine via a local Ollama model, regardless of this choice — slower on CPU, never sent
+anywhere.
 
-## Deployment alternatives
-
-The default setup above is fully local and air-gapped. But every inference service in
-Memai is a swappable adapter behind a clean port — there is no lock-in. If you are
-comfortable trading some privacy for convenience (or simply do not have a GPU), each
-component can be replaced independently:
-
-| Component | Local (default) | Cloud alternative |
+| Task | Local (default) | Optional remote |
 |---|---|---|
-| Speech-to-text | `faster-whisper` on GPU | Whisper API, Deepgram, AssemblyAI |
-| Language model | `aya-expanse` via `ollama` | OpenRouter, OpenAI, Anthropic, … |
-| Text-to-speech | Kokoro on GPU | ElevenLabs, Azure TTS, … |
-| Embeddings | `multilingual-e5-large` on CPU/GPU | OpenAI Embeddings API |
-| Memory store | PostgreSQL on your machine | Managed cloud PostgreSQL + pgvector |
+| Language model — live conversation | `aya-expanse` via Ollama | any OpenAI-compatible endpoint |
+| Language model — offline memory pipeline | `aya-expanse` via Ollama | always local, no exceptions |
+| Speech-to-text, text-to-speech, embeddings, memory store | local | none ship today — the architecture's ports allow it, but the LLM is the only one actually wired up |
 
-An OpenRouter LLM adapter already ships in the codebase as the first cloud
-implementation of the LLM port; making it a selectable option in the setup wizard is on
-the roadmap. Everything else stays local.
+If you do configure a remote endpoint, know what that trades away: the **LLM** sees each
+live conversation in full, transiently (Memai never asks it to store anything on its
+side). Your **long-term memory** — every Episode, Concept, and Procedure you have ever
+built — is untouched by this choice: it is extracted, embedded, and stored entirely
+locally, by the always-local offline pipeline described above.
 
-**On the privacy spectrum**, the components are not equally sensitive:
-
-- **LLM** — sees each conversation in full, but only transiently. No conversation text is stored by Memai on the provider's side.
-- **STT / TTS** — audio and synthesised speech pass through the provider. If you use a cloud STT, each utterance is sent upstream.
-- **Embeddings** — the most sensitive to outsource. Every Episode, Concept, and Procedure you have ever stored gets fingerprinted by the embedding provider if you swap this out. The local default keeps your entire long-term memory index private.
-- **Memory store** — the crown jewel. Hosting PostgreSQL on a cloud VM is reasonable (you own the instance); using a fully managed third-party DB-as-a-service means your accumulated personal knowledge lives on someone else's disk.
-
-The fully local setup is the recommended default. Everything else is an explicit
-trade-off that you make with full awareness.
+The fully local setup stays the recommended default. The remote option exists so that
+not having access to expensive GPU infrastructure doesn't have to mean not having access
+to Memai at all.
 
 ---
 

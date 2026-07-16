@@ -7,8 +7,8 @@ consistent.
 ## Getting set up
 
 See the [README](README.md#getting-started) for the two-component layout
-(`client/`, `server/`) and prerequisites (Python 3.13+, CUDA GPU for the
-server, PostgreSQL + pgvector).
+(`client/`, `server/`) and prerequisites (Python 3.13+, PostgreSQL + pgvector; a
+GPU speeds up the server but isn't required).
 
 ```bash
 # Server (GPU machine)
