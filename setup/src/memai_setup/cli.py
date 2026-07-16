@@ -8,7 +8,7 @@ import truststore
 
 from .infrastructure.config_writer import TomlConfigWriter
 from .infrastructure.existing_install import FileExistingInstallDetector
-from .infrastructure.gpu import NvidiaSmiGPUDetector
+from .infrastructure.gpu import SystemGPUDetector
 from .infrastructure.health_checks import OllamaHealthCheck, PsycopgConnectionVerifier
 from .infrastructure.model_installer import OllamaModelInstaller
 from .infrastructure.prompter import QuestionaryPrompter
@@ -37,7 +37,7 @@ from .services.steps import (
 
 def _install_steps(
     catalogues: TomlCatalogueRepository,
-    gpu: NvidiaSmiGPUDetector,
+    gpu: SystemGPUDetector,
     installer: OllamaModelInstaller,
     writer: TomlConfigWriter,
     schema_runner: SchemaRunner,
@@ -91,7 +91,7 @@ def main() -> None:
 
     prompter = QuestionaryPrompter()
     catalogues = TomlCatalogueRepository()
-    gpu = NvidiaSmiGPUDetector()
+    gpu = SystemGPUDetector()
     installer = OllamaModelInstaller()
     writer = TomlConfigWriter()
     schema_runner = PsycopgSchemaRunner()

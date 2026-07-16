@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from ..domain.model import LLMCatalogueEntry, STTCatalogueEntry, TTSCatalogueEntry
+from ..domain.model import DetectedGPU, LLMCatalogueEntry, STTCatalogueEntry, TTSCatalogueEntry
 from ..domain.plan import InstallationPlan
 
 
@@ -46,7 +46,15 @@ class CatalogueRepository(Protocol):
 
 
 class GPUDetector(Protocol):
-    def detect_vram_gb(self) -> float | None: ...  # None = undetectable
+    def detect_vram_gb(self) -> float | None: ...  # None = undetectable; NVIDIA/CUDA only
+
+    def detect_gpu(self) -> DetectedGPU | None:
+        """Best-effort identification of any GPU, called as a fallback only
+        when detect_vram_gb() found nothing — so callers can tell "no GPU at
+        all" apart from "a real GPU is here, just not one this sizing check
+        recognizes" (e.g. AMD). Returns None if nothing could be identified
+        either."""
+        ...
 
 
 class ExistingInstallDetector(Protocol):

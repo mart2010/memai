@@ -27,6 +27,58 @@ tracks work still to do.
 
 ## Next up
 
+- [x] **Wizard: identify non-NVIDIA GPUs (2026-07-16)** — prerequisite for the public-LLM
+      item below, done first per discussion: a real AMD Ryzen AI APU box (Linux) had
+      Ollama accelerating the LLM perfectly well, but the wizard's `NvidiaSmiGPUDetector`
+      (CUDA-only via `nvidia-smi`) reported a flat "no GPU detected," understating what was
+      actually there. `GPUDetector` (renamed adapter: `SystemGPUDetector`,
+      `infrastructure/gpu.py`) gained `detect_gpu() -> DetectedGPU | None`
+      (`domain/model.py`), a Linux-only sysfs fallback (`/sys/class/drm/card*/device`:
+      PCI `vendor` id → amd/intel/nvidia/unknown; amdgpu's own `mem_info_vram_total` +
+      `mem_info_gtt_total` summed for a real memory estimate — the same sysfs fields
+      Phase 12's archived findings used by hand to characterize this exact box's ~38.8 GB
+      GPU-reachable memory), called only as a fallback when `detect_vram_gb()` (unchanged,
+      still CUDA-only) finds nothing. Wired into two of the three steps that inject
+      `GPUDetector`, deliberately not the third: `DetectComputeDevice`'s message now names
+      the GPU instead of implying nothing is there (`compute_device` itself is unaffected —
+      still `cpu`, no ROCm STT/TTS adapter exists); `SelectLLM`'s fit hints now use the
+      identified GPU's memory when available, since Ollama can actually place the LLM on
+      it; `ResolveSTTEngine` deliberately left untouched (Whisper runs on CPU regardless of
+      GPU vendor, so a non-CUDA memory figure has no bearing on that model-size choice).
+      9 new infra unit tests (`test_gpu.py`, fake sysfs trees via `tmp_path`) + 6 new/updated
+      step tests; 83/85 setup unit tests green (the 2 failures are the pre-existing,
+      already-tracked Windows chmod gap). Not yet live-verified against a real AMD box in
+      this session (this laptop has none) — worth confirming on the Strix Halo workstation
+      next time it's touched.
+- [ ] **Phase 14 (proposed) — Public/cloud LLM adapter as a wizard-selectable option**:
+      now unblocked by the item above (a GPU-less or AMD-only box can be told apart from
+      "genuinely nothing local can run this well"). `OpenRouterLLMService` and its sibling
+      adapters already exist (`infrastructure/llm/openrouter.py`, Phase 3), but `SelectLLM`
+      never offers them — today's wizard only ever lists local Ollama models. Goal: when no
+      capable local GPU is found, the wizard recommends configuring a public/open LLM API
+      endpoint instead (just a URL + optional key — matches the OpenAI-compatible shape
+      `OpenRouterLLMService` already speaks) — while STT/TTS/embeddings/memory stay fully
+      local (CPU is fine for embeddings; that work is offline anyway) — matches the
+      "Deployment alternatives" table already documented in the root README. Not yet
+      scoped: how the wizard collects/stores the endpoint URL + key (`memai.toml` is
+      bootstrap-only per FR-701 — a `User`/config field question), whether/how this is
+      surfaced as an explicit privacy tradeoff in the wizard UI, and interaction with
+      `CheckPrerequisites` (no local Ollama check needed if cloud-only). Discuss and scope
+      before implementing.
+- [ ] **Native Windows `memai-server` support** — found while consolidating the
+      install docs (2026-07-16): `uv sync` in `server/` fails on Windows building
+      `numpy==1.26.4` from source (`mesonpy.build_wheel` error, no C/C++ compiler found;
+      reproduced on this laptop with `uv sync --native-tls`). Root cause: `numpy` 1.26.4
+      predates Python 3.13 Windows wheels, and the resolver won't move it past 1.26.4 even
+      via `uv lock --upgrade-package numpy` — Kokoro's English G2P chain
+      (`kokoro[en]`→`misaki[en]`→`spacy`→`thinc==8.3.13`→`blis==1.3.3`) anchors it there,
+      even though none of those packages' own PyPI metadata declares a `numpy<2` bound
+      (checked `blis`/`thinc`/`spacy`/`ctranslate2`/`onnxruntime`/`numba` directly) —
+      exact mechanism not fully root-caused, worth another look with `uv`'s resolver
+      explain/verbose output. Not fixed here — out of scope for a docs cleanup, and any
+      fix needs real testing on Windows with STT/TTS actually exercised, not just a clean
+      `uv sync`. Documented as a known limitation in `docs/INSTALLATION.md` with WSL2 as
+      the practical interim workaround (untested end-to-end).
 - [ ] **Phase 13 live smoke on the workstation**: fresh onboarding shows only installed
       languages; speak a second installed language to the GA (reply mirrors, voice
       switches); speak an uninstalled language (primary-language reminder names

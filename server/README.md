@@ -7,9 +7,11 @@ bundle installation.
 
 ## Install
 
-Follow the [server installation guide](../docs/INSTALL_SERVER.md) — it covers the NVIDIA
-driver, system packages (PostgreSQL + pgvector, Ollama, espeak-ng), and the interactive
-`memai-setup` wizard that downloads models and writes the config.
+Follow the [installation guide](../docs/INSTALLATION.md) — it covers system packages
+(PostgreSQL + pgvector, Ollama, espeak-ng), the GPU-optional compute path, and the
+interactive `memai-setup` wizard that downloads models and writes the config. Native
+Windows isn't supported yet for this package — see the guide's "Known limitation"
+section.
 
 ```bash
 cd server

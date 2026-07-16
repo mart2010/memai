@@ -16,6 +16,19 @@ class VRAMEstimate:
     recommended_gb: float
 
 
+@dataclass(frozen=True)
+class DetectedGPU:
+    """Best-effort identification of a physically present GPU that
+    GPUDetector.detect_vram_gb() (NVIDIA/CUDA-only, sizing-focused) couldn't
+    see — an AMD or Intel GPU, or an NVIDIA card whose driver/nvidia-smi isn't
+    working. `vendor` is "amd" | "intel" | "nvidia" | "unknown"; `vram_gb` is
+    None when presence is known but a memory estimate isn't (e.g. no amdgpu
+    sysfs memory-info files)."""
+
+    vendor: str
+    vram_gb: float | None
+
+
 class FitLevel(Enum):
     COMFORTABLE = auto()
     TIGHT = auto()

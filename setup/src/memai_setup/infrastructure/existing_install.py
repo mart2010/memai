@@ -23,7 +23,7 @@ class FileExistingInstallDetector:
     split-host client machine; the server-side configs of single- and split-host
     installs are indistinguishable, so topology is otherwise left unset and
     SelectTopology asks again. A malformed file degrades to a fresh run rather
-    than crashing (same graceful posture as NvidiaSmiGPUDetector)."""
+    than crashing (same graceful posture as SystemGPUDetector)."""
 
     def __init__(self, path: Path = CONFIG_PATH) -> None:
         self._path = path

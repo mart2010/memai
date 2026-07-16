@@ -18,6 +18,5 @@ uv sync
 uv run memai-setup
 ```
 
-See [docs/INSTALLATION.md](../docs/INSTALLATION.md) for where the wizard fits in the
-overall install, and [docs/INSTALL_SERVER.md](../docs/INSTALL_SERVER.md) for the
-step-by-step server guide (the wizard is its step 6).
+See [docs/INSTALLATION.md](../docs/INSTALLATION.md) for the full step-by-step guide
+(the wizard is step 7) and where it fits in the overall install.

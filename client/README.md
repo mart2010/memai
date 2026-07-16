@@ -10,7 +10,7 @@ connecting — nothing but SSH is ever exposed on the network.
 
 ## Install
 
-Follow the [client installation guide](../docs/INSTALL_CLIENT.md). In short:
+Follow the [installation guide](../docs/INSTALLATION.md). In short:
 
 ```bash
 uv tool install "git+<repo-url>#subdirectory=client"

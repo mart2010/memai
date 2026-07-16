@@ -37,7 +37,7 @@ class InstallationPlan:
     whisper_model: str | None = None
     tts_engine_by_language: dict[LanguageCode, str] = field(default_factory=dict)
     # "cuda" | "cpu". Defaults to the fail-safe "cpu" — same "never assume the
-    # optimistic case" philosophy as NvidiaSmiGPUDetector returning None on any
+    # optimistic case" philosophy as SystemGPUDetector.detect_vram_gb() returning None on any
     # failure. Set once by DetectComputeDevice; GenerateConfig/TomlConfigWriter
     # is the only other reader.
     compute_device: str = "cpu"

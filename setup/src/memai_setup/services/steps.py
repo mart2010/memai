@@ -54,7 +54,7 @@ class ShowWelcome:
 
     _PREREQUISITES = (
         "PostgreSQL 15+ with the pgvector extension installed (not just Postgres running), "
-        "and a 'memai' role/database created — see docs/INSTALL_SERVER.md. The next step "
+        "and a 'memai' role/database created — see docs/INSTALLATION.md. The next step "
         "prefers passwordless peer auth (Linux/macOS): if your OS user isn't yet mapped to "
         "the 'memai' role in pg_ident.conf, that step will show you the exact lines to add",
         "Ollama installed and running",
@@ -227,26 +227,41 @@ class DetectComputeDevice:
     nvidia-smi more than once rather than thread this step's result through
     every later step's fit-hint logic.
 
-    NvidiaSmiGPUDetector only ever recognizes NVIDIA/CUDA (see
+    detect_vram_gb() only ever recognizes NVIDIA/CUDA (see
     infrastructure/gpu.py), so None here covers both "no GPU" and "GPU
     present but not NVIDIA" (e.g. AMD) — ROCm/Metal remain long-term goals
     per CLAUDE.md, not wired into any adapter yet, so anything non-CUDA is
-    treated the same as no GPU: CPU fallback, not a failure."""
+    treated the same as no GPU for compute_device: CPU fallback, not a
+    failure. The two cases are told apart only in the message shown to the
+    user, via detect_gpu()'s Linux-sysfs fallback — real testing on an AMD
+    Ryzen AI APU box found the wizard reporting a flat "no GPU detected" even
+    though Ollama was accelerating the LLM on it fine; this doesn't change
+    compute_device (no ROCm STT/TTS adapter exists yet), just stops the
+    message from implying nothing is there at all."""
 
     def __init__(self, gpu: GPUDetector) -> None:
         self._gpu = gpu
 
     def run(self, plan: InstallationPlan, prompter: WizardPrompter) -> None:
-        vram_gb = self._gpu.detect_vram_gb()
-        if vram_gb is None:
-            plan.compute_device = "cpu"
+        if self._gpu.detect_vram_gb() is not None:
+            plan.compute_device = "cuda"
+            return
+
+        plan.compute_device = "cpu"
+        detected = self._gpu.detect_gpu()
+        if detected is not None and detected.vendor != "unknown":
+            memory_note = f" (~{detected.vram_gb:.0f} GB)" if detected.vram_gb is not None else ""
             prompter.info(
-                "No CUDA GPU detected — Mémai will run STT and TTS on CPU "
+                f"No NVIDIA/CUDA GPU detected, but a {detected.vendor.upper()} GPU{memory_note} was "
+                "found — Mémai will run STT and TTS on CPU (no AMD-accelerated path for those yet), "
+                "but Ollama's LLM inference can still use this GPU on its own."
+            )
+        else:
+            prompter.info(
+                "No GPU detected — Mémai will run STT and TTS on CPU "
                 "(slower, but fully functional). Ollama's LLM inference is "
                 "unaffected — it detects and uses any available GPU acceleration on its own."
             )
-        else:
-            plan.compute_device = "cuda"
 
 
 class SelectLLM:
@@ -255,7 +270,13 @@ class SelectLLM:
     options, never a filtered list"). Pulls the chosen model via Ollama before
     returning, matching the original flow doc's step 5 ("LLM selection +
     ollama pull") — the wizard should leave Ollama actually holding the model,
-    not just record a choice in the plan."""
+    not just record a choice in the plan.
+
+    Unlike DetectComputeDevice, a non-NVIDIA GPU identified via
+    gpu.detect_gpu() *does* feed into this step's own sizing math (not just
+    its message) when it carries a memory estimate — Ollama genuinely uses
+    that GPU for LLM inference (confirmed on a real AMD Ryzen AI APU box),
+    unlike STT/TTS, which have no non-CUDA accelerated path at all."""
 
     def __init__(self, catalogues: CatalogueRepository, gpu: GPUDetector, installer: ModelInstaller) -> None:
         self._catalogues = catalogues
@@ -264,11 +285,23 @@ class SelectLLM:
 
     def run(self, plan: InstallationPlan, prompter: WizardPrompter) -> None:
         vram_gb = self._gpu.detect_vram_gb()
+        detected = None
+        if vram_gb is None:
+            detected = self._gpu.detect_gpu()
+            if detected is not None and detected.vram_gb is not None:
+                vram_gb = detected.vram_gb
+
         if vram_gb is None:
             prompter.info(
-                "Could not detect NVIDIA/CUDA GPU VRAM — sizing hints below are best-effort. "
-                "This does not mean no GPU will be used: Ollama detects and uses AMD GPUs on "
-                "its own for the LLM, independent of this check."
+                "Could not detect GPU memory — sizing hints below are best-effort. "
+                "This does not mean no GPU will be used: Ollama detects and uses "
+                "available GPUs on its own for the LLM, independent of this check."
+            )
+        elif detected is not None:
+            prompter.info(
+                f"Detected a {detected.vendor.upper()} GPU (~{vram_gb:.0f} GB) — sizing hints below "
+                "use this estimate; Ollama uses this GPU for the LLM on its own, independent of "
+                "this check."
             )
 
         entries = self._catalogues.load_llm_catalogue()
@@ -355,7 +388,13 @@ class ResolveSTTEngine:
     filtered out — catalogued but not yet installable, see catalogue comment.
     Reserves headroom for the already-chosen LLM (looked up by
     plan.llm_model_id, which SelectLLM must have set) plus TTS, rather than a
-    flat guess — see STT_SELECTION_TTS_HEADROOM_GB."""
+    flat guess — see STT_SELECTION_TTS_HEADROOM_GB.
+
+    Deliberately stays on detect_vram_gb() alone, unlike SelectLLM — Whisper
+    always runs on CPU without a CUDA GPU (no ROCm/other accelerated STT
+    adapter exists), so a non-NVIDIA GPU's memory has no bearing on this
+    model-size choice the way it does for the LLM, which Ollama can actually
+    place on such a GPU."""
 
     def __init__(self, catalogues: CatalogueRepository, gpu: GPUDetector, installer: ModelInstaller) -> None:
         self._catalogues = catalogues

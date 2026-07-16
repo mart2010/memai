@@ -137,11 +137,11 @@ Microphone → [VAD] → WebSocket → [STT] → [LLM stream] → [TTS] → WebS
 
 ## Getting started
 
-**Requirements:** Python 3.13+, a machine with an NVIDIA GPU for the server, PostgreSQL
-with pgvector, Ollama.
+**Requirements:** Python 3.13+, a Linux or macOS machine for the server (a GPU speeds
+things up but isn't required), PostgreSQL with pgvector, Ollama.
 
 ```bash
-# Server (GPU machine — see docs/INSTALLATION.md for the full walkthrough)
+# Server (Linux/macOS — see docs/INSTALLATION.md for the full walkthrough)
 cd server && uv sync
 cd ../setup && uv sync && .venv/bin/memai-setup   # interactive wizard: picks models, writes config, applies DB schema
 cd ../server && .venv/bin/memai-server
@@ -151,8 +151,9 @@ uv tool install "git+<repo-url>#subdirectory=client"
 memai-client
 ```
 
-Client and server on the same machine? `./scripts/run-local.sh` starts the server, waits
-for it to be ready, then launches the client in the same terminal — no SSH tunnel needed.
+Client and server on the same machine? `./scripts/run-local.sh` (`.\scripts\run-local.ps1`
+on Windows) starts the server, waits for it to be ready, then launches the client in the
+same terminal — no SSH tunnel needed.
 
 On first launch, Memai guides you through language selection. After that, everything is
 configured by voice — no CLI arguments, no config files to edit.
@@ -207,7 +208,7 @@ trade-off that you make with full awareness.
 |---|---|
 | [Specification](docs/spec/SPEC.md) | The canonical spec: [glossary](docs/spec/GLOSSARY.md), [functional](docs/spec/FUNCTIONAL.md) and [technical](docs/spec/TECHNICAL.md) requirements |
 | [Personas](docs/PERSONAS.md) | The persona concept, the language tutor, and the research behind them |
-| [Installation](docs/INSTALLATION.md) | Topologies, requirements, and step-by-step guides for [server](docs/INSTALL_SERVER.md) and [client](docs/INSTALL_CLIENT.md) |
+| [Installation](docs/INSTALLATION.md) | Topologies, requirements, and the step-by-step guide for both server and client, on every supported OS |
 | [Authoring bundles](docs/AUTHORING_BUNDLES.md) | How to write curriculum content for a persona |
 | [Contributing](CONTRIBUTING.md) | Setup, architecture conventions, and PR guidelines |
 

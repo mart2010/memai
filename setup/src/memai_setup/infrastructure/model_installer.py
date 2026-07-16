@@ -26,7 +26,7 @@ class OllamaModelInstaller:
         # Matches faster-whisper's own internal repo mapping (Systran's
         # CTranslate2 conversions) — the same download FasterWhisperSTTService
         # would trigger lazily on first use; the wizard just does it up front
-        # (see docs/INSTALL_SERVER.md step 6).
+        # (see docs/INSTALLATION.md step 7).
         snapshot_download(repo_id=f"Systran/faster-whisper-{name}")
 
     def download_piper_voice(self, voice_id: str) -> None:

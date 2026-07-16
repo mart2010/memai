@@ -1,6 +1,6 @@
 import pytest
 
-from memai_setup.domain.model import LLMCatalogueEntry, VRAMEstimate
+from memai_setup.domain.model import DetectedGPU, LLMCatalogueEntry, VRAMEstimate
 from memai_setup.domain.plan import InstallationPlan
 from memai_setup.services.errors import WizardAborted
 from memai_setup.services.steps import SelectLLM
@@ -80,6 +80,37 @@ def test_select_llm_pull_failure_confirmed_continues():
 def test_select_llm_warns_when_vram_undetectable():
     catalogues = FakeCatalogueRepository(llm_entries=(_entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),))
     step = SelectLLM(catalogues, FakeGPUDetector(vram_gb=None), FakeModelInstaller())
+    prompter = FakeWizardPrompter(select_answers=["aya-expanse"])
+    plan = InstallationPlan()
+
+    step.run(plan, prompter)
+
+    assert any("could not detect" in m.lower() for m in prompter.info_messages)
+
+
+def test_select_llm_uses_detected_amd_gpu_memory_for_sizing():
+    """Real testing on an AMD Ryzen AI APU box found Ollama accelerating the
+    LLM fine even though detect_vram_gb() (NVIDIA-only) saw nothing — this
+    fit hint should reflect the identified GPU's memory instead of a blanket
+    "could not detect" once gpu.detect_gpu() names it."""
+    catalogues = FakeCatalogueRepository(llm_entries=(_entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),))
+    detector = FakeGPUDetector(vram_gb=None, detected_gpu=DetectedGPU(vendor="amd", vram_gb=32.0))
+    step = SelectLLM(catalogues, detector, FakeModelInstaller())
+    prompter = FakeWizardPrompter(select_answers=["aya-expanse"])
+    plan = InstallationPlan()
+
+    step.run(plan, prompter)
+
+    assert any("AMD" in m for m in prompter.info_messages)
+    assert not any("could not detect" in m.lower() for m in prompter.info_messages)
+    _, choices, _ = prompter.select_calls[0]
+    assert "Fits comfortably" in choices[0].label
+
+
+def test_select_llm_amd_gpu_without_memory_estimate_falls_back_to_undetectable_warning():
+    catalogues = FakeCatalogueRepository(llm_entries=(_entry("aya-expanse", "Aya Expanse", 5, 8, recommended=True),))
+    detector = FakeGPUDetector(vram_gb=None, detected_gpu=DetectedGPU(vendor="amd", vram_gb=None))
+    step = SelectLLM(catalogues, detector, FakeModelInstaller())
     prompter = FakeWizardPrompter(select_answers=["aya-expanse"])
     plan = InstallationPlan()
 

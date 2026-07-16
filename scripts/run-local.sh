@@ -3,7 +3,8 @@
 # machine). Starts the server in the background, waits for its WebSocket port
 # to come up, then runs the client in the foreground; the server is killed
 # when the client exits. Split-host deployments should keep starting each
-# package independently — see docs/INSTALL_SERVER.md / docs/INSTALL_CLIENT.md.
+# package independently — see docs/INSTALLATION.md. Windows equivalent:
+# run-local.ps1.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

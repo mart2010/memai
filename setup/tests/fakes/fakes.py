@@ -1,16 +1,20 @@
 import subprocess
 
-from memai_setup.domain.model import LLMCatalogueEntry, STTCatalogueEntry, TTSCatalogueEntry
+from memai_setup.domain.model import DetectedGPU, LLMCatalogueEntry, STTCatalogueEntry, TTSCatalogueEntry
 from memai_setup.domain.plan import InstallationPlan
 from memai_setup.services.ports import HealthCheckResult, PromptChoice
 
 
 class FakeGPUDetector:
-    def __init__(self, vram_gb: float | None) -> None:
+    def __init__(self, vram_gb: float | None, detected_gpu: DetectedGPU | None = None) -> None:
         self._vram_gb = vram_gb
+        self._detected_gpu = detected_gpu
 
     def detect_vram_gb(self) -> float | None:
         return self._vram_gb
+
+    def detect_gpu(self) -> DetectedGPU | None:
+        return self._detected_gpu
 
 
 class FakeCatalogueRepository:
