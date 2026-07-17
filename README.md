@@ -128,7 +128,7 @@ Microphone → [VAD] → WebSocket → [STT] → [LLM stream] → [TTS] → WebS
 | Component | Runs on | Role |
 |---|---|---|
 | `client/` | Your everyday machine (Windows, macOS, Linux) | Captures audio, plays back speech, auto-opens SSH tunnel to server |
-| `server/` | Linux or macOS (native Windows not yet supported — see [docs/INSTALLATION.md](docs/INSTALLATION.md)). A GPU speeds things up but isn't required — CPU-only works, just slower | STT → LLM → TTS pipeline, persistent memory, consolidation |
+| `server/` | Linux, macOS, or Windows (Windows needs a C/C++ compiler — see [docs/INSTALLATION.md](docs/INSTALLATION.md)). A GPU speeds things up but isn't required — CPU-only works, just slower | STT → LLM → TTS pipeline, persistent memory, consolidation |
 
 **Every model runs locally by default:**
 

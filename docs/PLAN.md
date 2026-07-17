@@ -173,20 +173,31 @@ tracks work still to do.
       a live turn actually completes via the remote endpoint, recall detection round-trips
       correctly, and the offline pipeline still produces a memory brief via local Ollama
       while `provider = "openai_compatible"` is set.
-- [ ] **Native Windows `memai-server` support** — found while consolidating the
-      install docs (2026-07-16): `uv sync` in `server/` fails on Windows building
-      `numpy==1.26.4` from source (`mesonpy.build_wheel` error, no C/C++ compiler found;
-      reproduced on this laptop with `uv sync --native-tls`). Root cause: `numpy` 1.26.4
-      predates Python 3.13 Windows wheels, and the resolver won't move it past 1.26.4 even
-      via `uv lock --upgrade-package numpy` — Kokoro's English G2P chain
-      (`kokoro[en]`→`misaki[en]`→`spacy`→`thinc==8.3.13`→`blis==1.3.3`) anchors it there,
-      even though none of those packages' own PyPI metadata declares a `numpy<2` bound
-      (checked `blis`/`thinc`/`spacy`/`ctranslate2`/`onnxruntime`/`numba` directly) —
-      exact mechanism not fully root-caused, worth another look with `uv`'s resolver
-      explain/verbose output. Not fixed here — out of scope for a docs cleanup, and any
-      fix needs real testing on Windows with STT/TTS actually exercised, not just a clean
-      `uv sync`. Documented as a known limitation in `docs/INSTALLATION.md` with WSL2 as
-      the practical interim workaround (untested end-to-end).
+- [x] **Native Windows `memai-server` support** (2026-07-17) — root-caused and fixed the
+      numpy half of the earlier 2026-07-16 finding: the resolver was anchored to
+      `numpy==1.26.4` (no cp313 Windows wheel) not by Kokoro's G2P chain as first
+      suspected, but by the vestigial `tts` optional-dependency group (Coqui `TTS` →
+      `gruut[de]==2.2.3` → `numpy<2.0.0`) — a group already dead weight (`TTS` requires
+      `python<3.12`, the project requires `python>=3.13`; Kokoro was already its intended
+      replacement per the removed comment). Deleted the `tts` extra from
+      `server/pyproject.toml`, re-ran `uv lock --upgrade-package numpy --native-tls`:
+      numpy now resolves to 2.5.1 with a native `win_amd64`/cp313 wheel; 253/253 unit
+      tests still green (confirmed `TTS`/Coqui was never imported from source, only the
+      unrelated Kokoro-based `infrastructure/tts.py` module which is unaffected).
+      Confirmed via a real `uv sync --native-tls` on this laptop that this was the *only*
+      Windows-unbuildable package removed — one real blocker remains and is expected,
+      not a bug: `curated-tokenizers` (Cython/C++, pulled in via
+      `kokoro`→`misaki[en]`→`spacy-curated-transformers`), which has no prebuilt wheel on
+      any OS and needs a C/C++ compiler to build — exactly the role `build-essential`
+      already plays on Linux. On Windows that means Microsoft C++ Build Tools, which
+      needs an admin account this laptop doesn't have, so `uv sync` still can't complete
+      *here* — but a normal Windows user with admin rights now can. Documented in
+      `docs/INSTALLATION.md` as a first-class native-Windows install path (C++ Build
+      Tools step, updated OS support table, Ollama/Docker Desktop Windows notes, remote
+      LLM provider bullet for FR-707), with WSL2 demoted to the no-admin fallback.
+      **Not yet live-verified**: no admin-rights Windows box available in this session to
+      confirm `uv sync` completes end-to-end and STT/TTS actually work once Build Tools
+      are installed — next real verification needs exactly that.
 - [ ] **Phase 13 live smoke on the workstation**: fresh onboarding shows only installed
       languages; speak a second installed language to the GA (reply mirrors, voice
       switches); speak an uninstalled language (primary-language reminder names
@@ -310,8 +321,10 @@ accumulate:
 - **Client-side first-launch onboarding proposal** (fold server address, port, and
   language into one client-side questionary wizard instead of the server-driven
   `select_language` flow) — archived Phase 4 "revisit" note, still undecided.
-- **Laptop `server/` venv frozen**: `uv.lock` pins numpy 1.26.4 (unbuildable on
-  Windows/3.13) — always `uv run --no-sync` on the laptop; consider
-  `uv lock --upgrade-package numpy` next time the lock is touched on the workstation.
-  Locally, `tests/unit/infrastructure/test_config.py` fails collection
-  (`platformdirs` missing) — `--ignore` it; it runs on the workstation.
+- **Laptop `server/` venv frozen**: `uv.lock` now pins numpy 2.5.1 (fixed 2026-07-17,
+  see the Windows support item above), but `uv sync` still can't complete on this laptop
+  — `curated-tokenizers` needs a C/C++ compiler and this laptop has no admin rights to
+  install one. Always `uv run --no-sync` here regardless. Locally,
+  `tests/unit/infrastructure/test_config.py` fails collection (`platformdirs` missing,
+  never installed since `uv sync` has never completed on this laptop) — `--ignore` it;
+  it runs on the workstation.

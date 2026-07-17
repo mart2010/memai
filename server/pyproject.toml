@@ -30,12 +30,6 @@ dependencies = [
     "py3langid>=0.2.2",
 ]
 
-[project.optional-dependencies]
-# TTS requires python<3.12 and has a licence conflict (MPL-2.0+Exhibit B vs AGPL-3.0).
-# Install only on the GPU server; planned replacement with Piper or Kokoro.
-# After install: replace CPU torch with CUDA build via uv add torch --index https://download.pytorch.org/whl/cu121
-tts = ["TTS>=0.22.0"]
-
 [project.scripts]
 memai-server = "memai_server.server:main"
 memai-bundle = "memai_server.bundle_cli:main"

@@ -4,7 +4,7 @@ Memai has two runtime components plus an interactive setup wizard:
 
 | Component | Runs on | Role |
 |---|---|---|
-| **Server** (`server/`) | Linux or macOS; a GPU speeds things up but isn't required | Speech-to-text, LLM, text-to-speech, long-term memory |
+| **Server** (`server/`) | Linux, macOS, or Windows; a GPU speeds things up but isn't required | Speech-to-text, LLM, text-to-speech, long-term memory |
 | **Client** (`client/`) | Your everyday machine — Windows, macOS, or Linux | Microphone capture, audio playback |
 | **Setup wizard** (`setup/`) | The server machine | One-time interactive install: picks models against your hardware, downloads everything, writes config, applies the DB schema |
 
@@ -29,9 +29,10 @@ ports are exposed beyond SSH.
 | Requirement | Server | Client |
 |---|---|---|
 | Python 3.13+ and [uv](https://docs.astral.sh/uv/) | yes | yes |
-| GPU | optional — NVIDIA (CUDA 12, driver 525+) accelerates STT/TTS/LLM; no GPU falls back to CPU for STT/TTS (fully functional, just slower) and CPU-only Ollama for the LLM | no |
+| GPU | optional — NVIDIA (CUDA 12, driver 525+) accelerates STT/TTS/LLM; no GPU falls back to CPU for STT/TTS (fully functional, just slower) and CPU-only Ollama for the LLM, or to a [remote LLM](#7-run-the-setup-wizard-on-the-server-machine) for the live conversation path | no |
+| C/C++ compiler | Windows only — see [step 4](#4-install-system-packages) | no |
 | PostgreSQL 16 + pgvector | yes | no |
-| Ollama | yes | no |
+| Ollama | yes — even with a remote LLM (FR-707), the offline memory pipeline always runs locally | no |
 | Disk for models | ~11 GB (see [disk usage](#disk-usage-summary)) | none |
 | SSH access to the server | — | split-host only |
 
@@ -41,7 +42,7 @@ ports are exposed beyond SSH.
 |---|---|---|
 | Linux | yes — primary development/verification platform | yes |
 | macOS | yes, in principle (no known blocker) — not yet live-verified | yes |
-| Windows | **not yet** — see [Known limitation: native Windows server](#known-limitation-native-windows-server) | yes — this is the actively-used dev client platform |
+| Windows | yes, natively — needs a C/C++ compiler installed first (nothing unusual — the same class of prerequisite as `build-essential` on Linux), see [step 4](#4-install-system-packages). Not yet live-verified end-to-end; WSL2 remains a fallback if you'd rather not install a compiler on Windows directly | yes — this is the actively-used dev client platform |
 
 No CUDA toolkit install is needed on any OS (the Python wheels bundle the runtime), and
 after the initial model downloads the whole system runs without internet access.
@@ -62,7 +63,7 @@ If Python 3.13 isn't available via your distro's package manager, use the
 Debian/Ubuntu (`sudo add-apt-repository ppa:deadsnakes/ppa && sudo apt install -y
 python3.13 python3.13-venv`), or Homebrew (`brew install python@3.13`) on macOS.
 
-**Windows** (client only, until the limitation above is resolved):
+**Windows** (server and client):
 
 Download and install Python 3.13+ from [python.org](https://www.python.org/downloads/),
 then:
@@ -79,7 +80,11 @@ Only install what your role/OS needs — server and client have almost no overla
 
 ### Server: PostgreSQL + pgvector
 
-**Option A — Docker (recommended, works the same on Linux/macOS)**
+**Option A — Docker (recommended, works the same on Linux/macOS/Windows)**
+
+On Windows, install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+first (it uses the WSL2 backend automatically) — the `docker` commands below are then
+identical in PowerShell.
 
 ```bash
 docker run -d \
@@ -181,10 +186,13 @@ curl -fsSL https://ollama.com/install.sh | sh
 ollama list    # should return an empty table on a fresh install
 ```
 
-(macOS also has a native [Ollama.app](https://ollama.com/download/mac) if you prefer a
-GUI installer over the shell script.)
+(macOS also has a native [Ollama.app](https://ollama.com/download/mac), and Windows has a
+native [installer](https://ollama.com/download/windows), if you prefer a GUI over the
+shell script.) Ollama runs the offline memory pipeline regardless of which LLM powers
+live conversation — see FR-707 in the wizard step below — so it's required even on a
+GPU-less machine that will use a remote LLM for the live path.
 
-### Server: espeak-ng and build tools (Linux)
+### Server: espeak-ng and build tools (Linux/macOS)
 
 ```bash
 sudo apt update
@@ -192,9 +200,39 @@ sudo apt install -y espeak-ng build-essential
 ```
 
 `espeak-ng` is the phonemiser backend Kokoro TTS uses for non-English languages.
-`build-essential` is needed by some Python wheels during `uv sync`.
+`build-essential` is needed because Kokoro's English G2P pipeline
+(`kokoro`→`misaki[en]`→`spacy-curated-transformers`→`curated-tokenizers`) has no
+prebuilt wheel and compiles a small Cython/C++ extension during `uv sync` — this is
+normal and happens on every OS, not a sign anything is wrong.
 
-On macOS: `brew install espeak-ng`.
+On macOS: `brew install espeak-ng` (Xcode Command Line Tools, `xcode-select
+--install`, provide the compiler).
+
+### Server: C++ Build Tools (Windows)
+
+Windows has no C/C++ compiler by default, which `curated-tokenizers` (see above) needs
+to build during `uv sync`. Without it you'll see:
+
+```
+error: Microsoft Visual C++ 14.0 or greater is required. Get it with "Microsoft C++
+Build Tools": https://visualstudio.microsoft.com/visual-cpp-build-tools/
+```
+
+Install it once, either via the linked installer (select the **"Desktop development
+with C++"** workload) or from an admin PowerShell with
+[winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/):
+
+```powershell
+winget install --id Microsoft.VisualStudio.2022.BuildTools --override `
+  "--wait --quiet --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+This is a one-time, ~4–7 GB install and requires an admin account — if you don't have
+one (e.g. a locked-down corporate laptop), run the server inside WSL2 instead (see
+[Windows without admin rights](#windows-without-admin-rights) below).
+
+`espeak-ng` needs no separate install on Windows — the `espeakng-loader` Python package
+(pulled in automatically) bundles the library as a wheel.
 
 ### Client: PortAudio (macOS/Linux only)
 
@@ -217,7 +255,8 @@ Verify with `ssh -V`.
 
 ## 5. Clone the repo and install the packages
 
-**Server** (Linux/macOS — see the [Windows limitation](#known-limitation-native-windows-server) below):
+**Server** (any OS — on Windows, install [step 4](#4-install-system-packages)'s C++
+Build Tools first):
 
 ```bash
 git clone <repo-url> memai
@@ -296,7 +335,7 @@ rule for port 8765 is needed on the server; SSH (port 22) is sufficient.
 ```bash
 cd memai/setup
 uv sync
-.venv/bin/memai-setup
+.venv/bin/memai-setup       # .venv\Scripts\memai-setup on Windows
 ```
 
 `memai-setup` is a separate package (its own venv), interactive, and safe to re-run — it
@@ -316,6 +355,12 @@ over. It walks through, in order:
 - **LLM selection** — lists Ollama models with VRAM-fit hints; on a non-NVIDIA GPU, uses
   its identified memory for the same fit hints where available, since Ollama can actually
   place the LLM on it (confirmed on a real AMD Ryzen AI APU box) — unlike STT/TTS.
+- **LLM provider** — local via Ollama (default) or a remote OpenAI-compatible HTTP
+  endpoint (FR-707) for machines without a GPU capable of fast live inference — e.g. a
+  laptop pointed at Claude, OpenAI, OpenRouter, or a self-hosted endpoint. This only
+  affects the live conversational path; the offline memory pipeline (consolidation,
+  memory briefs, persona-strategy helpers) always runs on the local Ollama model chosen
+  above regardless. Needs a base URL and a model name; an API key is optional.
 - **Languages** — pick every language you want supported now (main plus any secondary
   ones); which one is *primary* is chosen live during your first conversation.
 - **STT model** — picks and pre-downloads a Whisper model size.
@@ -323,7 +368,7 @@ over. It walks through, in order:
 - **Embedding model** — pre-downloads `multilingual-e5-large` (used for memory
   consolidation).
 - **Config file** — writes `~/.config/memai/memai.toml` (`%LOCALAPPDATA%\memai\` on
-  Windows clients), 0600 permissions where supported; shared by server and client on a
+  Windows), 0600 permissions where supported; shared by server and client on a
   single-host setup.
 - **Database schema** — applies `migrations/001_initial_schema.sql` (idempotent, safe
   to re-run).
@@ -349,7 +394,7 @@ launches the client:
 ```
 
 ```powershell
-.\scripts\run-local.ps1         # Windows client only, against a WSL2/remote server — see limitation below
+.\scripts\run-local.ps1         # native Windows server + client, single-host
 ```
 
 **Split-host** — start each independently.
@@ -358,7 +403,7 @@ Server:
 
 ```bash
 cd memai/server
-.venv/bin/memai-server
+.venv/bin/memai-server      # .venv\Scripts\memai-server.exe on Windows
 ```
 
 Expected output:
@@ -391,26 +436,25 @@ terminal — after that, everything is configured by voice.
 
 ---
 
-## Known limitation: native Windows server
+## Windows without admin rights
 
-Running `memai-server` (the STT/LLM/TTS pipeline) directly on Windows is **not
-supported yet** — `uv sync` in `server/` fails building `numpy` from source, because
-the locked `numpy==1.26.4` predates Python 3.13's Windows wheels and no C/C++ compiler
-is present by default on Windows to build it. This is unrelated to having a GPU — it
-reproduces on CPU-only setups too. A proper fix means bumping the `spacy`/`thinc`/
-`blis` chain that Kokoro's English G2P pulls in (they constrain the resolver to that
-old `numpy`) to versions with native Windows/cp313 wheels; not yet done.
+Running `memai-server` natively on Windows needs one thing beyond what Linux/macOS
+need: a C/C++ compiler ([step 4](#4-install-system-packages)), because Kokoro's
+English G2P pipeline compiles a small Cython/C++ extension
+(`curated-tokenizers`) during `uv sync`. Installing the compiler (Microsoft C++ Build
+Tools) requires an admin account.
 
-**Practical workaround today**: run the server inside **WSL2** (Ubuntu) on the same
-Windows machine — this follows the documented Linux steps above unmodified and gets you
-a genuine single-host setup on Windows hardware, with the native Windows client talking
-to the WSL2 server over `localhost` (modern WSL2 forwards `localhost` ports to Windows
-automatically) or over the same SSH-tunnel mechanism as any split-host client if
-`localhost` forwarding isn't enabled on your WSL2 version. Not yet live-verified
-end-to-end in this repo — treat it as the recommended path, not a guarantee.
+If you don't have one — e.g. a locked-down corporate laptop — run the server inside
+**WSL2** (Ubuntu) instead, which ships a compiler already: this follows the documented
+Linux steps above unmodified and gets you a genuine single-host setup on Windows
+hardware, with the native Windows client talking to the WSL2 server over `localhost`
+(modern WSL2 forwards `localhost` ports to Windows automatically) or over the same
+SSH-tunnel mechanism as any split-host client if `localhost` forwarding isn't enabled on
+your WSL2 version.
 
-The native Windows client (this document's default assumption everywhere else) is
-unaffected and already the actively-used development platform for `client/`.
+The native Windows client (this document's default assumption everywhere else) has no
+such requirement — PortAudio ships prebuilt — and is already the actively-used
+development platform for `client/`.
 
 ---
 
@@ -419,12 +463,12 @@ unaffected and already the actively-used development platform for `client/`.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `manifest unknown` on `docker pull` | Wrong image tag | Use `pgvector/pgvector:pg16` (no `-ubuntu` suffix) |
-| `ollama: connection refused` | Ollama not running | `systemctl start ollama` (Linux) or start the Ollama app (macOS) |
+| `ollama: connection refused` | Ollama not running | `systemctl start ollama` (Linux), or start the Ollama app (macOS/Windows) |
 | `CUDA out of memory` | VRAM exhausted | Reduce `stt.compute_type` to `int8` in `memai.toml`; or pick a smaller LLM that fits alongside Whisper+Kokoro |
 | No response heard, but no error logged | LLM model too large for VRAM, split across CPU/GPU and evicted when idle — cold reload stalls the next turn | Check `ollama ps` shows `100% GPU`; switch to a smaller model (e.g. `aya-expanse`) |
 | Assistant seems to ramble or speaks oddly before answering | Reasoning model (e.g. `qwen3`) emitting `<think>` blocks that get spoken aloud | Use a non-reasoning model; `think: false` does not suppress this on thinking-tuned models |
 | Kokoro TTS silent / error | `espeak-ng` missing | Install it (see step 4) |
-| `uv sync` fails building `numpy` on Windows | Known limitation, see above | Use WSL2 for the server; the native client is unaffected |
+| `error: Microsoft Visual C++ 14.0 or greater is required` on `uv sync` (Windows) | No C/C++ compiler present | Install Microsoft C++ Build Tools (step 4), or use WSL2 for the server if you lack admin rights — see [Windows without admin rights](#windows-without-admin-rights) |
 | WebSocket connection refused | Wrong port or server not started | Verify `server.ws_port` matches in both server and client `memai.toml` |
 | SSH tunnel fails | No key auth | Run `ssh-copy-id` (step 6) |
 | `FileNotFoundError: Client config not found` | `memai.toml` missing | The wizard writes it for single-host; for a client-only machine, create it as shown in step 6 |

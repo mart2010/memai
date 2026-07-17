@@ -4,10 +4,9 @@
 # when the client exits. Split-host deployments should keep starting each
 # package independently — see docs/INSTALLATION.md.
 #
-# Native Windows memai-server is not yet supported (see docs/INSTALLATION.md's
-# "Known limitation: native Windows server") — this script is for a client
-# talking to a server started elsewhere (e.g. WSL2 on this same machine), or
-# for the day native Windows server support lands.
+# Requires `uv sync` to have succeeded in server/, which on Windows needs a
+# C/C++ compiler installed first — see docs/INSTALLATION.md's "Server: C++
+# Build Tools (Windows)" section.
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = Split-Path -Parent $PSScriptRoot
