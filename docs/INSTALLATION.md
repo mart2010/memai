@@ -80,49 +80,18 @@ Only install what your role/OS needs — server and client have almost no overla
 
 ### Server: PostgreSQL + pgvector
 
-**Option A — Docker (recommended, works the same on Linux/macOS/Windows)**
+**Option A — native install (recommended)**: follow
+[PostgreSQL's own download/install guide](https://www.postgresql.org/download/) for
+your OS — it covers Windows, every major Linux distro, and macOS, and knows its own
+installer landscape better than we could document here. Then install the `pgvector`
+extension the same way: [pgvector's install instructions](https://github.com/pgvector/pgvector#installation)
+cover Linux (`apt`/`yum` packages), macOS (`brew install pgvector`), and Windows
+(build from source with the MSVC toolchain — the same "Desktop development with C++"
+workload you'd install in [step 4](#4-install-system-packages) for `curated-tokenizers`
+covers this too).
 
-On Windows, install [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-first (it uses the WSL2 backend automatically) — the `docker` commands below are then
-identical in PowerShell.
-
-```bash
-docker run -d \
-  --name memai-postgres \
-  --restart unless-stopped \
-  -e POSTGRES_USER=memai \
-  -e POSTGRES_PASSWORD=memai \
-  -e POSTGRES_DB=memai \
-  -p 5432:5432 \
-  pgvector/pgvector:pg16
-```
-
-Verify pgvector is available:
-
-```bash
-docker exec -it memai-postgres psql -U memai -d memai \
-  -c "CREATE EXTENSION IF NOT EXISTS vector; SELECT extversion FROM pg_extension WHERE extname = 'vector';"
-```
-
-You should see a version number (e.g. `0.8.2`). To persist data across `docker rm`, add
-`-v /opt/memai/pgdata:/var/lib/postgresql/data` to the `docker run` command.
-
-**Option B — native package (Linux only)**
-
-```bash
-sudo apt install -y curl ca-certificates
-sudo install -d /usr/share/postgresql-common/pgdg
-sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail \
-  https://www.postgresql.org/media/keys/ACCC4CF8.asc
-sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
-  https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
-  > /etc/apt/sources.list.d/pgdg.list'
-sudo apt update
-sudo apt install -y postgresql-16 postgresql-16-pgvector
-```
-
-Then create the role/database (the setup wizard verifies the connection interactively
-in a later step — this just needs to exist):
+Once both are installed, create the role/database (the setup wizard verifies the
+connection interactively in a later step — this just needs to exist):
 
 ```bash
 sudo -u postgres psql <<'SQL'
@@ -167,7 +136,43 @@ instructions (with your actual OS username filled in) if the mapping isn't there
 </details>
 
 <details>
-<summary>Alternative: password authentication (remote Postgres, Docker, or if you'd rather not set up peer auth)</summary>
+<summary>Recommended: SSPI authentication (Windows, no password stored anywhere)</summary>
+
+Peer auth itself doesn't exist on Windows — PostgreSQL's docs are explicit that it
+needs `getpeereid()`/`SO_PEERCRED`, which Windows doesn't provide. But Windows has its
+own OS-credential mechanism, **SSPI** (Windows' native single sign-on API, negotiating
+Kerberos where available and falling back to NTLM otherwise), which PostgreSQL has
+supported for exactly this purpose since early versions, including for a local,
+non-domain-joined account on a standalone machine like a personal laptop — it isn't
+Active-Directory-only. It works the same way peer auth does, just over a loopback TCP
+connection instead of a Unix socket (Windows has no peer-credential-bearing socket to
+use):
+
+1. Add to `pg_ident.conf` (typically
+   `C:\Program Files\PostgreSQL\<version>\data\pg_ident.conf`):
+   ```
+   # MAPNAME    SYSTEM-USERNAME    PG-USERNAME
+   memai_map    <your-windows-username>    memai
+   ```
+   On a non-domain machine this is just your plain Windows username (no `\` or `@`
+   prefix/suffix needed).
+2. Add to `pg_hba.conf`, **above** any catch-all `host` line (first match wins):
+   ```
+   host   memai   memai   127.0.0.1/32   sspi map=memai_map
+   host   memai   memai   ::1/128        sspi map=memai_map
+   ```
+3. Restart the PostgreSQL service (Services app, or an admin PowerShell:
+   `Restart-Service postgresql-x64-<version>`).
+4. Connection string: `postgresql://memai@localhost:5432/memai` — SSPI needs an
+   explicit `host` (TCP), unlike peer's empty-host Unix socket.
+
+The setup wizard offers this as the default option on Windows and will print these
+exact instructions (with your actual Windows username filled in) if the mapping isn't
+there yet.
+</details>
+
+<details>
+<summary>Alternative: password authentication (remote Postgres, Docker, or if you'd rather not set up peer/SSPI auth)</summary>
 
 ```bash
 sudo -u postgres psql -c "ALTER USER memai WITH PASSWORD 'changeme';"
@@ -175,21 +180,52 @@ sudo -u postgres psql -c "ALTER USER memai WITH PASSWORD 'changeme';"
 
 Replace `changeme` with a password of your choice — the setup wizard prompts for
 host/port/user/password and builds the connection string for you. This is the only
-option for a Postgres instance on a different machine (peer auth is inherently
-local-only), and the Docker path above already sets a password this way.
+option for a Postgres instance on a different machine (peer/SSPI auth are inherently
+local-only), and the Docker path below already sets a password this way.
 </details>
 
+**Option B — Docker (works the same on Linux/macOS/Windows, sidesteps installing
+Postgres and pgvector separately)**: on Windows, install
+[Docker Desktop](https://www.docker.com/products/docker-desktop/) first (it uses the
+WSL2 backend automatically) — the `docker` commands below are then identical in
+PowerShell.
+
+```bash
+docker run -d \
+  --name memai-postgres \
+  --restart unless-stopped \
+  -e POSTGRES_USER=memai \
+  -e POSTGRES_PASSWORD=memai \
+  -e POSTGRES_DB=memai \
+  -p 5432:5432 \
+  pgvector/pgvector:pg16
+```
+
+Verify pgvector is available:
+
+```bash
+docker exec -it memai-postgres psql -U memai -d memai \
+  -c "CREATE EXTENSION IF NOT EXISTS vector; SELECT extversion FROM pg_extension WHERE extname = 'vector';"
+```
+
+You should see a version number (e.g. `0.8.2`). To persist data across `docker rm`, add
+`-v /opt/memai/pgdata:/var/lib/postgresql/data` to the `docker run` command. Skip the
+role/database creation above — the image's env vars already did it — and use password
+authentication (`memai`/`memai`) in the wizard.
+
 ### Server: Ollama
+
+Follow [Ollama's own installer](https://ollama.com/download) for your OS (Windows,
+macOS, or Linux) — same reasoning as Postgres above: it knows its own packaging better
+than we could document here. On Linux this is the one-line shell installer:
 
 ```bash
 curl -fsSL https://ollama.com/install.sh | sh
 ollama list    # should return an empty table on a fresh install
 ```
 
-(macOS also has a native [Ollama.app](https://ollama.com/download/mac), and Windows has a
-native [installer](https://ollama.com/download/windows), if you prefer a GUI over the
-shell script.) Ollama runs the offline memory pipeline regardless of which LLM powers
-live conversation — see FR-707 in the wizard step below — so it's required even on a
+Ollama runs the offline memory pipeline regardless of which LLM powers live
+conversation — see FR-707 in the wizard step below — so it's required even on a
 GPU-less machine that will use a remote LLM for the live path.
 
 ### Server: espeak-ng and build tools (Linux/macOS)
@@ -344,7 +380,7 @@ over. It walks through, in order:
 
 - **Topology** — single-host or split-host (matching what you picked in step 1).
 - **Database connection** — verifies the Postgres role/database from step 4 (peer auth
-  on Linux/macOS, or host+password).
+  on Linux/macOS, SSPI on Windows, or host+password).
 - **Prerequisite checks** — Ollama reachable, Postgres/pgvector OK.
 - **Compute device** — detects a CUDA GPU, or falls back to CPU for STT/TTS (Ollama
   detects and uses GPU acceleration for the LLM on its own, independent of this check).

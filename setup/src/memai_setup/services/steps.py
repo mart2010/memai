@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import getpass
 import subprocess
+import sys
 from typing import Protocol
 
 from ..domain.language_coverage import offered_languages
@@ -55,8 +56,9 @@ class ShowWelcome:
     _PREREQUISITES = (
         "PostgreSQL 15+ with the pgvector extension installed (not just Postgres running), "
         "and a 'memai' role/database created — see docs/INSTALLATION.md. The next step "
-        "prefers passwordless peer auth (Linux/macOS): if your OS user isn't yet mapped to "
-        "the 'memai' role in pg_ident.conf, that step will show you the exact lines to add",
+        "prefers passwordless OS-credential auth (peer on Linux/macOS, SSPI on Windows): "
+        "if your OS user isn't yet mapped to the 'memai' role in pg_ident.conf, that step "
+        "will show you the exact lines to add",
         "Ollama installed and running",
         "(Optional) A GPU speeds things up. NVIDIA (CUDA 12 + cuDNN 9) accelerates "
         "STT, TTS, and the LLM. AMD GPUs are auto-detected by Ollama and accelerate "
@@ -121,19 +123,33 @@ class ConfigureDatabaseConnection:
     local socket", so the DSN only needs an explicit `user=` (the fixed
     "memai" role) to route around peer auth's default "OS username == role
     name" behavior; that requires a one-time pg_ident.conf mapping this step
-    documents on failure. Falls back to host+password for remote/non-standard
-    setups. Windows has no `peer` auth at all (its equivalent, `sspi`, is a
-    documented future follow-up) — this step's peer-auth path is Linux/macOS
-    only, matching where `server/` currently runs (CLAUDE.md)."""
+    documents on failure. Windows has no `peer` auth at all — PostgreSQL's
+    own docs are explicit that it needs getpeereid()/SO_PEERCRED, which
+    Windows doesn't provide — so this step offers `sspi` there instead
+    (verified 2026-07-17): Windows' native single-sign-on mechanism, which
+    PostgreSQL negotiates over a loopback TCP connection (`host`, not
+    `local` — Windows has no peer-credential-bearing Unix socket) and which
+    works for a local, non-domain-joined account too (falls back to NTLM
+    when no Kerberos realm is available), not just domain machines. Same
+    shape as peer auth otherwise: a `pg_ident.conf` mapping from OS username
+    to the fixed "memai" role, documented on failure. Falls back to
+    host+password for remote/non-standard setups either way."""
 
     _PEER_AUTH_URL = "postgresql:///memai?user=memai"
+    _SSPI_AUTH_URL = "postgresql://memai@localhost:5432/memai"
 
     def __init__(self, verifier: DatabaseConnectionVerifier) -> None:
         self._verifier = verifier
 
     def run(self, plan: InstallationPlan, prompter: WizardPrompter) -> None:
+        on_windows = sys.platform.startswith("win")
+        os_auth_choice = (
+            PromptChoice("sspi", "Local SSPI authentication (recommended) — no password stored")
+            if on_windows
+            else PromptChoice("peer", "Local peer authentication (recommended) — no password stored")
+        )
         choices = [
-            PromptChoice("peer", "Local peer authentication (recommended) — no password stored"),
+            os_auth_choice,
             PromptChoice("password", "Host + password (remote or custom Postgres setup)"),
         ]
         default = None
@@ -147,10 +163,13 @@ class ConfigureDatabaseConnection:
         choice = prompter.select("How should Mémai connect to PostgreSQL?", choices, default=default)
         if choice == "keep":
             database_url = plan.database_url
-            failure_hint = self._peer_auth_hint() if database_url == self._PEER_AUTH_URL else ""
+            failure_hint = self._failure_hint_for(database_url)
         elif choice == "peer":
             database_url = self._PEER_AUTH_URL
             failure_hint = self._peer_auth_hint()
+        elif choice == "sspi":
+            database_url = self._SSPI_AUTH_URL
+            failure_hint = self._sspi_auth_hint()
         else:
             host = prompter.text("Postgres host:", default="localhost")
             port = prompter.text("Postgres port:", default="5432")
@@ -174,6 +193,13 @@ class ConfigureDatabaseConnection:
 
         plan.database_url = database_url
 
+    def _failure_hint_for(self, database_url: str) -> str:
+        if database_url == self._PEER_AUTH_URL:
+            return self._peer_auth_hint()
+        if database_url == self._SSPI_AUTH_URL:
+            return self._sspi_auth_hint()
+        return ""
+
     def _peer_auth_hint(self) -> str:
         os_user = getpass.getuser()
         return (
@@ -183,6 +209,19 @@ class ConfigureDatabaseConnection:
             "and to pg_hba.conf (before the general 'local all all peer' line):\n"
             "  local   memai   memai   peer map=memai_map\n"
             "then reload Postgres (`sudo systemctl reload postgresql`) and re-run memai-setup."
+        )
+
+    def _sspi_auth_hint(self) -> str:
+        os_user = getpass.getuser()
+        return (
+            " This usually means the 'memai' role isn't mapped to your Windows user "
+            f"('{os_user}') yet — add to pg_ident.conf:\n"
+            f"  memai_map    {os_user}    memai\n"
+            "and to pg_hba.conf (before any catch-all 'host' line):\n"
+            "  host   memai   memai   127.0.0.1/32   sspi map=memai_map\n"
+            "  host   memai   memai   ::1/128        sspi map=memai_map\n"
+            "then restart the PostgreSQL service (Services app, or an admin PowerShell: "
+            "`Restart-Service postgresql-x64-<version>`) and re-run memai-setup."
         )
 
 

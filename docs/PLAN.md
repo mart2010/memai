@@ -198,6 +198,27 @@ tracks work still to do.
       **Not yet live-verified**: no admin-rights Windows box available in this session to
       confirm `uv sync` completes end-to-end and STT/TTS actually work once Build Tools
       are installed — next real verification needs exactly that.
+      **Follow-up (2026-07-17, same day)**: Postgres install docs were also fixed to stop
+      documenting our own OS-specific install steps and instead point to PostgreSQL's and
+      pgvector's own per-OS install guides, with Docker demoted to the explicit
+      "sidesteps building pgvector on Windows" alternative. That surfaced a real gap:
+      `ConfigureDatabaseConnection` (setup wizard step 3) unconditionally offered
+      "peer" auth with no platform check at all, even though its own docstring already
+      said peer is Linux/macOS-only (`getpeereid()`/`SO_PEERCRED`, confirmed absent on
+      Windows via PostgreSQL's own docs) — a Windows user would have picked it, watched
+      it fail, and gotten a `systemctl reload`-flavored hint that doesn't apply. Verified
+      PostgreSQL's Windows equivalent, SSPI, is real and applicable here (works for a
+      local non-domain account via NTLM fallback, not just Kerberos/AD; official Windows
+      libpq/psycopg builds always compile in SSPI support, no extra dependency). Added a
+      `sys.platform`-gated branch to the step (`sspi` choice + DSN
+      `postgresql://memai@localhost:5432/memai` + a Windows-flavored pg_ident.conf/
+      pg_hba.conf/`Restart-Service` hint on failure, mirroring the existing peer-auth
+      path) and 4 new unit tests (platform-gated choice lists, SSPI success, SSPI failure
+      hint, re-run "keep" dispatches to the SSPI hint too); 102/104 setup unit tests green
+      (the 2 pre-existing Windows chmod failures, unrelated). Documented in
+      `docs/INSTALLATION.md` as a third `<details>` block alongside peer and password
+      auth. **Not yet live-verified**: no real Windows Postgres instance available this
+      session to confirm the SSPI handshake actually completes end-to-end.
 - [ ] **Phase 13 live smoke on the workstation**: fresh onboarding shows only installed
       languages; speak a second installed language to the GA (reply mirrors, voice
       switches); speak an uninstalled language (primary-language reminder names
