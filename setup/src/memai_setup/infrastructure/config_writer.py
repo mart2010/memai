@@ -5,6 +5,7 @@ import tomllib
 from pathlib import Path
 
 import tomli_w
+from platformdirs import user_data_dir
 
 from ..domain.plan import InstallationPlan
 from .existing_install import CONFIG_PATH
@@ -18,7 +19,10 @@ from .existing_install import CONFIG_PATH
 # `[server]` table and ignores the rest (server: ws_port/log_dir, client:
 # ws_port/ssh_host).
 _DEFAULT_WS_PORT = 8765
-_DEFAULT_LOG_DIR = "logs/sessions"
+# Matches server/infrastructure/config.py's own default — absolute and OS-independent
+# (the platform data dir, not a cwd-relative literal, which used to scatter session
+# logs depending on where the server process happened to be launched from).
+_DEFAULT_LOG_DIR = str(Path(user_data_dir("memai", appauthor=False)) / "sessions")
 
 
 class TomlConfigWriter:
@@ -65,9 +69,9 @@ class TomlConfigWriter:
                 llm_config["api_key"] = plan.llm_api_key
         config["llm"] = llm_config
         # The wizard-selected languages ARE the installed-languages contract: the
-        # server offers onboarding language selection and GA response-language
-        # mirroring only within this set (FR-705). Absent (configs written before
-        # this key existed), the server falls back to all of SUPPORTED_LANGUAGES.
+        # server offers onboarding language selection only within this set (FR-705).
+        # Absent (configs written before this key existed), the server falls back to
+        # all of SUPPORTED_LANGUAGES.
         config["languages"] = {"installed": plan.languages}
         self._write(config)
 

@@ -53,6 +53,7 @@ from .infrastructure.postgres import (
 from .infrastructure.recall_gate import DefaultRecallGate
 from .infrastructure.stt import FasterWhisperSTTService
 from .infrastructure.tts import KOKORO_DEFAULT_VOICES, KokoroTTSService
+from .services.directives import PersonaDirectiveSync
 from .services.memory import ConsolidateMemory, EnrichMemory, GenerateMemoryBrief
 from .services.persona import EditPersona
 from .services.ports import LLMService, PersonaAssessmentPort, PersonaEnrichmentPort, PersonaSelectionPort, RecallGate
@@ -93,8 +94,7 @@ class ServerContext:
     # third party too. Always Ollama, so always constructible even when `llm` isn't.
     offline_llm: OllamaLLMService
     # Wizard-installed languages (FR-705): the subset of SUPPORTED_LANGUAGES whose TTS
-    # voices this installation actually pulled. Bounds onboarding selection (TR-103)
-    # and GA response-language mirroring (TR-313).
+    # voices this installation actually pulled. Bounds onboarding selection (TR-103).
     installed_languages: list[Language]
     user_repo: PSUserRepository
     persona_repo: PSPersonaRepository
@@ -307,6 +307,7 @@ async def _handle(ws, ctx: ServerContext) -> None:
         persona_repo=ctx.persona_repo,
         memory_brief_repo=ctx.memory_brief_repo,
         session_log_reader=JSONLSessionLogReader(ctx.log_dir),
+        memory_repo=ctx.memory_repo,
     )
     turn_logger = JSONLTurnLogger(ctx.log_dir)
 
@@ -324,9 +325,6 @@ async def _handle(ws, ctx: ServerContext) -> None:
         language_detector=ctx.language_detector,
         selection_strategies=_build_selection_strategies(ctx),
         recall_gates=_build_recall_gates(ctx),
-        installed_voices={
-            lang.code: KOKORO_DEFAULT_VOICES.get(lang.code, "") for lang in ctx.installed_languages
-        },
     )
     end_session = EndSession(turn_logger=turn_logger)
     complete_onboarding = CompleteOnboarding(user_repo=ctx.user_repo)
@@ -500,6 +498,10 @@ def main() -> None:
         offline_conversation_repo=PSConversationRepository(offline_conn),
         offline_unit_of_work=PSUnitOfWork(offline_conn),
     )
+    # Idempotent (FR-207) — the "switch back to the general assistant" Directive must
+    # exist regardless of which personas have been created; safe to re-run on every
+    # startup.
+    PersonaDirectiveSync(ctx.memory_repo, ctx.embedding_service).ensure_return_to_general_assistant()
 
     async def _run() -> None:
         async def handler(ws):

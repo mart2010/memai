@@ -6,6 +6,23 @@ single private memory engine that can host **multiple specialised assistants** â
 memory. You switch between them by voice, mid-conversation, and each one picks up
 exactly where you left off with *it*.
 
+## Switching personas by voice
+
+Say one of these, using the persona's name as it's configured:
+
+- "Switch me to `<persona name>`."
+- "Switch to `<persona name>`."
+
+To come back to the default assistant:
+
+- "Switch me back to the general assistant."
+- "Switch back to the general assistant."
+
+Switching is instant and reliable â€” it's recognized directly from what you say, not
+guessed by the assistant mid-reply, so it never misfires or gets confused with an
+unrelated request. Stick close to the phrasings above for the most reliable match;
+looser variations may not be recognized.
+
 ## Why a persona is more than a system prompt
 
 Anyone can prepend "You are a helpful tutor" to an LLM call. What makes a Memai persona

@@ -37,11 +37,10 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
 - **FR-104** The reply must be synthesised and sent **incrementally** — sentence by
   sentence as the LLM streams — not after the full response completes.
 - **FR-105** The assistant must respond in the active persona's `response_language`
-  (instructed via system prompt) and speak at the persona's `speaking_rate` — with one
-  exception: the GeneralAssistant mirrors the user, replying in the current utterance's
-  detected language whenever it is an installed language (FR-705). Mirroring is per-turn
-  and ephemeral — no stored setting moves (INV-14) — and never applies to strategy
-  personas. Cast personas (non-default `voices` keys) receive **no** generic
+  (instructed via system prompt) and speak at the persona's `speaking_rate` — this
+  applies uniformly, GeneralAssistant included (its `response_language` is set to
+  `User.primary_language` at onboarding, FR-003, and only changes on explicit request,
+  INV-14). Cast personas (non-default `voices` keys) receive **no** generic
   response-language instruction at all: a two-teacher cast deliberately speaks two
   languages per reply, and language use is owned by the persona's own system prompt.
 - **FR-106** Spoken text must be cleaned for TTS: markdown emphasis/headers/rules and
@@ -65,36 +64,39 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   `[TOPIC_BREAK]` splits conversations mid-session; `[TOPIC_CONTINUATION]` (valid only
   on a session's first turn) declares the session a continuation of the previous
   conversation. Markers are never spoken.
-- **FR-113** When the GeneralAssistant is active and the detected utterance language is
-  not an installed language, the reply must be in the user's primary language and must
-  remind the user that the language is not installed and that re-running the install
-  wizard (`memai-setup`) is how to add it.
+- **FR-113** `[RETIRED 2026-07-18 — GA response-language mirroring removed;
+  GA.response_language is now a plain fixed setting like every other persona's (FR-105),
+  with no detection-driven override or not-installed reminder]`
 - **FR-114** Every user turn must be rendered into the LLM context prefixed with its
   detected language as a `[lang:code]` tag (all personas) — during a tutor session the
   tag tells the model whether the learner produced the target language, spoke their own,
-  or (a third language) likely stumbled on pronunciation; for the GA it is the evidence
-  behind mirroring (FR-105). Tags are context-rendering only: stored turns and session
-  logs stay clean (the log's `language` field carries the code, TR-402), and a
-  `[lang:]` tag mimicked by the model in its response is stripped before TTS, never
-  spoken.
+  or (a third language) likely stumbled on pronunciation. Tags are context-rendering
+  only: stored turns and session logs stay clean (the log's `language` field carries the
+  code, TR-402), and a `[lang:]` tag mimicked by the model in its response is stripped
+  before TTS, never spoken.
 
 ## FR-2xx — Personas
 
 - **FR-201** The GeneralAssistant must always exist (seeded, fixed id), is the persona
   every session starts on, and must be protected: it cannot be removed or deactivated.
-- **FR-202** When more than one persona exists, the assistant must be able to switch by
-  emitting `[PERSONA:name]` (matched case-insensitively against persona names) at the
-  start of a response; the switch applies from that response onward. Unknown names or
-  the already-active persona are a silent no-op.
-- **FR-203** The available personas must be listed in the system prompt so the LLM can
-  offer and perform switches conversationally.
+- **FR-202** `[RETIRED 2026-07-18 — replaced by directive-based switching, FR-207. The
+  `[PERSONA:name]` LLM-emitted tag scheme required listing every other persona's name
+  in the system prompt to get the model to notice it reliably, which turned out to
+  also be exactly the kind of salience that caused language drift toward that other
+  persona even when nobody asked to switch — see the language-drift discussion FR-207
+  replaces this with.]`
+- **FR-203** `[RETIRED 2026-07-18 — persona discovery moved to onboarding/FAQ; GA's
+  system prompt no longer names another persona under any circumstance, the actual
+  fix for the drift FR-202 caused.]`
 - **FR-204** Persona management use cases exist for create, edit, list, remove,
   deactivate, reactivate — with the rules: creation only while GA is active; system
   personas cannot be removed/deactivated; removal cascades to the persona's concepts
   and procedures (INV-9); deactivation preserves memory for later reactivation.
-  **⚠ Gap:** only *edit* (onboarding voice/language) and *switch* (`[PERSONA:]`) are
-  wired to live triggers; create/remove/deactivate/reactivate have no voice or CLI
-  entry point yet.
+  Create and remove additionally sync a GA-owned Directive concept via
+  `PersonaDirectiveSync` (FR-207) — INV-9's cascade doesn't cover it, since it's
+  GA-owned, not the removed persona's own. **⚠ Gap:** only *edit* (onboarding
+  voice/language) and *switch* (FR-207) are wired to live triggers;
+  create/remove/deactivate/reactivate have no voice or CLI entry point yet.
 - **FR-205** A persona's voice identity is its `voices` map (mandatory `default`
   anchor, INV-7; other keys are IETF language codes). Each synthesized segment's own
   detected dominant language must switch the synthesis voice to that language's
@@ -105,6 +107,23 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
 - **FR-206** A non-default `voices` map key defined as a `|`-separated pool must
   resolve to one voice per session — stable within the session, rotating across
   sessions (HVPT) — with no persisted state.
+- **FR-207** A **Directive** is a user utterance that changes memai's own operating
+  state rather than being answered in conversation. Persona switching is the first
+  (and, currently, only) directive type; a Directive is represented as a GA-owned
+  `Concept` with its `directive` field populated (e.g.
+  `{"action": "switch_persona", "target_persona_id": "<uuid>"}`), matched by embedding
+  similarity against the turn's own utterance — not by anything the LLM decides or
+  emits. A clearing match executes deterministically **before** that turn's system
+  prompt is composed: `active_persona` changes first, so the reply is generated by the
+  new persona from the first token, and the system prompt never has to name the other
+  persona to make the switch happen (the actual fix for the language drift the retired
+  `[PERSONA:]` tag scheme, FR-202, used to cause). An already-active target is a silent
+  no-op (carried over from FR-202). Canonical trigger phrasing is documented for the
+  user (README/FAQ) and is exactly what gets embedded into the matching Directive
+  concepts — both sides of the similarity computation anchor on the same wording, to
+  keep match precision high. `PersonaDirectiveSync` keeps directive concepts in sync
+  with persona create/remove (FR-204) and bootstraps the fixed "return to the
+  GeneralAssistant" directive idempotently on every server startup.
 
 ## FR-3xx — Memory & recall
 
@@ -233,14 +252,13 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   absent → connect to the local server directly.
 - **FR-704** Persistent language settings — `User.primary_language` and any persona's
   `response_language` — must only ever change on explicit user request (INV-14), never
-  inferred from detected speech language. The GeneralAssistant's per-turn response
-  mirroring (FR-105) is ephemeral and writes nothing.
+  inferred from detected speech language.
 - **FR-705** The install wizard must record the selected languages in `memai.toml`
   (`[languages].installed`) — the **installed languages**: the wizard-selected subset
   of supported languages whose TTS voices actually exist on the machine. Onboarding
-  language selection (FR-002) and response mirroring (FR-105/FR-113) are bounded by
-  this set; adding a language means re-running `memai-setup`. A config without the key
-  (written before it existed) treats every supported language as installed.
+  language selection (FR-002) is bounded by this set; adding a language means
+  re-running `memai-setup`. A config without the key (written before it existed) treats
+  every supported language as installed.
 - **FR-706** Re-running the install wizard must start from the recorded installation
   state, not from nothing: the existing `memai.toml` is parsed and its current settings
   shown up front; already-installed languages come pre-checked in the language

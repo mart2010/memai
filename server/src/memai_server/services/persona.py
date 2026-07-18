@@ -4,13 +4,15 @@ from uuid import UUID, uuid4
 
 from ..domain.events import PersonaDeactivated, PersonaReactivated, PersonaSwitched
 from ..domain.model import AssistantPersona, DEFAULT_VOICE_ROLE, GENERAL_ASSISTANT_ID, Language
+from .directives import PersonaDirectiveSync
 from .ports import PersonaRepository
 from .session import WorkingMemory
 
 
 class CreatePersona:
-    def __init__(self, persona_repo: PersonaRepository) -> None:
+    def __init__(self, persona_repo: PersonaRepository, directive_sync: PersonaDirectiveSync) -> None:
         self._repo = persona_repo
+        self._directive_sync = directive_sync
 
     def execute(
         self,
@@ -39,6 +41,9 @@ class CreatePersona:
             updated_at=now,
         )
         self._repo.save(persona)
+        # A Directive (FR-207) is how the user actually reaches this persona going
+        # forward — create it in the same use case that creates the persona itself.
+        self._directive_sync.sync_created(persona)
         return persona
 
 
@@ -80,8 +85,9 @@ class EditPersona:
 
 
 class RemovePersona:
-    def __init__(self, persona_repo: PersonaRepository) -> None:
+    def __init__(self, persona_repo: PersonaRepository, directive_sync: PersonaDirectiveSync) -> None:
         self._repo = persona_repo
+        self._directive_sync = directive_sync
 
     def execute(self, persona_id: UUID) -> None:
         persona = self._repo.get(persona_id)
@@ -89,6 +95,9 @@ class RemovePersona:
             raise ValueError(f"Persona {persona_id} not found")
         if persona.is_system:
             raise ValueError("System personas cannot be removed")
+        # INV-9's cascade only cleans up this persona's OWN concepts/procedures — its
+        # "switch to me" Directive is GA-owned, so it needs this explicit cleanup.
+        self._directive_sync.sync_removed(persona_id)
         self._repo.delete(persona_id)
 
 

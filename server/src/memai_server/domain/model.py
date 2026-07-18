@@ -267,6 +267,12 @@ class Concept:
     # written only by the owning persona's assessment strategy, read only by that persona's
     # selection strategy — generic code never branches on its contents.
     persona_state: dict | None = None
+    # A Directive (FR-207): None for an ordinary concept; populated marks this a
+    # GA-owned, generic-code-actionable concept, e.g. {"action": "switch_persona",
+    # "target_persona_id": "<uuid str>"}. The one Concept field generic code IS meant
+    # to read and act on — the deliberate opposite of persona_state/settings' opacity
+    # contract (INV-6).
+    directive: dict | None = None
     engagement_level: EngagementLevel = EngagementLevel.MENTIONED
     created_at: datetime | None = None
     updated_at: datetime | None = None

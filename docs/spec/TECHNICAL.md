@@ -27,7 +27,9 @@ design discussion, never a patch.
   persona's assessment strategy (via `update_persona_state`; upserts structurally
   exclude the column) and read only by that persona's selection strategy.
   `AssistantPersona.settings` has the same opacity one level up. No generic code path
-  branches on the contents of either.
+  branches on the contents of either. `Concept.directive` (FR-207) is the deliberate
+  opposite: the one field generic code (`ProcessTurn`) is meant to read and act on —
+  not persona-authored opaque data, but GA's own operational routing.
 - **INV-7 — Voices anchor.** Every `voices` map contains the `"default"` role, and its
   value is a single voice (never a `|` pool). Enforced by the entity.
 - **INV-8 — Description/embedding co-update.** On any content change to a
@@ -49,10 +51,7 @@ design discussion, never a patch.
   `Procedure.language` never changes on upsert; descriptions stay in that language.
 - **INV-14 — Persistent language settings switch explicitly only.** No implicit persona
   switching, and no change to any stored language setting (`User.primary_language`, a
-  persona's `response_language`), from detected speech language. The GA's per-turn
-  response-language mirroring (TR-313) is the sanctioned ephemeral exception: recomputed
-  each turn, bounded by the installed languages, never written anywhere, never applied
-  to strategy personas.
+  persona's `response_language`), from detected speech language.
 - **INV-15 — Episode provenance is fixed.** `origin_conversation_id` is NOT NULL and
   never reassigned; `happened_at` is the temporal anchor, not the conversation date.
 
@@ -126,29 +125,32 @@ design discussion, never a patch.
 
 `services/session.py` (`StartSession`, `ProcessTurn`, `EndSession`).
 
-- **TR-301** `StartSession` loads: `User`, GA persona, all personas, memory brief
-  (skipped during onboarding), and the session tail — previous session's last
-  `session_tail_turns` (10) turns iff it ended within
+- **TR-301** `StartSession` loads: `User`, GA persona, GA's Directive concepts
+  (FR-207), memory brief (skipped during onboarding), and the session tail — previous
+  session's last `session_tail_turns` (10) turns iff it ended within
   `session_continuation_threshold_hours` (24). Fails fast when User or GA is missing.
-- **TR-302** Turn sequence: STT → log user turn → recall gate (TR-314; embed turn text,
-  `search` top 5, persona-scoped) → lazy selection fetch/consume (TR-306) → compose
-  working context → stream LLM → per-sentence TTS → resolve markers → log assistant
-  turn → rolling-summary check.
+- **TR-302** Turn sequence: STT → log user turn → directive matching (TR-315) →
+  recall gate (TR-314; embed turn text, `search` top 5, persona-scoped; skipped on a
+  turn that just switched persona) → lazy selection fetch/consume (TR-306; likewise
+  skipped) → compose working context → stream LLM → per-sentence TTS → resolve
+  markers → log assistant turn → rolling-summary check.
 - **TR-303** Working-context composition (`_compose_working_context`): system prompt =
   persona prompt ⊕ onboarding directives (first launch) ⊕ response-language
-  instruction (mirroring/uninstalled variants per TR-313; suppressed entirely for cast
-  personas — non-default `voices` keys — whose own prompt owns language use, FR-105) ⊕
-  memory brief ⊕ recalled memories ⊕ persona list (when > 1). Messages = session tail
-  (as one system message) ⊕ rolling summary ⊕ recent turns; a selected item is injected
-  as a system message immediately before the current user turn. User turns (recent and
-  tail) are rendered with their detected-language `[lang:code]` prefix
-  (`_render_turn_content`, FR-114) — rendering-only, stored content untouched; a turn
-  without a recorded language renders untagged.
-- **TR-304** Response prefix grammar: `[PERSONA:name]` and `[FOCUS: wish]` are
-  scanned for anywhere within the first `_PREFIX_SCAN_WINDOW_CHARS` characters of the
-  response (not only at position zero — real models routinely preface a tag-bearing
-  reply with conversational lead-in, e.g. an apology or acknowledgment, that a
-  leading-only check can never see past), each optional; `[TOPIC_CONTINUATION]|
+  instruction (the active persona's fixed `response_language`; suppressed entirely for
+  cast personas — non-default `voices` keys — whose own prompt owns language use,
+  FR-105) ⊕ memory brief ⊕ recalled memories. No persona-listing/switch-instruction
+  block (FR-202/FR-203 retired, FR-207) — the system prompt never names another
+  persona. Messages = session tail (as one system message) ⊕ rolling summary ⊕ recent
+  turns; a selected item is injected as a system message immediately before the
+  current user turn. User turns (recent and tail) are rendered with their
+  detected-language `[lang:code]` prefix (`_render_turn_content`, FR-114) —
+  rendering-only, stored content untouched; a turn without a recorded language renders
+  untagged.
+- **TR-304** Response prefix grammar: `[FOCUS: wish]` is scanned for anywhere within
+  the first `_PREFIX_SCAN_WINDOW_CHARS` characters of the response (not only at
+  position zero — real models routinely preface a tag-bearing reply with
+  conversational lead-in, e.g. an apology or acknowledgment, that a leading-only check
+  can never see past), optional; `[TOPIC_CONTINUATION]|
   [TOPIC_BREAK]` is then checked at the start of whatever remains, only at response
   start. `[TOPIC_CONTINUATION]` outside a session's first turn is swallowed (not
   spoken, no event). If the LLM stream ends before the scan window closes,
@@ -184,28 +186,13 @@ design discussion, never a patch.
 - **TR-309** Rolling summary: when `total_turn_count % 50 == 0`, the oldest 25 recent
   turns are LLM-summarised into (or merged with) `rolling_summary` and dropped from the
   window.
-- **TR-310** Persona switch: `[PERSONA:name]` matched case-insensitively against
-  `list_all()` names; match ≠ active persona → switch + `PersonaSwitched` event; the
-  assistant turn is logged under the **new** persona id.
+- **TR-310** `[RETIRED 2026-07-18 — replaced by directive-based switching, TR-315]`
 - **TR-311** Latency instrumentation: `[latency]` stdout lines for STT, first LLM
   token, first TTS chunk, total-to-first-audio, total turn, inter-turn gap.
 - **TR-312** Turn timestamps: the user turn is stamped at `end_utterance` receipt; the
   assistant turn is stamped when the LLM stream finishes — the assistant→user delta is
   the stored response-latency proxy consumed by tutor assessment (TR-806).
-- **TR-313** GA response-language mirroring (FR-105/FR-113): `ProcessTurn` holds an
-  installed-voices map (installed language code → that language's default Kokoro voice,
-  wired by the composition root). When the active persona is the GA (fixed id),
-  onboarding is complete, and the utterance's STT-detected language is a key of the map,
-  the turn's response-language instruction becomes "respond in the detected language";
-  a detected language outside the map instead composes a primary-language instruction
-  telling the model to remind the user the language isn't installed and that re-running
-  `memai-setup` adds it. The turn's number-spelling language (TR-308) and initial
-  synthesis voice follow the effective language — the persona's registered voice for
-  that code when one exists (via `_session_voice`), else the map's voice, and the
-  persona's own default anchor when mirroring its own `response_language`. Ephemeral by
-  construction: recomputed per turn, persists nothing (INV-14). Whisper misdetection on
-  very short utterances can mis-trigger either branch — accepted, same calibration
-  posture as TR-307.
+- **TR-313** `[RETIRED 2026-07-18 — see FR-113]`
 - **TR-314** Recall gating (`RecallGate`, FR-309): replaces the earlier per-turn LLM
   classification call (`RecallIntentDetector`, retired) with local, deterministic
   logic — no LLM call, no JSON parsing, no dependency on `[llm].provider`.
@@ -235,6 +222,28 @@ design discussion, never a patch.
   resolution mirrors `selection_strategies`: `ProcessTurn._recall_gates.get(persona_id,
   default_recall_gate)` — the one difference from `PersonaSelectionPort` et al. being
   that every persona resolves to *some* gate, never a no-op.
+- **TR-315** Directive matching (`ProcessTurn.execute` step 3b, FR-207): runs
+  unconditionally on every non-empty turn, independent of `RecallGate` (TR-314) — a
+  directive phrase is a short command, exactly what `should_embed`'s word-count floor
+  is designed to skip, so this computes its own embedding via a second, separate
+  `EmbeddingService.embed()` call (accepted cost of keeping the two systems decoupled;
+  not shared with recall's own embedding even on a turn where both end up embedding).
+  The turn's embedding is compared via `domain.model.cosine_similarity` against every
+  entry in `WorkingMemory.directive_concepts` (fetched once at session start,
+  `MemoryRepository.list_directives(GENERAL_ASSISTANT_ID)` — same fetch-once posture
+  as `memory_brief`); the highest-similarity match is used if it clears
+  `_DIRECTIVE_MATCH_THRESHOLD` (0.85, placeholder pending live tuning, same posture as
+  the 0.93/0.75 upsert thresholds). A clearing match whose `directive["action"]` is
+  `"switch_persona"` and whose `target_persona_id` differs from the currently active
+  persona (already-active is a silent no-op) calls the existing `SwitchPersona` use
+  case (`services/persona.py` — previously defined but never invoked from any live
+  code path; this is its first real caller), which updates `WorkingMemory.active_persona`
+  and returns the `PersonaSwitched` event carried through to `TurnResult`. Recall
+  (TR-314) and the persona-selected-item lazy fetch (TR-306) are both skipped entirely
+  on a turn where a directive fired — the user's utterance was a directive, not a
+  content question; both resume normally next turn under the new persona. The
+  assistant turn is logged under the **new** persona id, same as the retired
+  `[PERSONA:]` scheme (TR-310) guaranteed.
 
 ## TR-4xx — Session logs & replay
 
@@ -288,12 +297,19 @@ design discussion, never a patch.
   requires ended + non-empty + not already consolidated (`mark_consolidated` enforces).
 - **TR-508** `list_items` orders by ascending id within each memory type
   (curriculum-order read side, INV-11) and rejects episode queries; `list_all()`
-  returns **all** personas, including deactivated ones. *(Note: the live persona list
-  and `[PERSONA:]` matching therefore include deactivated personas — accepted for now;
+  returns **all** personas, including deactivated ones. *(Note: accepted for now;
   revisit when lifecycle gets a live trigger, FR-204.)*
 - **TR-509** `search` returns `(similarity, item)` with **similarity = 1 − pgvector
   cosine distance**, merged across requested types, sorted, truncated to `top_n`;
-  `persona_id` filters concepts/procedures only (episodes are global).
+  `persona_id` filters concepts/procedures only (episodes are global). Concepts with
+  `directive` populated (FR-207) are excluded — they're GA's own operational routing
+  data, not RAG content, and are never surfaced as a "Relevant memories" injection.
+- **TR-510** `concepts.directive JSONB` (FR-207, nullable): `NULL` for an ordinary
+  concept. `MemoryRepository.list_directives(persona_id)` returns every concept for
+  that persona with `directive IS NOT NULL`, ascending id; `delete_concept(concept_id)`
+  is a plain unconditional delete, used only by `PersonaDirectiveSync.sync_removed`
+  (INV-9's cascade doesn't cover a GA-owned directive referencing a *different*,
+  removed persona).
 
 ## TR-6xx — Upsert pipeline
 
@@ -432,7 +448,9 @@ only validation layer.
 ## TR-95x — Configuration & models
 
 - **TR-951** Server config `memai.toml` (platform config dir; wizard-generated):
-  `[server] ws_port=8765, log_dir="logs/sessions"`; `[database] url` (libpq DSN; peer
+  `[server] ws_port=8765, log_dir=<platform data dir>/sessions` (absolute,
+  `platformdirs.user_data_dir("memai")` — session logs are persistent data, INV-5, not
+  settings; user-overridable via this same key); `[database] url` (libpq DSN; peer
   auth default on Linux/macOS); `[stt] model_path, device cuda|cpu, compute_type`
   (float16↔cuda, int8↔cpu); `[tts] device` (absent → Kokoro auto-detect); `[llm]
   model="aya-expanse", ollama_host?` (always: the local Ollama model for the offline

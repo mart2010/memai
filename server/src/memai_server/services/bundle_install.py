@@ -22,6 +22,7 @@ from ..domain.model import (
     Procedure,
     resolve_installed_languages,
 )
+from .directives import PersonaDirectiveSync
 from .ports import (
     BundleInstallLog,
     BundleInstallRecord,
@@ -58,6 +59,7 @@ class InstallPersonaBundle:
         upserter: MemoryUpserter,
         unit_of_work: UnitOfWork,
         install_log: BundleInstallLog,
+        directive_sync: PersonaDirectiveSync,
         # Language -> Kokoro voice, same derivation as onboarding (the composition root
         # wires KOKORO_DEFAULT_VOICES); used only when [persona.voices] omits "default".
         default_voice_for: Callable[[Language], str],
@@ -72,6 +74,7 @@ class InstallPersonaBundle:
         self._upserter = upserter
         self._unit_of_work = unit_of_work
         self._install_log = install_log
+        self._directive_sync = directive_sync
         self._default_voice_for = default_voice_for
         self._installed_languages = (
             installed_languages if installed_languages is not None else resolve_installed_languages(())
@@ -231,4 +234,7 @@ class InstallPersonaBundle:
             strategy=definition.strategy,  # resolved against the registry at server startup
         )
         self._persona_repo.save(persona)
+        # A Directive (FR-207) is how the user actually reaches this persona going
+        # forward — create it in the same use case that creates the persona itself.
+        self._directive_sync.sync_created(persona)
         return persona

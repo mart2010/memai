@@ -3,6 +3,7 @@ from datetime import datetime, UTC
 from uuid import uuid4
 
 from memai_server.domain.model import AssistantPersona, GENERAL_ASSISTANT_ID, Language, User
+from memai_server.services.directives import PersonaDirectiveSync
 from memai_server.services.persona import (
     CreatePersona,
     DeactivatePersona,
@@ -14,11 +15,15 @@ from memai_server.services.persona import (
 )
 from memai_server.services.session import WorkingMemory
 
-from tests.fakes.fakes import FakePersonaRepository
+from tests.fakes.fakes import FakeEmbeddingService, FakeMemoryRepository, FakePersonaRepository
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _directive_sync(memory_repo: FakeMemoryRepository | None = None) -> PersonaDirectiveSync:
+    return PersonaDirectiveSync(memory_repo or FakeMemoryRepository(), FakeEmbeddingService())
 
 
 def _general_assistant() -> AssistantPersona:
@@ -45,7 +50,7 @@ def _session(active_persona: AssistantPersona) -> WorkingMemory:
         started_at=_now(),
         user=User(id=uuid4(), primary_language=Language("en")),
         active_persona=active_persona,
-        available_personas=[active_persona],
+        directive_concepts=[],
         memory_brief=None,
     )
 
@@ -62,7 +67,7 @@ class TestCreatePersona:
         """Spec: FR-204"""
         ga = _general_assistant()
         session = _session(ga)
-        use_case = CreatePersona(_repo_with(ga))
+        use_case = CreatePersona(_repo_with(ga), _directive_sync())
         persona = use_case.execute(session, name="Coach", system_prompt="You coach.", now=_now())
         assert persona.name == "Coach"
         assert not persona.is_system
@@ -71,7 +76,7 @@ class TestCreatePersona:
         """Spec: FR-204"""
         coach = _other_persona()
         session = _session(coach)
-        use_case = CreatePersona(_repo_with(coach))
+        use_case = CreatePersona(_repo_with(coach), _directive_sync())
         with pytest.raises(ValueError, match="GeneralAssistant"):
             use_case.execute(session, name="Tutor", system_prompt="You teach.", now=_now())
 
@@ -80,9 +85,21 @@ class TestCreatePersona:
         ga = _general_assistant()
         session = _session(ga)
         repo = _repo_with(ga)
-        use_case = CreatePersona(repo)
+        use_case = CreatePersona(repo, _directive_sync())
         persona = use_case.execute(session, name="Coach", system_prompt="You coach.", now=_now())
         assert repo.get(persona.id) is not None
+
+    def test_creates_switch_directive_for_new_persona(self):
+        """Spec: FR-207 — a Directive is how the user reaches this persona going
+        forward, created in the same use case that creates the persona itself."""
+        ga = _general_assistant()
+        session = _session(ga)
+        memory_repo = FakeMemoryRepository()
+        use_case = CreatePersona(_repo_with(ga), _directive_sync(memory_repo))
+        persona = use_case.execute(session, name="Coach", system_prompt="You coach.", now=_now())
+        directives = memory_repo.list_directives(GENERAL_ASSISTANT_ID)
+        assert directives
+        assert all(d.directive["target_persona_id"] == str(persona.id) for d in directives)
 
 
 class TestListPersonas:
@@ -189,7 +206,7 @@ class TestRemovePersona:
         """Spec: FR-204"""
         coach = _other_persona("Coach")
         repo = _repo_with(coach)
-        RemovePersona(repo).execute(coach.id)
+        RemovePersona(repo, _directive_sync()).execute(coach.id)
         assert repo.get(coach.id) is None
 
     def test_raises_on_system_persona(self):
@@ -197,17 +214,32 @@ class TestRemovePersona:
         ga = _general_assistant()
         repo = _repo_with(ga)
         with pytest.raises(ValueError, match="[Ss]ystem"):
-            RemovePersona(repo).execute(ga.id)
+            RemovePersona(repo, _directive_sync()).execute(ga.id)
 
     def test_raises_on_unknown_persona(self):
         """Spec: FR-204"""
         with pytest.raises(ValueError):
-            RemovePersona(FakePersonaRepository()).execute(uuid4())
+            RemovePersona(FakePersonaRepository(), _directive_sync()).execute(uuid4())
+
+    def test_removes_its_switch_directive(self):
+        """Spec: FR-207, INV-9 — INV-9's cascade only cleans up the removed persona's
+        OWN concepts/procedures; its GA-owned "switch to me" directive needs this
+        explicit cleanup."""
+        coach = _other_persona("Coach")
+        repo = _repo_with(coach)
+        memory_repo = FakeMemoryRepository()
+        sync = _directive_sync(memory_repo)
+        sync.sync_created(coach)
+        assert memory_repo.list_directives(GENERAL_ASSISTANT_ID)
+
+        RemovePersona(repo, sync).execute(coach.id)
+
+        assert memory_repo.list_directives(GENERAL_ASSISTANT_ID) == []
 
 
 class TestSwitchPersona:
     def test_returns_event_with_correct_ids(self):
-        """Spec: FR-202"""
+        """Spec: FR-207"""
         ga = _general_assistant()
         coach = _other_persona("Coach")
         session = _session(ga)
@@ -217,7 +249,7 @@ class TestSwitchPersona:
         assert event.to_persona_id == coach.id
 
     def test_updates_session_active_persona(self):
-        """Spec: FR-202"""
+        """Spec: FR-207"""
         ga = _general_assistant()
         coach = _other_persona("Coach")
         session = _session(ga)
@@ -225,7 +257,7 @@ class TestSwitchPersona:
         assert session.active_persona.id == coach.id
 
     def test_raises_on_unknown_persona(self):
-        """Spec: FR-202"""
+        """Spec: FR-207"""
         ga = _general_assistant()
         session = _session(ga)
         with pytest.raises(ValueError):

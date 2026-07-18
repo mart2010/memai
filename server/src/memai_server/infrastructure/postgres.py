@@ -93,7 +93,7 @@ def _row_to_persona(row: tuple) -> AssistantPersona:
 
 
 _CONCEPT_COLUMNS = (
-    "id, persona_id, name, description, language, category, persona_state, "
+    "id, persona_id, name, description, language, category, persona_state, directive, "
     "engagement_level, created_at, updated_at, embedding"
 )
 
@@ -104,7 +104,7 @@ _PROCEDURE_COLUMNS = (
 
 
 def _row_to_concept(row: tuple) -> Concept:
-    (id_, persona_id, name, description, language, category, persona_state,
+    (id_, persona_id, name, description, language, category, persona_state, directive,
      engagement_level, created_at, updated_at, emb) = row
     return Concept(
         id=id_,
@@ -114,6 +114,7 @@ def _row_to_concept(row: tuple) -> Concept:
         language=Language(language),
         category=category,
         persona_state=persona_state,
+        directive=directive,
         engagement_level=EngagementLevel[engagement_level.upper()],
         created_at=created_at,
         updated_at=updated_at,
@@ -423,18 +424,20 @@ class PSMemoryRepository:
                 return episode.id
 
     def upsert_concept(self, concept: Concept) -> int:
-        # persona_state is deliberately absent from the UPDATE branch: upserts must never
-        # clobber the owning persona's assessment state (single-writer contract) —
-        # update_persona_state() below is the only write path to that column.
+        # persona_state and directive are deliberately absent from the UPDATE branch:
+        # upserts must never clobber the owning persona's assessment state
+        # (single-writer contract; update_persona_state() below is the only write path
+        # to persona_state) or a directive's action payload (set once at creation by
+        # PersonaDirectiveSync, never revised in place).
         now = datetime.now(UTC)
         with self._conn.cursor() as cur:
             if concept.id is None:
                 cur.execute(
                     """
                     INSERT INTO concepts
-                        (persona_id, name, description, language, category, persona_state,
+                        (persona_id, name, description, language, category, persona_state, directive,
                          engagement_level, created_at, updated_at, embedding)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -444,6 +447,7 @@ class PSMemoryRepository:
                         concept.language.code,
                         concept.category,
                         Jsonb(concept.persona_state) if concept.persona_state is not None else None,
+                        Jsonb(concept.directive) if concept.directive is not None else None,
                         concept.engagement_level.name.lower(),
                         now,
                         now,
@@ -597,14 +601,18 @@ class PSMemoryRepository:
                     )))
 
             if MemoryType.CONCEPT in memory_types:
+                # Directive concepts (FR-207) are GA-owned operational data, not
+                # conversational knowledge — excluded here so they never surface as a
+                # "Relevant memories" context injection; they're only ever read via
+                # list_directives()'s dedicated, always-run matching pass.
                 if persona_id is not None:
                     cur.execute(
                         """
-                        SELECT id, persona_id, name, description, language, category, persona_state,
+                        SELECT id, persona_id, name, description, language, category, persona_state, directive,
                                engagement_level, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM concepts
-                        WHERE persona_id = %s
+                        WHERE persona_id = %s AND directive IS NULL
                         ORDER BY distance
                         LIMIT %s
                         """,
@@ -613,16 +621,17 @@ class PSMemoryRepository:
                 else:
                     cur.execute(
                         """
-                        SELECT id, persona_id, name, description, language, category, persona_state,
+                        SELECT id, persona_id, name, description, language, category, persona_state, directive,
                                engagement_level, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM concepts
+                        WHERE directive IS NULL
                         ORDER BY distance
                         LIMIT %s
                         """,
                         (vec, top_n),
                     )
-                for (id_, p_id, name, description, language, category, persona_state,
+                for (id_, p_id, name, description, language, category, persona_state, directive,
                      engagement_level, created_at, updated_at, emb, distance) in cur.fetchall():
                     results.append((distance, Concept(
                         id=id_,
@@ -632,6 +641,7 @@ class PSMemoryRepository:
                         language=Language(language),
                         category=category,
                         persona_state=persona_state,
+                        directive=directive,
                         engagement_level=EngagementLevel[engagement_level.upper()],
                         created_at=created_at,
                         updated_at=updated_at,
@@ -683,6 +693,18 @@ class PSMemoryRepository:
 
         results.sort(key=lambda x: x[0])
         return [(1.0 - dist, item) for dist, item in results[:top_n]]
+
+    def list_directives(self, persona_id: UUID) -> list[Concept]:
+        with self._conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {_CONCEPT_COLUMNS} FROM concepts WHERE persona_id = %s AND directive IS NOT NULL ORDER BY id",
+                (persona_id,),
+            )
+            return [_row_to_concept(row) for row in cur.fetchall()]
+
+    def delete_concept(self, concept_id: int) -> None:
+        with self._conn.cursor() as cur:
+            cur.execute("DELETE FROM concepts WHERE id = %s", (concept_id,))
 
 
 # ---------------------------------------------------------------------------

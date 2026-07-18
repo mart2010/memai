@@ -13,9 +13,8 @@ from ..domain.events import ConversationBoundaryDetected, ConversationBoundaryTy
 from ..domain.model import (
     DEFAULT_VOICE_ROLE,
     GENERAL_ASSISTANT_ID,
-    SUPPORTED_LANGUAGES,
     AssistantPersona,
-    Language,
+    Concept,
     MemoryBrief,
     MemoryType,
     Speaker,
@@ -56,7 +55,10 @@ class WorkingMemory:
     started_at: datetime
     user: User
     active_persona: AssistantPersona
-    available_personas: list[AssistantPersona]
+    # Directive concepts (FR-207) GA can act on this session — persona-switch targets
+    # today. Small, stable set; fetched once at session start, same posture as
+    # memory_brief below.
+    directive_concepts: list[Concept]
     memory_brief: MemoryBrief | None
     needs_onboarding: bool = False
     recent_turns: list[Turn] = field(default_factory=list)
@@ -155,19 +157,25 @@ def _resolve_boundary_marker(
     return buffer, None
 
 
-# How much lead-in prose to buffer while scanning for a [PERSONA:]/[FOCUS:] tag
-# appearing anywhere in a streaming response (not just position zero) before giving up
-# on finding one. Widened from a position-zero-only check after live testing (see
-# docs/PLAN.md Phase 12 live smoke + gemma3:27b follow-up) showed real models — weak
-# and strong alike — routinely preface a tag-bearing reply with conversational lead-in
-# (an apology, an acknowledgment), especially when recovering from apparent confusion —
-# exactly when a reliable switch matters most, and exactly what position-zero matching
-# can never catch. This is a latency/reliability tradeoff, not a free win: a turn with
-# no tag at all now waits up to this many characters (or stream end, whichever comes
-# first) before speech can start, instead of usually resolving within the first token.
-# Value is a placeholder pending real tuning against live turns, same posture as the
-# 0.93/0.75 upsert thresholds.
+# How much lead-in prose to buffer while scanning for a [FOCUS:] tag appearing
+# anywhere in a streaming response (not just position zero) before giving up on
+# finding one. Widened from a position-zero-only check after live testing (see
+# docs/PLAN.md Phase 12 live smoke) showed real models routinely preface a tag-bearing
+# reply with conversational lead-in (an apology, an acknowledgment). This is a
+# latency/reliability tradeoff, not a free win: a turn with no tag at all now waits up
+# to this many characters (or stream end, whichever comes first) before speech can
+# start, instead of usually resolving within the first token. Value is a placeholder
+# pending real tuning against live turns, same posture as the 0.93/0.75 upsert
+# thresholds. (Persona switching no longer uses this scan at all — FR-207 decides
+# before the LLM is even called.)
 _PREFIX_SCAN_WINDOW_CHARS = 200
+
+# Directive matching (FR-207): minimum cosine similarity between a turn's own
+# utterance and a Directive concept's embedded canonical phrasing to execute that
+# directive's action. Value is a placeholder pending real tuning against live turns,
+# same posture as _PREFIX_SCAN_WINDOW_CHARS/the 0.93/0.75 upsert thresholds — err
+# toward requiring a close match, since a false positive silently switches personas.
+_DIRECTIVE_MATCH_THRESHOLD = 0.85
 
 
 def _extract_tag(buffer: str, tag: str) -> tuple[str, str] | None:
@@ -194,26 +202,21 @@ def _tag_might_still_open(buffer: str, tag: str) -> bool:
 
 def _try_resolve_prefixes(
     buffer: str, is_first_turn: bool, force: bool = False
-) -> tuple[str, str | None, str | None, ConversationBoundaryType | None] | None:
-    """Resolve the optional response-prefix markers [PERSONA:name] and [FOCUS: wish]
-    from anywhere within the first `_PREFIX_SCAN_WINDOW_CHARS` characters of a
-    streaming LLM response — not just position zero, see that constant's docstring —
-    followed by an optional boundary marker at the very start of whatever remains.
+) -> tuple[str, str | None, ConversationBoundaryType | None] | None:
+    """Resolve the optional response-prefix marker [FOCUS: wish] from anywhere within
+    the first `_PREFIX_SCAN_WINDOW_CHARS` characters of a streaming LLM response — not
+    just position zero, see that constant's docstring — followed by an optional
+    boundary marker at the very start of whatever remains.
 
     Returns None while more tokens might change the outcome (still inside the scan
     window with a tag not yet found, or the tail of `buffer` might be an in-progress
     tag) — unless `force` is set, which finalizes against exactly what's buffered now
     (used once the LLM stream itself has ended and no further tokens are coming, so
     nothing left unresolved can ever resolve). Otherwise returns (remaining_text,
-    persona_name_or_None, focus_or_None, boundary_type_or_None).
+    focus_or_None, boundary_type_or_None).
     """
     remaining = buffer
-    persona_name: str | None = None
     focus: str | None = None
-
-    extracted = _extract_tag(remaining, "[PERSONA:")
-    if extracted is not None:
-        remaining, persona_name = extracted
 
     extracted = _extract_tag(remaining, "[FOCUS:")
     if extracted is not None:
@@ -221,13 +224,8 @@ def _try_resolve_prefixes(
 
     if not force:
         still_waiting = (
-            (persona_name is None and _tag_might_still_open(remaining, "[PERSONA:"))
-            or (focus is None and _tag_might_still_open(remaining, "[FOCUS:"))
-            or (
-                (persona_name is None or focus is None)
-                and len(remaining) < _PREFIX_SCAN_WINDOW_CHARS
-            )
-        )
+            _tag_might_still_open(remaining, "[FOCUS:") if focus is None else False
+        ) or (focus is None and len(remaining) < _PREFIX_SCAN_WINDOW_CHARS)
         if still_waiting:
             return None
 
@@ -238,7 +236,7 @@ def _try_resolve_prefixes(
             return None
         boundary_result = (text, None)  # dangling partial boundary marker at stream end — plain text
     text, boundary = boundary_result
-    return text, persona_name, focus, boundary
+    return text, focus, boundary
 
 
 def _session_voice(persona: AssistantPersona, language: str, session_id: UUID) -> str:
@@ -317,9 +315,9 @@ def _render_turn_content(turn: Turn) -> str:
     """User turns carry their STT-detected language into the LLM context as a
     [lang:code] prefix (FR-114): during a tutor session it tells the model whether
     the learner produced the target language, asked in their own, or — a third
-    language tag — likely stumbled on pronunciation; for the GA it is the evidence
-    behind the mirroring instruction. Rendering-only: stored turn content and
-    session logs stay clean (the log's "language" field already carries the code)."""
+    language tag — likely stumbled on pronunciation. Rendering-only: stored turn
+    content and session logs stay clean (the log's "language" field already carries
+    the code)."""
     if turn.speaker == Speaker.USER and turn.language is not None:
         return f"[lang:{turn.language.code}] {turn.content}"
     return turn.content
@@ -340,60 +338,19 @@ def _compose_working_context(
     wm: WorkingMemory,
     recalled_memories: list[MemoryItem],
     selected_item: SelectedItem | None = None,
-    mirror_language: Language | None = None,
-    uninstalled_language: Language | None = None,
 ) -> tuple[str, list[Message]]:
-    prompt_parts: list[str] = []
-    if len(wm.available_personas) > 1:
-        # Few-shot reinforcement, placed FIRST (2026-07-13, docs/PLAN.md Phase 12 live
-        # testing): a plain instruction — even appended last, after the persona system
-        # prompt/memory brief — reliably lost to real models narrating the switch in
-        # prose instead of emitting the tag ("Sure, switching to X now!" with no
-        # [PERSONA:] anywhere). A concrete correct/incorrect example didn't help either
-        # while still appended last (re-tested live against aya-expanse, still 0/5).
-        # Moved to the front on the theory that an 8B model attends less to instructions
-        # buried after a long persona prompt/memory brief (primacy effect) — see
-        # server/tests/integration/test_tutor_llm_quality_gate.py for the live check.
-        persona_lines = "\n".join(f"- {p.name}" for p in wm.available_personas)
-        other = next((p for p in wm.available_personas if p.id != wm.active_persona.id), None)
-        instruction = (
-            "Available personas:\n"
-            f"{persona_lines}\n\n"
-            "To switch, your reply must literally BEGIN with the tag [PERSONA:name] — the tag "
-            "itself performs the switch. Describing the switch in words does nothing on its own."
-        )
-        if other is not None:
-            instruction += (
-                f'\nExample — if asked to switch to "{other.name}":\n'
-                f'  Correct: "[PERSONA:{other.name}] <your first sentence as {other.name}>"\n'
-                f'  Wrong:   "Sure, switching to {other.name} now! <...>" — no tag, so nothing '
-                "actually switches, no matter how confidently it reads."
-            )
-        prompt_parts.append(instruction)
-    prompt_parts.append(wm.active_persona.system_prompt)
+    # No persona-listing/switch-instruction block here (FR-202/FR-203 retired, FR-207):
+    # switching is now decided deterministically before this function ever runs (see
+    # ProcessTurn.execute step 3b), so the system prompt never names another persona —
+    # the fix for the language-drift this scaffolding used to cause.
+    prompt_parts: list[str] = [wm.active_persona.system_prompt]
     if wm.needs_onboarding:
         prompt_parts.insert(0, _FIRST_LAUNCH_DIRECTIVE)
         prompt_parts.append(ONBOARDING_SCRIPT)
-    # Response-language instruction (FR-105/FR-113, TR-313). Three mutually exclusive
-    # cases, GA-only for the first two (ProcessTurn passes both overrides as None for
-    # every other persona): the user spoke an uninstalled language → answer in the
-    # primary language with a re-run-the-wizard reminder; the user spoke an installed
-    # language → mirror it this turn (ephemeral — nothing persisted, INV-14); otherwise
-    # the persona's own configured response language.
-    if uninstalled_language is not None and wm.user.primary_language is not None:
-        prompt_parts.append(
-            f"The user's last utterance was detected as the language with IETF code "
-            f"'{uninstalled_language.code}', which is not installed on this system. Respond entirely in "
-            f"the language with IETF code '{wm.user.primary_language.code}': briefly remind the user that "
-            f"'{uninstalled_language.code}' is not among the installed languages and that re-running the "
-            "memai-setup install wizard is how to add it, then answer their request as best you can."
-        )
-    elif mirror_language is not None:
-        prompt_parts.append(
-            f"The user is currently speaking the language with IETF code '{mirror_language.code}'. "
-            "Respond in that same language."
-        )
-    elif wm.active_persona.response_language and not any(
+    # Response-language instruction (FR-105): the active persona's fixed response
+    # language, GA included (its response_language is set to User.primary_language at
+    # onboarding and only changes on explicit request, INV-14).
+    if wm.active_persona.response_language and not any(
         k != DEFAULT_VOICE_ROLE for k in wm.active_persona.voices
     ):
         # Suppressed for cast personas (non-default voices keys): a two-teacher cast
@@ -444,6 +401,7 @@ class StartSession:
         persona_repo: PersonaRepository,
         memory_brief_repo: MemoryBriefRepository,
         session_log_reader: SessionLogReader,
+        memory_repo: MemoryRepository,
         session_tail_turns: int = 10,
         session_continuation_threshold_hours: float = 24.0,
     ) -> None:
@@ -451,6 +409,7 @@ class StartSession:
         self._persona_repo = persona_repo
         self._memory_brief_repo = memory_brief_repo
         self._session_log_reader = session_log_reader
+        self._memory_repo = memory_repo
         self._tail_turns = session_tail_turns
         self._threshold_hours = session_continuation_threshold_hours
 
@@ -481,7 +440,7 @@ class StartSession:
             started_at=started_at,
             user=user,
             active_persona=persona,
-            available_personas=self._persona_repo.list_all(),
+            directive_concepts=self._memory_repo.list_directives(GENERAL_ASSISTANT_ID),
             memory_brief=None if needs_onboarding else self._memory_brief_repo.get(),
             needs_onboarding=needs_onboarding,
             session_tail=session_tail,
@@ -503,8 +462,12 @@ class ProcessTurn:
         selection_strategies: dict[UUID, PersonaSelectionPort] | None = None,
         recall_gates: dict[UUID, RecallGate] | None = None,
         rolling_window_size: int = 50,
-        installed_voices: dict[str, str] | None = None,
     ) -> None:
+        # Local import: .persona also imports WorkingMemory from this module, so a
+        # top-level import here would be circular (same pattern as _format_memory_item's
+        # local domain.model import above).
+        from .persona import SwitchPersona
+
         self._stt = stt
         self._llm = llm
         self._tts = tts
@@ -513,6 +476,7 @@ class ProcessTurn:
         self._persona_repo = persona_repo
         self._turn_logger = turn_logger
         self._language_detector = language_detector
+        self._switch_persona = SwitchPersona(persona_repo)
         # persona_id -> selection strategy; personas without one (e.g. GA) get no batch.
         self._selection_strategies = selection_strategies or {}
         # persona_id -> RecallGate override (e.g. the tutor's); every other persona,
@@ -521,15 +485,6 @@ class ProcessTurn:
         self._recall_gates = recall_gates or {}
         self._default_recall_gate = default_recall_gate
         self._rolling_window_size = rolling_window_size
-        # Installed-languages contract (FR-705/TR-313): language code -> that language's
-        # default TTS voice. Key membership decides whether GA mirrors a detected
-        # utterance language or delivers the not-installed reminder; the value picks the
-        # synthesis voice when mirroring into a language the persona's own voices map
-        # doesn't cover (falsy value → persona default anchor). None (tests, callers
-        # predating the contract) → every supported language, no dedicated voices.
-        if installed_voices is None:
-            installed_voices = dict.fromkeys((lang.code for lang in SUPPORTED_LANGUAGES), "")
-        self._installed_voices = installed_voices
         self._last_turn_end: float | None = None
 
     async def _next_selected_item(self, wm: WorkingMemory) -> SelectedItem | None:
@@ -578,6 +533,37 @@ class ProcessTurn:
         wm.recent_turns.append(user_turn)
         wm.total_turn_count += 1
 
+        # 3b. Directive matching (FR-207) — replaces the retired [PERSONA:] tag scheme
+        # (FR-202/FR-203). A small, fixed set of GA-owned Concepts (persona-switch
+        # targets, today) checked every turn, unconditionally: a directive phrase is a
+        # short command, exactly what RecallGate.should_embed is designed to skip as
+        # trivial, so this runs independent of the recall gate below (FR-309/TR-314
+        # untouched — a second, separate embed call on turns where recall also embeds,
+        # accepted as the cost of keeping the two systems decoupled). A clearing match
+        # executes deterministically, before this turn's system prompt is composed —
+        # no LLM decision or system-prompt scaffolding involved, which is the actual
+        # fix for the GA language drift that scaffolding used to cause.
+        persona_switched: PersonaSwitched | None = None
+        if wm.directive_concepts:
+            directive_embedding = await asyncio.to_thread(self._embedding_service.embed, text)
+            best_similarity, best_directive = max(
+                (
+                    (cosine_similarity(directive_embedding, d.embedding), d)
+                    for d in wm.directive_concepts
+                    if d.embedding is not None
+                ),
+                key=lambda pair: pair[0],
+                default=(0.0, None),
+            )
+            if best_similarity >= _DIRECTIVE_MATCH_THRESHOLD and best_directive is not None:
+                action = (best_directive.directive or {}).get("action")
+                if action == "switch_persona":
+                    target_id = UUID((best_directive.directive or {})["target_persona_id"])
+                    if target_id != wm.active_persona.id:  # already-active target: silent no-op
+                        persona_switched = self._switch_persona.execute(wm, target_id)
+                        if _TUTOR_DEBUG:
+                            print(f"[tutor-debug] directive matched (similarity={best_similarity:.2f}) -> switched to {wm.active_persona.name!r}")
+
         # 4. Recall gate → enrich working context from LTM (FR-309/TR-314). Replaces the
         # old per-turn LLM classification call with a persona-scoped, local threshold
         # policy: should_embed() short-circuits trivial utterances before any embedding
@@ -585,71 +571,48 @@ class ProcessTurn:
         # embedding is nearly identical to ANY prior search this session (not just the
         # last one — nothing new can enter memory mid-session, INV-1, so a repeat of
         # any earlier query would return the same thing again), reusing that prior
-        # search's cached results instead.
+        # search's cached results instead. Skipped entirely on a turn that just switched
+        # persona (3b) — recall/selection resume normally next turn, under the new
+        # persona; this turn's own utterance was a directive, not a content question.
         recalled_memories: list[MemoryItem] = []
         persona_id = wm.active_persona.id
-        gate = self._recall_gates.get(persona_id, self._default_recall_gate)
-        if gate.should_embed(text):
-            embedding = await asyncio.to_thread(self._embedding_service.embed, text)
-            history = wm.recall_history.get(persona_id, [])
-            if history:
-                similarities = (
-                    (cosine_similarity(embedding, past_embedding), past_results)
-                    for past_embedding, past_results in history
-                )
-                max_similarity, best_match = max(similarities, key=lambda pair: pair[0])
-            else:
-                max_similarity, best_match = None, []
-            if gate.should_search(max_similarity):
-                search_results = await asyncio.to_thread(
-                    self._memory_repo.search,
-                    embedding,
-                    tuple(MemoryType),
-                    top_n=5,
-                    persona_id=persona_id,
-                )
-                recalled_memories = [item for _, item in search_results]
-                wm.recall_history.setdefault(persona_id, []).append((embedding, recalled_memories))
-            else:
-                recalled_memories = best_match
+        if persona_switched is None:
+            gate = self._recall_gates.get(persona_id, self._default_recall_gate)
+            if gate.should_embed(text):
+                embedding = await asyncio.to_thread(self._embedding_service.embed, text)
+                history = wm.recall_history.get(persona_id, [])
+                if history:
+                    similarities = (
+                        (cosine_similarity(embedding, past_embedding), past_results)
+                        for past_embedding, past_results in history
+                    )
+                    max_similarity, best_match = max(similarities, key=lambda pair: pair[0])
+                else:
+                    max_similarity, best_match = None, []
+                if gate.should_search(max_similarity):
+                    search_results = await asyncio.to_thread(
+                        self._memory_repo.search,
+                        embedding,
+                        tuple(MemoryType),
+                        top_n=5,
+                        persona_id=persona_id,
+                    )
+                    recalled_memories = [item for _, item in search_results]
+                    wm.recall_history.setdefault(persona_id, []).append((embedding, recalled_memories))
+                else:
+                    recalled_memories = best_match
 
         # 5. Persona-selected item — batch fetched lazily on the active persona's first
         # turn, then one item per turn, injected via the same context-message mechanism
-        # as recall above.
-        selected_item = await self._next_selected_item(wm)
+        # as recall above. Skipped on a switch turn for the same reason as step 4.
+        selected_item = await self._next_selected_item(wm) if persona_switched is None else None
 
-        # 5b. GA response-language mirroring (FR-105/FR-113, TR-313): the GA answers in
-        # whatever installed language the user just spoke; an uninstalled detected
-        # language gets a primary-language reminder to re-run the wizard. Per-turn and
-        # ephemeral — persona.response_language is never touched (INV-14). GA only:
-        # strategy personas (e.g. the tutor, where the user deliberately speaks the
-        # target language) keep their configured response language. Skipped on the
-        # onboarding turn — the introduction is always in the just-selected primary.
-        mirror_language: Language | None = None
-        uninstalled_language: Language | None = None
-        if (
-            wm.active_persona.id == GENERAL_ASSISTANT_ID
-            and not wm.needs_onboarding
-            and detected_language is not None
-        ):
-            if detected_language.code in self._installed_voices:
-                mirror_language = detected_language
-            else:
-                uninstalled_language = detected_language
-
-        # 6. Stream the LLM response; resolve any leading [PERSONA:name]/boundary marker
-        # as soon as enough tokens arrive, then synthesise each sentence via TTS as it
+        # 6. Stream the LLM response; resolve any leading [FOCUS:]/boundary marker as
+        # soon as enough tokens arrive, then synthesise each sentence via TTS as it
         # completes — instead of waiting for the entire reply before speaking a word.
-        system_prompt, messages = _compose_working_context(
-            wm, recalled_memories, selected_item,
-            mirror_language=mirror_language, uninstalled_language=uninstalled_language,
-        )
+        system_prompt, messages = _compose_working_context(wm, recalled_memories, selected_item)
         wm.needs_onboarding = False
         response_language = wm.active_persona.response_language
-        if mirror_language is not None:
-            response_language = mirror_language
-        elif uninstalled_language is not None and wm.user.primary_language is not None:
-            response_language = wm.user.primary_language
         lang_code = response_language.code if response_language else None
         speaking_rate = wm.active_persona.speaking_rate
         # Multi-voice cast: each complete segment's OWN dominant language picks the
@@ -664,19 +627,6 @@ class ProcessTurn:
         # infrastructure/language_detection.py) keeps whatever voice was already
         # active rather than force a switch.
         current_voice = wm.active_persona.default_voice
-        # Mirroring into a language other than the persona's own (TR-313): the default
-        # anchor is a voice OF the persona's language and would mangle another language's
-        # pronunciation (Kokoro voices are language-specific), so resolve the mirrored
-        # language's voice — the persona's registered voice for that code when one
-        # exists, otherwise the installation's default voice for it.
-        if mirror_language is not None and (
-            wm.active_persona.response_language is None
-            or mirror_language.code != wm.active_persona.response_language.code
-        ):
-            if mirror_language.code in wm.active_persona.voices:
-                current_voice = _session_voice(wm.active_persona, mirror_language.code, wm.session_id)
-            else:
-                current_voice = self._installed_voices.get(mirror_language.code) or current_voice
         cast_languages = tuple(k for k in wm.active_persona.voices if k != DEFAULT_VOICE_ROLE)
         native_lang = wm.user.primary_language.code if wm.user.primary_language else None
         detection_candidates = ((native_lang,) + cast_languages) if cast_languages and native_lang else ()
@@ -686,7 +636,6 @@ class ProcessTurn:
         sentence_buffer = ""
         prefix_buffer = ""
         prefix_resolved = False
-        detected_name: str | None = None
         detected_focus: str | None = None
         boundary_marker: ConversationBoundaryType | None = None
         t_first_token: float | None = None
@@ -726,7 +675,7 @@ class ProcessTurn:
                 resolved = _try_resolve_prefixes(prefix_buffer, is_first_turn)
                 if resolved is None:
                     continue
-                token, detected_name, detected_focus, boundary_marker = resolved
+                token, detected_focus, boundary_marker = resolved
                 prefix_resolved = True
 
             await _handle_post_prefix_token(token)
@@ -736,7 +685,7 @@ class ProcessTurn:
             # no tag, or a genuinely dangling partial tag) — force-resolve against
             # exactly what's buffered instead of waiting for tokens that will never
             # come.
-            token, detected_name, detected_focus, boundary_marker = _try_resolve_prefixes(
+            token, detected_focus, boundary_marker = _try_resolve_prefixes(
                 prefix_buffer, is_first_turn, force=True
             )
             await _handle_post_prefix_token(token)
@@ -750,27 +699,12 @@ class ProcessTurn:
         # 7. Conversation boundary event — marker embedded in assistant turn below
         boundary = ConversationBoundaryDetected(boundary_type=boundary_marker) if boundary_marker else None
 
-        # 8. Persona switch from detected prefix
-        persona_switched: PersonaSwitched | None = None
-        if detected_name:
-            all_personas = await asyncio.to_thread(self._persona_repo.list_all)
-            match = next(
-                (p for p in all_personas if p.name.lower() == detected_name.lower()),
-                None,
-            )
-            if match and match.id != wm.active_persona.id:
-                persona_switched = PersonaSwitched(
-                    from_persona_id=wm.active_persona.id,
-                    to_persona_id=match.id,
-                )
-                wm.active_persona = match
-                if _TUTOR_DEBUG:
-                    print(f"[tutor-debug] persona switched to {match.name!r} (id={match.id})")
-
-        # 8b. Focus marker → re-fetch the active persona's batch steered by the user's
-        # expressed wish, replacing whatever remained. Resolved AFTER the persona switch
-        # so a combined [PERSONA:X][FOCUS: ...] applies to X. The payload is passed
-        # verbatim — only the strategy interprets it.
+        # 8. Focus marker → re-fetch the active persona's batch steered by the user's
+        # expressed wish, replacing whatever remained. wm.active_persona already
+        # reflects any directive switch from step 3b, so a combined switch+focus turn
+        # (e.g. "switch to my tutor, let's just review vocabulary") steers the NEW
+        # persona's batch. The payload is passed verbatim — only the strategy
+        # interprets it.
         if detected_focus:
             strategy = self._selection_strategies.get(wm.active_persona.id)
             if strategy is not None:

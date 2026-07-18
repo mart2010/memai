@@ -14,7 +14,7 @@ from uuid import uuid4
 import psycopg
 import pytest
 
-from memai_server.domain.model import EngagementLevel, Language, MemoryType, User
+from memai_server.domain.model import AssistantPersona, EngagementLevel, Language, MemoryType, User
 from memai_server.infrastructure.bundle_toml import TomlPersonaBundleSource
 from memai_server.infrastructure.postgres import (
     PSBundleInstallLog,
@@ -24,6 +24,7 @@ from memai_server.infrastructure.postgres import (
     PSUserRepository,
 )
 from memai_server.services.bundle_install import InstallPersonaBundle
+from memai_server.services.directives import PersonaDirectiveSync
 from memai_server.services.upsert import MemoryUpserter
 
 from tests.fakes.fakes import FakeDisambiguationEvaluator, FakeMemorySynthesizer
@@ -54,6 +55,7 @@ def _make_installer(conn: psycopg.Connection, synthesizer: FakeMemorySynthesizer
         ),
         unit_of_work=PSUnitOfWork(conn),
         install_log=PSBundleInstallLog(conn),
+        directive_sync=PersonaDirectiveSync(PSMemoryRepository(conn), HashEmbeddingService()),
         default_voice_for=lambda language: "ff_siwis",
     )
 
@@ -62,6 +64,11 @@ def _make_installer(conn: psycopg.Connection, synthesizer: FakeMemorySynthesizer
 def onboarded_user(pg_conn: psycopg.Connection) -> User:
     user = User(id=uuid4(), primary_language=Language("fr"))
     PSUserRepository(pg_conn).save(user)
+    # GA must exist for this fixture's namesake claim ("onboarded") to be real — and,
+    # since PersonaDirectiveSync.sync_created (FR-207) now writes a GA-owned Directive
+    # concept alongside every persona a bundle creates, GA existing in `personas` is a
+    # real FK precondition here now, not just a documentation nicety.
+    PSPersonaRepository(pg_conn).save(AssistantPersona.general_assistant("You are a helpful assistant."))
     return user
 
 
@@ -92,11 +99,13 @@ class TestBundleInstallPipeline:
         }
 
         # Insertion order is the contract: lesson-filename sort → item order → ascending
-        # SERIAL id (curriculum order for Phase 12's UNSEEN tiebreak).
+        # SERIAL id (curriculum order for Phase 12's UNSEEN tiebreak). Scoped to this
+        # persona's own concepts — excludes the GA-owned "switch to me" Directive
+        # concepts (FR-207) also created alongside it.
         with pg_conn.cursor() as cur:
-            cur.execute("SELECT name, engagement_level, category FROM concepts ORDER BY id")
+            cur.execute("SELECT name, engagement_level, category FROM concepts WHERE persona_id = %s ORDER BY id", (persona.id,))
             concepts = cur.fetchall()
-            cur.execute("SELECT name, engagement_level, steps FROM procedures ORDER BY id")
+            cur.execute("SELECT name, engagement_level, steps FROM procedures WHERE persona_id = %s ORDER BY id", (persona.id,))
             procedures = cur.fetchall()
         assert [c[0] for c in concepts] == ["hola", "buenos días", "el café"]
         assert [p[0] for p in procedures] == ["greeting someone politely", "ordering a coffee"]
@@ -138,11 +147,13 @@ class TestBundleInstallPipeline:
         # Persona untouched on reinstall ([persona] ignored, notice raised).
         assert second.persona_created is False
         assert any("[persona]" in notice for notice in second.notices)
-        assert len(PSPersonaRepository(pg_conn).list_all()) == 1
+        assert len(PSPersonaRepository(pg_conn).list_all()) == 2  # GA (onboarded_user) + the bundle's own
 
         with pg_conn.cursor() as cur:
+            # 3 lesson concepts + 2 GA-owned "switch to me" Directive concepts (FR-207,
+            # created once on first install; sync_created is idempotent on reinstall).
             cur.execute("SELECT count(*) FROM concepts")
-            assert cur.fetchone()[0] == 3
+            assert cur.fetchone()[0] == 5
             cur.execute("SELECT count(*) FROM procedures")
             assert cur.fetchone()[0] == 2
             # Provenance log is append-only and deliberately NOT a reinstall guard.

@@ -145,6 +145,16 @@ class MemoryRepository(Protocol):
         top_n: int,
         persona_id: UUID | None = None,
     ) -> list[tuple[float, MemoryItem]]: ...  # float is cosine similarity in [0, 1]
+    def list_directives(self, persona_id: UUID) -> list[Concept]:
+        """All Directive concepts (FR-207: `directive` field populated) owned by
+        `persona_id` — GA's own routing knowledge, not general RAG content (excluded
+        from search() for that reason). Small, stable set; fetched once per session."""
+        ...
+    def delete_concept(self, concept_id: int) -> None:
+        """Used by PersonaDirectiveSync.sync_removed — INV-9's cascade only cleans up
+        a removed persona's OWN concepts/procedures, not another persona's (GA's)
+        directive concept referencing it."""
+        ...
 
 
 # ---------------------------------------------------------------------------

@@ -14,7 +14,7 @@ from memai_server.domain.model import (
     User,
 )
 from memai_server.services.ports import SelectedItem, SessionInfo
-from memai_server.services.session import EndSession, ProcessTurn, StartSession
+from memai_server.services.session import EndSession, ProcessTurn, StartSession, _compose_working_context
 
 from tests.fakes.fakes import (
     FakeEmbeddingService,
@@ -62,12 +62,27 @@ def _tutor_persona() -> AssistantPersona:
     )
 
 
+def _directive_concept(target_persona_id: UUID, embedding: list[float] | None = None, id_: int = 1) -> Concept:
+    """GA-owned Directive concept (FR-207). Default embedding matches
+    FakeEmbeddingService's default fixed vector, so it clears the match threshold
+    against any turn embedded by a default-constructed FakeEmbeddingService."""
+    now = _now()
+    return Concept(
+        id=id_, persona_id=GENERAL_ASSISTANT_ID, name="Switch to Tutor",
+        description="Switch me to the tutor.", language=Language("en"),
+        directive={"action": "switch_persona", "target_persona_id": str(target_persona_id)},
+        created_at=now, updated_at=now,
+        embedding=embedding or [0.1] * 8,
+    )
+
+
 def _make_start_session(
     user: User | None = None,
     brief: MemoryBrief | None = None,
     previous: SessionInfo | None = None,
     tail_turns: list[Turn] | None = None,
     threshold_hours: float = 24.0,
+    memory_repo: FakeMemoryRepository | None = None,
 ) -> tuple[StartSession, FakePersonaRepository]:
     persona_repo = FakePersonaRepository()
     persona_repo.save(_general_assistant())
@@ -76,6 +91,7 @@ def _make_start_session(
         persona_repo=persona_repo,
         memory_brief_repo=FakeMemoryBriefRepository(brief=brief),
         session_log_reader=FakeSessionLogReader(previous=previous, tail=tail_turns),
+        memory_repo=memory_repo or FakeMemoryRepository(),
         session_tail_turns=10,
         session_continuation_threshold_hours=threshold_hours,
     )
@@ -91,12 +107,12 @@ def _make_process_turn(
     persona_repo: FakePersonaRepository | None = None,
     tts: FakeTTSService | None = None,
     language_detector: FakeLanguageDetector | None = None,
-    installed_voices: dict[str, str] | None = None,
     default_recall_gate: FakeRecallGate | None = None,
     recall_gates: dict | None = None,
     embedding_service: FakeEmbeddingService | None = None,
+    memory_repo: FakeMemoryRepository | None = None,
 ) -> tuple[ProcessTurn, FakeMemoryRepository, FakeTurnLogger, FakeLLMService]:
-    memory_repo = FakeMemoryRepository()
+    memory_repo = memory_repo or FakeMemoryRepository()
     wal = FakeTurnLogger()
     llm = FakeLLMService(response=llm_response)
     if persona_repo is None:
@@ -115,7 +131,6 @@ def _make_process_turn(
         selection_strategies=selection_strategies,
         recall_gates=recall_gates,
         rolling_window_size=rolling_window_size,
-        installed_voices=installed_voices,
     )
     return process_turn, memory_repo, wal, llm
 
@@ -144,6 +159,7 @@ class TestStartSession:
             persona_repo=persona_repo,
             memory_brief_repo=FakeMemoryBriefRepository(),
             session_log_reader=FakeSessionLogReader(),
+            memory_repo=FakeMemoryRepository(),
         )
         with pytest.raises(RuntimeError, match="No user record found"):
             use_case.execute(session_id=uuid4(), started_at=_now())
@@ -172,6 +188,26 @@ class TestStartSession:
         use_case, _ = _make_start_session(previous=None)
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
         assert ctx.session_tail == []
+
+    def test_no_persona_scaffolding_even_with_tail_from_another_persona(self):
+        """Spec: FR-207 — a continued session's tail can show a different persona's
+        content (e.g. last time's tutor lesson), but with FR-202/FR-203 retired there
+        is no persona-listing/switch-instruction block left at all for that tail to
+        prime — the system prompt never names another persona, regardless of tail
+        content. This is the actual fix for the language-drift this scaffolding used
+        to cause; a directive match (not the LLM) is what decides a switch now."""
+        now = _now()
+        previous = SessionInfo(session_id=uuid4(), ended_at=now - timedelta(hours=1), clean_exit=True)
+        tail = [Turn(timestamp=now, speaker=Speaker.ASSISTANT, content="Ciao! Ripassiamo il vocabolario.")]
+        use_case, persona_repo = _make_start_session(previous=previous, tail_turns=tail, threshold_hours=24.0)
+        persona_repo.save(_tutor_persona())
+        ctx = use_case.execute(session_id=uuid4(), started_at=now)
+        assert ctx.active_persona.id == GENERAL_ASSISTANT_ID  # FR-201, still true in-memory
+
+        system_prompt, _ = _compose_working_context(ctx, recalled_memories=[])
+        assert "Tutor" not in system_prompt
+        assert "Available personas" not in system_prompt
+        assert "[PERSONA:" not in system_prompt
 
     def test_no_selection_batches_fetched_at_session_start(self):
         """Spec: TR-306"""
@@ -331,23 +367,26 @@ class TestProcessTurn:
 
     @pytest.mark.asyncio
     async def test_switched_persona_batch_fetched_on_its_first_turn(self):
-        """Spec: FR-202, TR-306, TR-310"""
+        """Spec: FR-207, TR-306"""
         tutor = _tutor_persona()
         persona_repo = FakePersonaRepository()
         persona_repo.save(_general_assistant())
         persona_repo.save(tutor)
+        memory_repo = FakeMemoryRepository()
+        memory_repo.concepts.append(_directive_concept(tutor.id))
         strategy = FakePersonaSelectionPort(items=[SelectedItem(item=_concept("hola", 1))])
         process_turn, _, _, llm = _make_process_turn(
-            llm_response="[PERSONA:Tutor] Hola, empecemos.",
             selection_strategies={tutor.id: strategy},
             persona_repo=persona_repo,
+            memory_repo=memory_repo,
         )
-        use_case, _ = _make_start_session()
+        use_case, _ = _make_start_session(memory_repo=memory_repo)
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
 
         result = await process_turn.execute(ctx, audio=b"a", now=_now())
         assert result is not None and result.persona_switched is not None
-        assert strategy.calls == []  # GA was active when this turn's item was selected
+        assert result.persona_switched.to_persona_id == tutor.id
+        assert strategy.calls == []  # switch turn — selection/recall skipped this turn (3b)
 
         await process_turn.execute(ctx, audio=b"b", now=_now())
         assert strategy.calls == [(tutor.id, None, 10)]
@@ -383,53 +422,35 @@ class TestProcessTurn:
         assert any("repaso" in m.content for m in second_messages if m.role == "system")
 
     @pytest.mark.asyncio
-    async def test_combined_persona_and_focus_markers_apply_to_new_persona(self):
-        """Spec: TR-306, FR-502"""
+    async def test_combined_directive_switch_and_focus_marker_apply_to_new_persona(self):
+        """Spec: FR-207, FR-502 — a directive switch (decided from the user's own
+        utterance, step 3b, before the LLM is called) and a [FOCUS:] marker (resolved
+        from the SAME turn's LLM reply) both apply to the new persona: by the time
+        FOCUS is resolved, wm.active_persona is already the tutor."""
         tutor = _tutor_persona()
         persona_repo = FakePersonaRepository()
         persona_repo.save(_general_assistant())
         persona_repo.save(tutor)
+        memory_repo = FakeMemoryRepository()
+        memory_repo.concepts.append(_directive_concept(tutor.id))
         strategy = FakePersonaSelectionPort(
             focused_items=[SelectedItem(item=_concept("verbos", 1))],
         )
         process_turn, _, _, _ = _make_process_turn(
-            llm_response="[PERSONA:Tutor][FOCUS: new verbs] Claro, un verbo nuevo.",
+            llm_response="[FOCUS: new verbs] Claro, un verbo nuevo.",
             selection_strategies={tutor.id: strategy},
             persona_repo=persona_repo,
+            memory_repo=memory_repo,
         )
-        use_case, _ = _make_start_session()
-        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
-
-        await process_turn.execute(ctx, audio=b"a", now=_now())
-
-        # Focus resolved AFTER the switch — the re-fetch targets the tutor.
-        assert strategy.calls == [(tutor.id, "new verbs", 10)]
-        assert [s.item.name for s in ctx.selection_batches[tutor.id]] == ["verbos"]
-
-    @pytest.mark.asyncio
-    async def test_persona_marker_recognized_after_lead_in_prose(self):
-        """Spec: FR-202, TR-310 — real models routinely preface a tag-bearing reply
-        with conversational lead-in rather than opening with the tag itself (see
-        docs/PLAN.md Phase 12 live smoke + gemma3:27b follow-up); the marker must
-        still be recognized when it isn't the literal first token."""
-        tutor = _tutor_persona()
-        persona_repo = FakePersonaRepository()
-        persona_repo.save(_general_assistant())
-        persona_repo.save(tutor)
-        process_turn, _, _, _ = _make_process_turn(
-            llm_response="Sure, switching now. [PERSONA:Tutor] Hola, empecemos.",
-            persona_repo=persona_repo,
-        )
-        use_case, _ = _make_start_session()
+        use_case, _ = _make_start_session(memory_repo=memory_repo)
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
 
         result = await process_turn.execute(ctx, audio=b"a", now=_now())
 
         assert result is not None and result.persona_switched is not None
         assert result.persona_switched.to_persona_id == tutor.id
-        assert "[PERSONA" not in result.assistant_content
-        assert "Sure, switching now." in result.assistant_content
-        assert "Hola, empecemos." in result.assistant_content
+        assert strategy.calls == [(tutor.id, "new verbs", 10)]
+        assert [s.item.name for s in ctx.selection_batches[tutor.id]] == ["verbos"]
 
     @pytest.mark.asyncio
     async def test_focus_marker_recognized_after_lead_in_prose(self):
@@ -457,17 +478,17 @@ class TestProcessTurn:
         ]
 
     @pytest.mark.asyncio
-    async def test_persona_marker_beyond_scan_window_is_not_recognized(self):
-        """Spec: TR-310 — documents the bounded scan window's tradeoff: lead-in prose
-        past the window means the marker is never recognized and falls through as
-        literal spoken text, rather than the parser waiting indefinitely."""
+    async def test_persona_tag_in_llm_response_is_now_inert(self):
+        """Spec: FR-207 — the retired [PERSONA:] tag scheme (FR-202) is no longer
+        parsed from the LLM's response at all; if a model emits one anyway (it isn't
+        instructed to — no persona-listing scaffolding exists in the prompt any more)
+        it falls through as literal spoken text, regardless of position."""
         tutor = _tutor_persona()
         persona_repo = FakePersonaRepository()
         persona_repo.save(_general_assistant())
         persona_repo.save(tutor)
-        long_preamble = "Sorry for the confusion. " * 15  # well past the scan window
         process_turn, _, _, _ = _make_process_turn(
-            llm_response=f"{long_preamble}[PERSONA:Tutor] Hola.",
+            llm_response="[PERSONA:Tutor] Hola.",
             persona_repo=persona_repo,
         )
         use_case, _ = _make_start_session()
@@ -717,82 +738,36 @@ class TestSpeakerCast:
         assert [v for _, v, _ in tts_odd.synthesised] == ["vb"]
 
 
-class TestResponseLanguageMirroring:
-    """GA per-turn response-language mirroring against the installed-languages
-    contract. Ephemeral by design: nothing is persisted, persona.response_language
-    never moves (INV-14) — the effective language is recomputed from each
-    utterance's detected language."""
+class TestResponseLanguageInstruction:
+    """Every persona, GA included, is instructed in its own fixed
+    `response_language` (FR-105) — detection-independent, and only ever changes on
+    explicit request (INV-14). GA mirroring/uninstalled-language reminder
+    (formerly FR-113/TR-313) was retired: this replaces its coverage."""
 
     @pytest.mark.asyncio
-    async def test_ga_mirrors_installed_detected_language(self):
-        """Spec: FR-105, TR-313 — the user speaks an installed language; the GA is
-        instructed to answer in it and the reply is voiced by that language's
-        installed default voice, not the primary-language anchor."""
-        tts = FakeTTSService()
-        process_turn, _, _, llm = _make_process_turn(
-            detected_language=Language("es"),
-            installed_voices={"en": "af_heart", "es": "ef_dora"},
-            tts=tts,
-        )
-        use_case, _ = _make_start_session()
-        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+    async def test_ga_instruction_ignores_detected_language(self):
+        """Spec: FR-105, INV-14 — the GA's system-prompt instruction and TTS voice
+        both stay pinned to its own response_language/default voice no matter what
+        language the user is detected speaking."""
+        for detected in (Language("es"), Language("de")):
+            tts = FakeTTSService()
+            process_turn, _, _, llm = _make_process_turn(detected_language=detected, tts=tts)
+            use_case, _ = _make_start_session()
+            ctx = use_case.execute(session_id=uuid4(), started_at=_now())
 
-        await process_turn.execute(ctx, audio=b"hola", now=_now())
+            await process_turn.execute(ctx, audio=b"hola", now=_now())
 
-        _, system_prompt = llm.calls[0]
-        assert "currently speaking the language with IETF code 'es'" in system_prompt
-        assert "Respond in that same language" in system_prompt
-        assert all(voice == "ef_dora" for _, voice, _ in tts.synthesised)
+            _, system_prompt = llm.calls[0]
+            assert "Always respond in the language with IETF code 'en'" in system_prompt
+            assert "currently speaking" not in system_prompt
+            assert "not installed" not in system_prompt
+            assert all(voice == "af_heart" for _, voice, _ in tts.synthesised)
 
     @pytest.mark.asyncio
-    async def test_mirroring_own_language_keeps_persona_voice(self):
-        """Spec: TR-313 — detected == the persona's own response language: the
-        persona's configured default anchor wins over the installed-voices map."""
-        tts = FakeTTSService()
-        process_turn, _, _, _ = _make_process_turn(
-            detected_language=Language("en"),
-            installed_voices={"en": "some_other_en_voice", "es": "ef_dora"},
-            tts=tts,
-        )
-        use_case, _ = _make_start_session()
-        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
-
-        await process_turn.execute(ctx, audio=b"hello", now=_now())
-
-        assert all(voice == "af_heart" for _, voice, _ in tts.synthesised)
-
-    @pytest.mark.asyncio
-    async def test_uninstalled_language_gets_primary_language_reminder(self):
-        """Spec: FR-113, TR-313 — a detected language outside the installed set:
-        answer in the primary language, remind that the language is not installed
-        and that the setup wizard adds it; voice stays the persona anchor."""
-        tts = FakeTTSService()
-        process_turn, _, _, llm = _make_process_turn(
-            detected_language=Language("de"),
-            installed_voices={"en": "af_heart", "es": "ef_dora"},
-            tts=tts,
-        )
-        use_case, _ = _make_start_session()
-        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
-
-        await process_turn.execute(ctx, audio=b"hallo", now=_now())
-
-        _, system_prompt = llm.calls[0]
-        assert "'de'" in system_prompt
-        assert "not installed" in system_prompt
-        assert "'en'" in system_prompt  # primary language carries the reminder
-        assert "memai-setup" in system_prompt
-        assert all(voice == "af_heart" for _, voice, _ in tts.synthesised)
-
-    @pytest.mark.asyncio
-    async def test_non_ga_persona_never_mirrors(self):
-        """Spec: FR-105, TR-313, INV-14 — a strategy persona (tutor) keeps its
-        configured response language whatever the user speaks; no mirror
-        instruction, no uninstalled-language reminder."""
-        process_turn, _, _, llm = _make_process_turn(
-            detected_language=Language("en"),
-            installed_voices={"en": "af_heart", "es": "ef_dora"},
-        )
+    async def test_tutor_persona_keeps_its_own_response_language(self):
+        """Spec: FR-105 — a strategy persona (tutor) is instructed in its
+        configured response language whatever the user speaks."""
+        process_turn, _, _, llm = _make_process_turn(detected_language=Language("en"))
         use_case, _ = _make_start_session()
         ctx = use_case.execute(session_id=uuid4(), started_at=_now())
         ctx.active_persona = _tutor_persona()
@@ -801,49 +776,13 @@ class TestResponseLanguageMirroring:
 
         _, system_prompt = llm.calls[0]
         assert "Always respond in the language with IETF code 'es'" in system_prompt
-        assert "currently speaking" not in system_prompt
-        assert "not installed" not in system_prompt
-
-    @pytest.mark.asyncio
-    async def test_mirroring_is_ephemeral(self):
-        """Spec: INV-14, TR-313 — mirroring never writes: the GA's stored
-        response_language is untouched after a mirrored turn."""
-        process_turn, _, _, _ = _make_process_turn(
-            detected_language=Language("es"),
-            installed_voices={"en": "af_heart", "es": "ef_dora"},
-        )
-        use_case, _ = _make_start_session()
-        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
-
-        await process_turn.execute(ctx, audio=b"hola", now=_now())
-
-        assert ctx.active_persona.response_language == Language("en")
-
-    @pytest.mark.asyncio
-    async def test_no_mirroring_during_onboarding_turn(self):
-        """Spec: TR-313 — the introduction turn is always delivered in the
-        just-selected primary language, never mirrored."""
-        process_turn, _, _, llm = _make_process_turn(
-            detected_language=Language("es"),
-            installed_voices={"en": "af_heart", "es": "ef_dora"},
-        )
-        use_case, _ = _make_start_session(user=User(id=uuid4(), primary_language=None))
-        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
-        assert ctx.needs_onboarding
-
-        await process_turn.execute(ctx, audio=b"hola", now=_now())
-
-        _, system_prompt = llm.calls[0]
-        assert "currently speaking" not in system_prompt
-        assert "Always respond in the language with IETF code 'en'" in system_prompt
 
 
 class TestLanguageTags:
     """User-turn [lang:code] tags — rendered into the LLM context for every persona
     (FR-114): the tutor reads them as production/aside/pronunciation-stumble
-    evidence, the GA as the basis of its mirroring instruction. Rendering-only:
-    stored content and logs stay clean, and a mimicked tag in the response is
-    stripped before TTS like every other bracket marker."""
+    evidence. Rendering-only: stored content and logs stay clean, and a mimicked
+    tag in the response is stripped before TTS like every other bracket marker."""
 
     @pytest.mark.asyncio
     async def test_user_turn_rendered_with_language_tag(self):
@@ -940,7 +879,6 @@ class TestLanguageTags:
 
         _, system_prompt = llm.calls[0]
         assert "Always respond in the language" not in system_prompt
-        assert "currently speaking" not in system_prompt  # and no GA mirroring either
 
 
 class TestEndSession:

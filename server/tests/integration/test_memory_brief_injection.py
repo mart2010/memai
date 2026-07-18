@@ -11,7 +11,12 @@ from uuid import uuid4
 import psycopg
 
 from memai_server.domain.model import AssistantPersona, Language, User
-from memai_server.infrastructure.postgres import PSMemoryBriefRepository, PSPersonaRepository, PSUserRepository
+from memai_server.infrastructure.postgres import (
+    PSMemoryBriefRepository,
+    PSMemoryRepository,
+    PSPersonaRepository,
+    PSUserRepository,
+)
 from memai_server.services.memory import GenerateMemoryBrief
 from memai_server.services.session import StartSession, _compose_working_context
 
@@ -41,6 +46,7 @@ async def test_second_session_llm_context_contains_first_sessions_brief(pg_conn:
         persona_repo=PSPersonaRepository(pg_conn),
         memory_brief_repo=PSMemoryBriefRepository(pg_conn),
         session_log_reader=FakeSessionLogReader(),
+        memory_repo=PSMemoryRepository(pg_conn),
     )
     wm = start_session.execute(session_id=uuid4(), started_at=_NOW)
 

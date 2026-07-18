@@ -13,6 +13,7 @@ from memai_server.domain.model import (
     User,
 )
 from memai_server.services.bundle_install import BundleInstallError, InstallPersonaBundle
+from memai_server.services.directives import PersonaDirectiveSync
 from memai_server.services.ports import (
     BundleItemSpec,
     BundleLesson,
@@ -120,6 +121,7 @@ class _Harness:
             ),
             unit_of_work=self.unit_of_work,
             install_log=self.install_log,
+            directive_sync=PersonaDirectiveSync(self.memory_repo, FakeEmbeddingService()),
             default_voice_for=self._derive_voice,
             installed_languages=installed_languages,
         )
@@ -254,7 +256,9 @@ class TestItemInstallation:
         harness = _Harness(_bundle(persona=_definition(), lessons=lessons))
         result = harness.use_case.execute(BUNDLE_PATH)
 
-        concept = harness.memory_repo.concepts[0]
+        # Excludes the GA-owned "switch to me" Directive concept (FR-207) also
+        # created for this persona alongside its lesson content.
+        concept = next(c for c in harness.memory_repo.concepts if c.directive is None)
         assert concept.persona_id == result.persona_id
         assert concept.engagement_level == EngagementLevel.UNSEEN
         assert concept.category == "function_word"
@@ -274,8 +278,11 @@ class TestItemInstallation:
         harness = _Harness(_bundle(persona=_definition(), lessons=lessons))
         harness.use_case.execute(BUNDLE_PATH)
 
-        names = [c.name for c in harness.memory_repo.concepts]
-        ids = [c.id for c in harness.memory_repo.concepts]
+        # Excludes the GA-owned Directive concept(s) (FR-207) also created for this
+        # persona — this test is about lesson-content curriculum order.
+        lesson_concepts = [c for c in harness.memory_repo.concepts if c.directive is None]
+        names = [c.name for c in lesson_concepts]
+        ids = [c.id for c in lesson_concepts]
         assert names == ["uno", "dos", "tres"]
         assert ids == sorted(ids)
 
@@ -293,9 +300,11 @@ class TestItemInstallation:
     def test_counts_split_inserted_vs_merged(self):
         """Spec: TR-905"""
         class _CannedSearch(FakeMemoryRepository):
-            """First item finds an exact duplicate (merge); the rest insert as new."""
+            """First lesson item finds an exact duplicate (merge); the rest insert as
+            new. Ignores the GA-owned Directive concept (FR-207) also created for this
+            persona — real search() excludes those (they're not RAG content)."""
             def search(self, embedding, memory_types, top_n, persona_id=None):
-                if not self.concepts:
+                if not any(c.directive is None for c in self.concepts):
                     return [(1.0, Concept(
                         id=42, persona_id=persona_id, name="hola",
                         description="A description.", language=Language("es"),
@@ -322,14 +331,17 @@ class TestSameRunSiblingExclusion:
     def test_high_similarity_sibling_from_same_run_still_inserts_separately(self):
         """Spec: FR-604, TR-904"""
         class _CannedSearch(FakeMemoryRepository):
-            """No existing content for the first item; from the second item onward,
-            returns whatever was inserted so far as an auto-merge-band match — simulating
-            the parlare/mangiare false positive if same-run exclusion didn't exist."""
+            """No existing lesson content for the first item; from the second item
+            onward, returns whatever lesson item was inserted so far as an
+            auto-merge-band match — simulating the parlare/mangiare false positive if
+            same-run exclusion didn't exist. Ignores the GA-owned Directive concept
+            (FR-207) also created for this persona — real search() excludes those."""
 
             def search(self, embedding, memory_types, top_n, persona_id=None):
-                if not self.concepts:
+                lesson_concepts = [c for c in self.concepts if c.directive is None]
+                if not lesson_concepts:
                     return []
-                return [(0.95, self.concepts[-1])]
+                return [(0.95, lesson_concepts[-1])]
 
         lessons = (
             BundleLesson(filename="03_verbi.toml", items=(_concept_item("parlare"), _concept_item("mangiare"))),
@@ -339,7 +351,8 @@ class TestSameRunSiblingExclusion:
 
         assert result.items_inserted == 2
         assert result.items_merged == 0
-        assert [c.name for c in harness.memory_repo.concepts] == ["parlare", "mangiare"]
+        lesson_concepts = [c for c in harness.memory_repo.concepts if c.directive is None]
+        assert [c.name for c in lesson_concepts] == ["parlare", "mangiare"]
 
     def test_still_merges_against_content_predating_this_run(self):
         """Spec: FR-604, FR-603 — The exclusion only covers items inserted THIS run — a genuine pre-existing

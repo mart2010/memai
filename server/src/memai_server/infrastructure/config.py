@@ -5,9 +5,16 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from platformdirs import user_config_dir
+from platformdirs import user_config_dir, user_data_dir
 
 CONFIG_PATH = Path(user_config_dir("memai", appauthor=False)) / "memai.toml"
+# Session logs are persistent app data, not settings (INV-5, kept forever) — the data
+# dir, not the config dir. Absolute and OS-independent, unlike the old "logs/sessions"
+# literal default, which silently resolved against whatever directory the server
+# process happened to be launched from (a real bug: it scattered logs across
+# directories depending on cwd, and broke session-tail continuity/crash-recovery replay
+# across launches from different locations).
+_DEFAULT_LOG_DIR = Path(user_data_dir("memai", appauthor=False)) / "sessions"
 
 
 @dataclass(frozen=True)
@@ -75,7 +82,7 @@ def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
 
     return ServerConfig(
         ws_port=int(server.get("ws_port", 8765)),
-        log_dir=Path(server.get("log_dir", "logs/sessions")),
+        log_dir=Path(server.get("log_dir")) if server.get("log_dir") else _DEFAULT_LOG_DIR,
         database_url=db.get("url", "postgresql://memai:changeme@localhost:5432/memai"),
         stt_model_path=str(Path(stt.get("model_path", "~/models/faster-whisper-small")).expanduser()),
         stt_device=stt.get("device", "cpu"),

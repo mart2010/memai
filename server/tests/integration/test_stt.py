@@ -15,6 +15,7 @@ from memai_server.infrastructure.stt import FasterWhisperSTTService
 
 _MODEL_PATH = os.environ.get("MEMAI_TEST_WHISPER_MODEL_PATH", "small")
 _DEVICE = os.environ.get("MEMAI_TEST_WHISPER_DEVICE", "cuda")
+_COMPUTE_TYPE = os.environ.get("MEMAI_TEST_WHISPER_COMPUTE_TYPE", "float16" if _DEVICE == "cuda" else "int8")
 _SAMPLE_RATE = 16000
 
 
@@ -35,7 +36,7 @@ def _synthesize_reference_audio(text: str, wav_path: Path) -> bytes:
 @pytest.fixture(scope="module")
 def stt_service() -> FasterWhisperSTTService:
     try:
-        return FasterWhisperSTTService(_MODEL_PATH, device=_DEVICE, compute_type="float16")
+        return FasterWhisperSTTService(_MODEL_PATH, device=_DEVICE, compute_type=_COMPUTE_TYPE)
     except Exception as e:  # noqa: BLE001 — genuinely any failure here means "can't run this test here"
         pytest.skip(f"faster-whisper model unavailable ({_MODEL_PATH} on {_DEVICE}): {e}")
 
@@ -58,3 +59,16 @@ class TestFasterWhisperSTTService:
         text, language = stt_service.transcribe(silence)
         assert isinstance(text, str)
         assert language.code
+
+    def test_silence_and_quiet_noise_produce_no_hallucinated_text(self, stt_service: FasterWhisperSTTService) -> None:
+        """Spec: FR-103 — VAD + no_speech_prob filtering must stop Whisper from
+        hallucinating plausible-sounding stock phrases (e.g. "Thank you for
+        watching!") out of silence or room noise below speech level."""
+        silence = np.zeros(_SAMPLE_RATE * 3, dtype=np.int16).tobytes()
+        text, _ = stt_service.transcribe(silence)
+        assert text == ""
+
+        rng = np.random.default_rng(0)
+        quiet_noise = rng.normal(0, 60, _SAMPLE_RATE * 3).astype(np.int16).tobytes()
+        text, _ = stt_service.transcribe(quiet_noise)
+        assert text == ""

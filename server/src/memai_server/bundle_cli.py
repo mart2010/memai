@@ -29,6 +29,7 @@ from .infrastructure.postgres import (
 )
 from .infrastructure.tts import KOKORO_DEFAULT_VOICES
 from .services.bundle_install import BundleInstallError, InstallPersonaBundle
+from .services.directives import PersonaDirectiveSync
 from .services.ports import BundleFormatError
 from .services.upsert import MemoryUpserter
 
@@ -71,6 +72,7 @@ def _install(path: Path) -> int:
         ),
         unit_of_work=PSUnitOfWork(conn),
         install_log=PSBundleInstallLog(conn),
+        directive_sync=PersonaDirectiveSync(PSMemoryRepository(conn), embedding_service),
         # Same native-teacher derivation as onboarding (see server.py's language_selected
         # handler) — used only when the bundle's [persona.voices] omits "default".
         default_voice_for=lambda language: KOKORO_DEFAULT_VOICES.get(language.code, "af_heart"),

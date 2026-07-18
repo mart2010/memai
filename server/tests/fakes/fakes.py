@@ -182,16 +182,22 @@ class FakeMemoryRepository:
         return id_
 
     def upsert_episode(self, episode: Episode) -> int:
+        if episode.id is None:
+            episode.id = self._next()
         self.episodes.append(episode)
-        return episode.id if episode.id is not None else self._next()
+        return episode.id
 
     def upsert_concept(self, concept: Concept) -> int:
+        if concept.id is None:
+            concept.id = self._next()
         self.concepts.append(concept)
-        return concept.id if concept.id is not None else self._next()
+        return concept.id
 
     def upsert_procedure(self, procedure: Procedure) -> int:
+        if procedure.id is None:
+            procedure.id = self._next()
         self.procedures.append(procedure)
-        return procedure.id if procedure.id is not None else self._next()
+        return procedure.id
 
     def update_persona_state(self, memory_type: MemoryType, item_id: int, persona_state: dict) -> None:
         if memory_type == MemoryType.EPISODE:
@@ -246,6 +252,15 @@ class FakeMemoryRepository:
         if MemoryType.PROCEDURE in memory_types:
             items.extend(sorted((p for p in self.procedures if _matches(p)), key=lambda p: p.id or 0))
         return items[:limit] if limit is not None else items
+
+    def list_directives(self, persona_id: UUID) -> list[Concept]:
+        return sorted(
+            (c for c in self.concepts if c.persona_id == persona_id and c.directive is not None),
+            key=lambda c: c.id or 0,
+        )
+
+    def delete_concept(self, concept_id: int) -> None:
+        self.concepts = [c for c in self.concepts if c.id != concept_id]
 
 
 class FakePersonaRepository:
