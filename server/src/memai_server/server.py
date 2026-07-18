@@ -96,6 +96,8 @@ class ServerContext:
     # Wizard-installed languages (FR-705): the subset of SUPPORTED_LANGUAGES whose TTS
     # voices this installation actually pulled. Bounds onboarding selection (TR-103).
     installed_languages: list[Language]
+    # [server].session_tail_turns (FR-109) — 0 disables tail injection entirely.
+    session_tail_turns: int
     user_repo: PSUserRepository
     persona_repo: PSPersonaRepository
     memory_brief_repo: PSMemoryBriefRepository
@@ -308,6 +310,7 @@ async def _handle(ws, ctx: ServerContext) -> None:
         memory_brief_repo=ctx.memory_brief_repo,
         session_log_reader=JSONLSessionLogReader(ctx.log_dir),
         memory_repo=ctx.memory_repo,
+        session_tail_turns=ctx.session_tail_turns,
     )
     turn_logger = JSONLTurnLogger(ctx.log_dir)
 
@@ -480,6 +483,7 @@ def main() -> None:
         llm_ollama_host=cfg.llm_ollama_host,
         offline_llm=offline_llm,
         installed_languages=installed_languages,
+        session_tail_turns=cfg.session_tail_turns,
         user_repo=user_repo,
         persona_repo=PSPersonaRepository(conn),
         memory_brief_repo=PSMemoryBriefRepository(conn),

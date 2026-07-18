@@ -32,4 +32,9 @@ class FasterWhisperSTTService:
         # stock phrase for it.
         segments, info = self._model.transcribe(audio_array, beam_size=5, vad_filter=True)
         text = " ".join(s.text for s in segments if s.no_speech_prob < _NO_SPEECH_THRESHOLD).strip()
+        # Diagnostic only (no behavior change): Whisper's own confidence in the detected
+        # language — a low value here on an otherwise-fluent transcript is the signature
+        # of language misdetection (decoding real speech through the wrong language's
+        # rules) rather than the LLM drifting on its own.
+        print(f"[stt] language={info.language!r} probability={info.language_probability:.2f}")
         return text, Language(info.language)

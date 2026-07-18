@@ -43,6 +43,13 @@ class ServerConfig:
     llm_api_key: str | None  # optional even when llm_provider == "openai_compatible"
     memory_merge_threshold: float
     memory_disambiguate_threshold: float
+    # How many of the previous session's last turns get injected as session tail
+    # (FR-109), when that session ended recently enough to count as a continuation. 0
+    # disables tail injection entirely — useful while testing, since a prior session's
+    # content (e.g. a stray language drift) can otherwise bias a fresh session. Not
+    # voice-configurable (FR-701 doesn't apply — this isn't a GA/persona setting);
+    # same technical-tuning-knob posture as [memory]'s thresholds below.
+    session_tail_turns: int = 10
     # Wizard-selected languages ([languages].installed, FR-705). Empty = key absent
     # (config written before it existed) — the composition root then treats every
     # SUPPORTED_LANGUAGES entry as installed.
@@ -98,5 +105,6 @@ def load_config(path: Path = CONFIG_PATH) -> ServerConfig:
         llm_api_key=llm.get("api_key") or None,
         memory_merge_threshold=float(memory.get("merge_threshold", 0.93)),
         memory_disambiguate_threshold=float(memory.get("disambiguate_threshold", 0.75)),
+        session_tail_turns=int(server.get("session_tail_turns", 10)),
         installed_languages=tuple(languages.get("installed", [])),
     )

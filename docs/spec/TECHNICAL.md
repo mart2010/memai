@@ -127,8 +127,9 @@ design discussion, never a patch.
 
 - **TR-301** `StartSession` loads: `User`, GA persona, GA's Directive concepts
   (FR-207), memory brief (skipped during onboarding), and the session tail — previous
-  session's last `session_tail_turns` (10) turns iff it ended within
-  `session_continuation_threshold_hours` (24). Fails fast when User or GA is missing.
+  session's last `session_tail_turns` (default 10, `[server]` config, TR-951) turns
+  iff it ended within `session_continuation_threshold_hours` (24). Fails fast when
+  User or GA is missing.
 - **TR-302** Turn sequence: STT → log user turn → directive matching (TR-315) →
   recall gate (TR-314; embed turn text, `search` top 5, persona-scoped; skipped on a
   turn that just switched persona) → lazy selection fetch/consume (TR-306; likewise
@@ -450,7 +451,10 @@ only validation layer.
 - **TR-951** Server config `memai.toml` (platform config dir; wizard-generated):
   `[server] ws_port=8765, log_dir=<platform data dir>/sessions` (absolute,
   `platformdirs.user_data_dir("memai")` — session logs are persistent data, INV-5, not
-  settings; user-overridable via this same key); `[database] url` (libpq DSN; peer
+  settings; user-overridable via this same key), `session_tail_turns=10` (FR-109;
+  0 disables session-tail injection entirely — not voice-configurable, FR-701 doesn't
+  apply, same technical-tuning-knob posture as `[memory]`'s thresholds below);
+  `[database] url` (libpq DSN; peer
   auth default on Linux/macOS); `[stt] model_path, device cuda|cpu, compute_type`
   (float16↔cuda, int8↔cpu); `[tts] device` (absent → Kokoro auto-detect); `[llm]
   model="aya-expanse", ollama_host?` (always: the local Ollama model for the offline

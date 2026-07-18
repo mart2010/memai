@@ -186,3 +186,21 @@ class TestLoadConfigInstalledLanguages:
         cfg = load_config(path)
 
         assert cfg.installed_languages == ()
+
+
+class TestLoadConfigSessionTailTurns:
+    def test_defaults_to_ten_when_absent(self, tmp_path: Path):
+        """Spec: TR-951, FR-109"""
+        path = _write_toml(tmp_path, "")
+
+        cfg = load_config(path)
+
+        assert cfg.session_tail_turns == 10
+
+    def test_read_from_server_section(self, tmp_path: Path):
+        """Spec: TR-951, FR-109 — 0 disables session-tail injection entirely."""
+        path = _write_toml(tmp_path, "[server]\nsession_tail_turns = 0\n")
+
+        cfg = load_config(path)
+
+        assert cfg.session_tail_turns == 0
