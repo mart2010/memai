@@ -1,9 +1,10 @@
 # Copyright (c) 2026 Memai. Licensed under AGPL-3.0.
+import re
 from collections.abc import Sequence
 from enum import Enum
 from uuid import UUID
 
-from ..domain.model import Concept, EngagementLevel, Episode, MemoryType, Procedure, cosine_similarity
+from ..domain.model import Concept, EngagementLevel, Episode, MemoryType, Procedure
 from .ports import (
     DisambiguationEvaluator,
     EmbeddingService,
@@ -15,6 +16,28 @@ from .ports import (
 
 def _max_engagement(a: EngagementLevel, b: EngagementLevel) -> EngagementLevel:
     return a if a >= b else b
+
+
+_PAREN_RE = re.compile(r"\(([^)]+)\)")
+
+
+def _mention_terms(name: str) -> list[str]:
+    """Literal terms to search a user turn for: the concept's full name, plus — for a
+    name with a parenthetical abbreviation, e.g. "Explainable AI (XAI)" — the
+    abbreviation itself and the name with the parenthetical stripped. Either form
+    counts as the user naming the concept."""
+    terms = [name.strip()]
+    paren = _PAREN_RE.search(name)
+    if paren:
+        terms.append(paren.group(1).strip())
+        terms.append(_PAREN_RE.sub("", name).strip())
+    return [t for t in terms if t]
+
+
+def _mentioned_in(text: str, name: str) -> bool:
+    """Whole-word, case-insensitive: a bare substring match would let a short name
+    like "AI" match inside unrelated words ("against", "explain")."""
+    return any(re.search(rf"\b{re.escape(term)}\b", text, re.IGNORECASE) for term in _mention_terms(name))
 
 
 # Defaults match the values documented in CLAUDE.md's "Upsert similarity threshold"
@@ -33,16 +56,16 @@ DEFAULT_DISAMBIGUATE_THRESHOLD = 0.75
 # at the same value but is free to be tuned independently.
 DEFAULT_AUTHORED_PROTECTION_THRESHOLD = 0.75
 
-# How similar a user turn's embedding must be to a candidate organic concept's own
-# embedding to count as "the user actually discussed this" — reuses TR-807's
-# interest_cluster_threshold calibration (topical relatedness, not same-entity
-# identity, which is what DEFAULT_MERGE_THRESHOLD/DEFAULT_DISAMBIGUATE_THRESHOLD answer).
-DEFAULT_CONCEPT_ENGAGEMENT_SIMILARITY = 0.55
-
-# A brand-new organic concept (no existing match, authored or organic) needs at least
-# this many qualifying user turns before it's worth inserting — the false positives
-# reviewed 2026-07-18 were topics the assistant mentioned that the user never actually
-# picked up across more than a turn or two.
+# A brand-new organic concept (no existing match, authored or organic) needs the user
+# to have literally named it (see _mentioned_in) in at least this many of their own
+# turns before it's worth inserting. Embedding-similarity-to-turn-text was tried first
+# (2026-07-20) and live-tested the same day: it couldn't tell "broadly the same topic"
+# from "specifically about this sibling concept" — a live conversation about AI/XAI/NLP/
+# Transfer Learning (all introduced together in one GA monologue) let two AI-flavored
+# user turns satisfy the engagement bar for every one of those sibling concepts, not
+# just XAI, the one actually followed up on. A single follow-up question isn't enough
+# either — 2 is the floor for "the user is actually engaging with this," not just
+# reacting once.
 DEFAULT_MIN_CONCEPT_ENGAGEMENT_TURNS = 2
 
 # Fetch a few nearest neighbors rather than just the top-1 so that, when a caller
@@ -124,12 +147,22 @@ class MemoryUpserter:
     content (e.g. the user going off-curriculum mid-lesson) is free to become its own
     item. Only past that check does the normal two-tier merge-or-insert run, scoped to
     *organic* candidates. A brand-new *organic* insert (no match at all) additionally
-    needs `user_turns` (raw user-turn texts from the source conversation) showing at
-    least DEFAULT_MIN_CONCEPT_ENGAGEMENT_TURNS turns topically similar
-    (DEFAULT_CONCEPT_ENGAGEMENT_SIMILARITY) to the candidate — a topic only the
-    assistant ever mentioned must not become a permanent concept. `user_turns=None`
-    (the default; bundle install and persona enrichment never pass it) skips this check
-    entirely, since only live conversation extraction has turns to evaluate.
+    needs `user_turns` (raw user-turn texts from the source conversation) to literally
+    name the concept (`_mentioned_in` — whole-word, case-insensitive, matching either
+    the full name or a parenthetical abbreviation like "XAI" out of "Explainable AI
+    (XAI)") in at least DEFAULT_MIN_CONCEPT_ENGAGEMENT_TURNS of them — a topic only the
+    assistant ever mentioned, or that the user only ever gestured at as part of a
+    broader topic, must not become a permanent concept. This intersects what the
+    conversation as a whole introduced with what the user's own words actually named,
+    rather than a looser "topically similar" union: embedding similarity between a
+    candidate's own description and raw user-turn text was tried first and live-tested
+    2026-07-20 — it couldn't distinguish "broadly the same topic" from "specifically
+    about this sibling concept" when several related concepts came from the same
+    assistant monologue (AI/XAI/NLP/Transfer Learning all introduced together; two
+    AI-flavored user turns satisfied the bar for all four, not just XAI, the one
+    actually followed up on). `user_turns=None` (the default; bundle install and
+    persona enrichment never pass it) skips this check entirely, since only live
+    conversation extraction has turns to evaluate.
 
     Each upsert_* method mutates the passed item in place (description/summary,
     embedding, engagement, category, id) and returns True when it merged into an
@@ -147,7 +180,6 @@ class MemoryUpserter:
         merge_threshold: float = DEFAULT_MERGE_THRESHOLD,
         disambiguate_threshold: float = DEFAULT_DISAMBIGUATE_THRESHOLD,
         authored_protection_threshold: float = DEFAULT_AUTHORED_PROTECTION_THRESHOLD,
-        concept_engagement_similarity: float = DEFAULT_CONCEPT_ENGAGEMENT_SIMILARITY,
         min_concept_engagement_turns: int = DEFAULT_MIN_CONCEPT_ENGAGEMENT_TURNS,
     ) -> None:
         self._memory_repo = memory_repo
@@ -157,7 +189,6 @@ class MemoryUpserter:
         self._merge_threshold = merge_threshold
         self._disambiguate_threshold = disambiguate_threshold
         self._authored_protection_threshold = authored_protection_threshold
-        self._concept_engagement_similarity = concept_engagement_similarity
         self._min_concept_engagement_turns = min_concept_engagement_turns
 
     def upsert_episode(self, episode: Episode) -> bool:
@@ -229,12 +260,7 @@ class MemoryUpserter:
         return existing is not None
 
     def _has_engagement(self, concept: Concept, user_turns: Sequence[str]) -> bool:
-        qualifying = sum(
-            1
-            for text in user_turns
-            if cosine_similarity(self._embedding_service.embed(text), concept.embedding)
-            >= self._concept_engagement_similarity
-        )
+        qualifying = sum(1 for text in user_turns if _mentioned_in(text, concept.name))
         return qualifying >= self._min_concept_engagement_turns
 
     def upsert_procedure(

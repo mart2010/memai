@@ -242,10 +242,10 @@ tracks work still to do.
       the old blanket `allow_insert=False` block for strategy personas (removed
       entirely, along with the now-dead `allow_insert` param on both `upsert_concept`/
       `upsert_procedure`). A genuinely new organic insert additionally needs
-      `min_concept_engagement_turns` (2) of the conversation's own user turns
-      topically similar (`concept_engagement_similarity`, 0.55, reusing TR-807's
-      `interest_cluster_threshold` calibration) to it — an assistant-only mention no
-      longer creates a permanent concept.
+      `min_concept_engagement_turns` (2) of the conversation's own user turns to
+      literally name it — an assistant-only mention no longer creates a permanent
+      concept. (This started as an embedding-similarity check; see the same-day
+      follow-up below for why it's literal-mention instead.)
       3. FR-407/504 relaxed for concepts only: a tutor session can now produce a
       genuinely new organic concept if distinct from curriculum and
       engagement-gated (episodes stay fully blocked for strategy personas, as before —
@@ -261,12 +261,39 @@ tracks work still to do.
       exactly the fabricated-episode failure mode above.
       289/289 server unit tests green, with new coverage for the floor/
       engagement-gate/authored-protection paths (`test_consolidation.py`,
-      `test_enrichment.py`, `test_extraction_prompt.py`). **Not yet live-verified**:
-      needs a real Postgres + real LLM run on the workstation to confirm the new gates
-      actually suppress the 2026-07-18 noise pattern in practice, not just pass unit
-      tests against fakes; `test_consolidation_pipeline.py`/`test_postgres.py`
-      integration tests were updated for the schema/behavior change but not run here
-      (no local Postgres).
+      `test_enrichment.py`, `test_extraction_prompt.py`). Committed as `775b9f5`.
+      **Live-verified same day** (see follow-up below) — real workstation run against
+      real Postgres + llama3.1:8b confirmed the concept-noise and episode-content-quality
+      fixes both work as intended; surfaced a real gap in the engagement gate, fixed
+      same day.
+      **Follow-up (2026-07-20, same day): concept engagement gate replaced with literal
+      mention, not embedding similarity.** Live run: a GA conversation discussed AI/XAI/
+      NLP/Transfer Learning, all introduced together in one assistant monologue; the
+      user asked a single specific follow-up about XAI only. All four still passed the
+      embedding-similarity engagement check and got created as new concepts — the
+      check couldn't distinguish "broadly the same topic" (any AI-flavored user turn)
+      from "specifically about this sibling concept," since concepts extracted from one
+      monologue on a shared topic sit close together in embedding space. Root cause
+      diagnosed by the user, not a threshold problem: raising `min_concept_engagement_turns`
+      wouldn't have helped either, since even XAI (the one legitimate follow-up) only
+      had 2 AI-related user turns behind it total — the fix needed precision, not
+      volume. Replaced `_has_engagement`'s embedding-similarity-to-turn-text check with
+      `_mentioned_in` (`services/upsert.py`): whole-word, case-insensitive literal match
+      of the candidate's name (or a parenthetical abbreviation split out of it, e.g.
+      "XAI" from "Explainable AI (XAI)") against the user's own turns —
+      `concept_engagement_similarity` and its 0.55 threshold are gone entirely, no
+      longer needed since the check no longer touches embeddings at all. The user's own
+      framing: this is an *intersection* of what the conversation introduced with what
+      the user's own words actually named, not a similarity-based *union*. Also
+      confirmed via this run that the whole session collapsed into a single
+      `Conversation` row tagged with GA's `persona_id` (pre-existing behavior —
+      `replay.py`'s `_group_into_conversations` groups by topic-continuation markers,
+      not by persona) — so the tutor-specific FR-407 relaxation still hasn't been
+      exercised under a real tutor-scoped conversation; would need a tutor-only session
+      to test that path. 293/293 unit tests green (4 new regression tests reproducing
+      the exact sibling-concept scenario, `TestSiblingConceptsFromOneMonologue`).
+      **Not yet re-verified live** with this fix in place — same workstation, same kind
+      of AI-discussion conversation, next time.
 - [ ] **Phase 13 live smoke on the workstation**: fresh onboarding shows only installed
       languages; speak a second installed language to the GA (reply mirrors, voice
       switches); speak an uninstalled language (primary-language reminder names
@@ -358,9 +385,12 @@ accumulate:
 - [ ] `episode_anchor_threshold` (0.6) and `elicitation_cap` (2).
 - [ ] Threshold promotion to persona-scoped, voice-configurable fields (Phase 9
       candidate) — blocked on the same calibration data.
-- [ ] `authored_protection_threshold` (0.75), `concept_engagement_similarity` (0.55),
-      `min_concept_engagement_turns` (2) — new FR-310 concept-origin gates
-      (2026-07-20), untested against real usage.
+- [ ] `authored_protection_threshold` (0.75), `min_concept_engagement_turns` (2) — new
+      FR-310 concept-origin gates (2026-07-20). The engagement gate itself
+      (`min_concept_engagement_turns`) is literal-mention-based as of the same-day
+      follow-up, not embedding-similarity — no similarity threshold left to calibrate
+      there, but the turn-count floor and the authored-protection threshold are still
+      untested against real usage.
 - [ ] `min_user_turns`/`min_user_words` (2/40) — `ConsolidateMemory`'s extraction floor
       (FR-307/TR-707, 2026-07-20).
 

@@ -350,15 +350,24 @@ consolidation, enrichment, and bundle install.
   entity") the candidate is written as a touch on that authored item — verbatim
   description/embedding, engagement bumped, `update_description` ignored. Otherwise the
   normal two-tier merge/insert (TR-602) runs scoped to *organic* candidates only. A
-  brand-new organic insert (`existing is None`) additionally requires
-  `_has_engagement`: at least `min_concept_engagement_turns` (default 2) of the
-  caller-supplied `user_turns` (raw text) whose embedding's cosine similarity to the
-  candidate ≥ `concept_engagement_similarity` (default 0.55, reusing TR-807's
-  `interest_cluster_threshold` calibration for topical-relatedness). `user_turns=None`
-  (the default; `bundle_install`/`EnrichMemory` never pass it) skips this check
-  entirely — only live-conversation extraction has turns to evaluate. `upsert_procedure`
-  has no origin-awareness: procedures are always authored (FR-307), so
-  `update_description=False` from the caller is their only protection.
+  brand-new organic insert (`existing is None`) additionally requires `_has_engagement`:
+  at least `min_concept_engagement_turns` (default 2) of the caller-supplied
+  `user_turns` (raw text) must literally name the concept (`_mentioned_in` — whole-word,
+  case-insensitive regex match on the candidate's `name`, also matching a parenthetical
+  abbreviation split out of it, e.g. "XAI" out of "Explainable AI (XAI)"). Embedding
+  cosine-similarity between a turn and the candidate's own embedding was the original
+  design (`concept_engagement_similarity`, reusing TR-807's `interest_cluster_threshold`)
+  but was replaced 2026-07-20 after a live-testing finding: several sibling concepts
+  extracted from one assistant monologue on a shared topic (e.g. AI/XAI/NLP/Transfer
+  Learning) sit close together in embedding space, so a couple of broadly-on-topic user
+  turns satisfied the similarity bar for *all* of them, not just the one actually
+  followed up on — literal mention is the intersection of "what the conversation
+  introduced" with "what the user's own words actually named," which similarity-to-topic
+  could not express. `user_turns=None` (the default; `bundle_install`/`EnrichMemory`
+  never pass it) skips this check entirely — only live-conversation extraction has turns
+  to evaluate. `upsert_procedure` has no origin-awareness: procedures are always
+  authored (FR-307), so `update_description=False` from the caller is their only
+  protection.
 
 ## TR-7xx — Offline pipeline
 

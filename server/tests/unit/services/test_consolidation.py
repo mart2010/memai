@@ -76,6 +76,14 @@ _SUBSTANTIAL_USER_TURN_2 = (
     "a decade, so I'm basically starting from scratch again."
 )
 
+# Generic filler (24 words, no tracked concept names) appended to a turn in
+# hand-built conversations elsewhere in this file purely to clear the extraction
+# floor's word count — keeps the turn/mention counts under test unaffected.
+_FLOOR_PADDING = (
+    " I've been meaning to ask about this for a while now, and I'd really like to "
+    "understand it properly if you don't mind explaining."
+)
+
 
 def _seed_ended_conversation(
     conversation_repo: FakeConversationRepository, persona_id: UUID = GENERAL_ASSISTANT_ID,
@@ -186,7 +194,19 @@ class TestRunConsolidation:
         )
         extraction = ExtractionResult(episodes=[], concepts=[concept])
         use_case, conversation_repo, memory_repo = _make_consolidation(worthy=False, extraction=extraction)
-        _seed_ended_conversation(conversation_repo)
+        conv = Conversation(id=None, started_at=_now(), persona_id=GENERAL_ASSISTANT_ID)
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="Can you explain recursion to me? I never quite understood how it actually works in practice.",
+        ))
+        conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.ASSISTANT, content="Sure, let's break it down step by step."))
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="Okay so recursion is basically a function calling itself, right? That makes a bit more sense now."
+            + _FLOOR_PADDING,
+        ))
+        conv.end(ended_at=_now())
+        conv.id = conversation_repo.save_new(conv, session_id=_DUMMY_SESSION)
 
         use_case.execute()
 
@@ -385,11 +405,13 @@ class TestAssessmentHook:
 
 
 class TestConceptEngagementGate:
-    """Spec: FR-307 — a brand-new organic concept (nothing to merge into) needs real
-    user engagement, not just an assistant mention, before it's worth inserting."""
+    """Spec: FR-307 — a brand-new organic concept (nothing to merge into) needs the
+    user to have literally named it in at least 2 of their own turns, not just been
+    present for an assistant mention or a single follow-up. Embedding-similarity-to-
+    turn-text was tried first and replaced 2026-07-20 after a live test: it couldn't
+    distinguish "broadly the same topic" from "specifically about this sibling
+    concept" (see TestSiblingConceptsFromOneMonologue below for the exact scenario)."""
 
-    _GUITAR_VECTOR = [1.0, 0.0]
-    _OTHER_VECTOR = [0.0, 1.0]
     _ON_TOPIC_TURN = (
         "I really want to learn guitar this year, maybe starting with some "
         "beginner lessons online to get the basics down."
@@ -398,7 +420,6 @@ class TestConceptEngagementGate:
         "Also I've been really busy with work lately and haven't had much free "
         "time for hobbies at all this month, especially with deadlines piling up."
     )
-    _CONCEPT_EMBED_KEY = "Guitar: Playing the guitar."
 
     def _concept(self) -> Concept:
         return Concept(
@@ -414,42 +435,72 @@ class TestConceptEngagementGate:
         conv.end(ended_at=_now())
         conv.id = conversation_repo.save_new(conv, session_id=_DUMMY_SESSION)
 
-    def test_single_qualifying_turn_is_not_enough(self):
-        embedding_service = FakeEmbeddingService(
-            vector=self._OTHER_VECTOR,
-            vectors={self._ON_TOPIC_TURN: self._GUITAR_VECTOR, self._CONCEPT_EMBED_KEY: self._GUITAR_VECTOR},
-        )
+    def test_single_mention_is_not_enough(self):
+        """One turn names it ("guitar"), the other never does — below the floor."""
         extraction = ExtractionResult(episodes=[], concepts=[self._concept()])
-        use_case, conversation_repo, memory_repo = _make_consolidation(
-            extraction=extraction, embedding_service=embedding_service,
-        )
+        use_case, conversation_repo, memory_repo = _make_consolidation(extraction=extraction)
         self._seed_conversation(conversation_repo, self._OFF_TOPIC_TURN)
 
         use_case.execute()
 
         assert memory_repo.concepts == []
 
-    def test_two_qualifying_turns_are_enough(self):
-        embedding_service = FakeEmbeddingService(
-            vector=self._OTHER_VECTOR,
-            vectors={
-                self._ON_TOPIC_TURN: self._GUITAR_VECTOR,
-                self._CONCEPT_EMBED_KEY: self._GUITAR_VECTOR,
-            },
-        )
-        # Second turn also on-topic (reuses the same text/embedding mapping).
+    def test_two_mentions_are_enough(self):
         extraction = ExtractionResult(episodes=[], concepts=[self._concept()])
-        use_case, conversation_repo, memory_repo = _make_consolidation(
-            extraction=extraction, embedding_service=embedding_service,
+        use_case, conversation_repo, memory_repo = _make_consolidation(extraction=extraction)
+        self._seed_conversation(conversation_repo, self._ON_TOPIC_TURN + " Really excited!")
+
+        use_case.execute()
+
+        assert len(memory_repo.concepts) == 1
+
+    def test_mention_is_whole_word_case_insensitive(self):
+        """A bare substring match on a short name like "AI" would wrongly match inside
+        unrelated words ("against", "explain") — must be a whole-word match."""
+        concept = Concept(
+            id=None, persona_id=GENERAL_ASSISTANT_ID, name="AI",
+            description="Artificial intelligence.", language=Language("en"), origin="organic",
         )
+        extraction = ExtractionResult(episodes=[], concepts=[concept])
+        use_case, conversation_repo, memory_repo = _make_consolidation(extraction=extraction)
         conv = Conversation(id=None, started_at=_now(), persona_id=GENERAL_ASSISTANT_ID)
-        conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.USER, content=self._ON_TOPIC_TURN))
-        conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.ASSISTANT, content="Sure, let's talk about that."))
-        conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.USER, content=self._ON_TOPIC_TURN + " Really excited!"))
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="I'd like to explain something, and I'm against doing it the hard way, if that's fine.",
+        ))
+        conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.ASSISTANT, content="Sure, go ahead."))
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="Explain again what AI actually is, in simple terms please." + _FLOOR_PADDING,
+        ))
         conv.end(ended_at=_now())
         conv.id = conversation_repo.save_new(conv, session_id=_DUMMY_SESSION)
-        # The slightly-modified second turn text needs its own mapping too.
-        embedding_service._vectors[self._ON_TOPIC_TURN + " Really excited!"] = self._GUITAR_VECTOR
+
+        use_case.execute()
+
+        assert memory_repo.concepts == []  # only 1 whole-word "AI" mention (turn 2); "explain"/"against" don't count
+
+    def test_parenthetical_abbreviation_counts_as_a_mention(self):
+        """"Explainable AI (XAI)" is matched by the user saying either the full name
+        or just "XAI"."""
+        concept = Concept(
+            id=None, persona_id=GENERAL_ASSISTANT_ID, name="Explainable AI (XAI)",
+            description="Making AI decisions interpretable.", language=Language("en"), origin="organic",
+        )
+        extraction = ExtractionResult(episodes=[], concepts=[concept])
+        use_case, conversation_repo, memory_repo = _make_consolidation(extraction=extraction)
+        conv = Conversation(id=None, started_at=_now(), persona_id=GENERAL_ASSISTANT_ID)
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="Can you tell me more about XAI, it seems really hard to do with huge models.",
+        ))
+        conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.ASSISTANT, content="Sure, let's dig into that."))
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="So explainable AI is basically about making the model's reasoning visible?" + _FLOOR_PADDING,
+        ))
+        conv.end(ended_at=_now())
+        conv.id = conversation_repo.save_new(conv, session_id=_DUMMY_SESSION)
 
         use_case.execute()
 
@@ -457,7 +508,7 @@ class TestConceptEngagementGate:
 
     def test_merge_into_existing_concept_bypasses_engagement_gate(self):
         """Spec: FR-307 — the gate only applies to a brand-new insert; a real match
-        merges regardless of how many turns discuss it."""
+        merges regardless of how many turns mention it."""
         existing = self._concept()
         existing.id = 42
         memory_repo = _CannedSearchMemoryRepository([(0.95, existing)])  # auto-merge band
@@ -471,6 +522,84 @@ class TestConceptEngagementGate:
 
         assert len(memory_repo.concepts) == 1
         assert memory_repo.concepts[0].id == 42
+
+
+class TestSiblingConceptsFromOneMonologue:
+    """Spec: FR-307 — regression for the exact 2026-07-20 live-testing finding: several
+    sibling concepts introduced together in one GA monologue (AI/XAI/NLP/Transfer
+    Learning) must not all pass the engagement gate just because the user asked a
+    follow-up about one of them."""
+
+    def _extraction(self) -> ExtractionResult:
+        return ExtractionResult(episodes=[], concepts=[
+            Concept(
+                id=None, persona_id=GENERAL_ASSISTANT_ID, name="Artificial Intelligence (AI)",
+                description="The broader field.", language=Language("en"), origin="organic",
+            ),
+            Concept(
+                id=None, persona_id=GENERAL_ASSISTANT_ID, name="Natural Language Processing (NLP)",
+                description="Processing human language.", language=Language("en"), origin="organic",
+            ),
+            Concept(
+                id=None, persona_id=GENERAL_ASSISTANT_ID, name="Transfer Learning",
+                description="Reusing learned knowledge across domains.", language=Language("en"), origin="organic",
+            ),
+            Concept(
+                id=None, persona_id=GENERAL_ASSISTANT_ID, name="Explainable AI (XAI)",
+                description="Making AI decisions interpretable.", language=Language("en"), origin="organic",
+            ),
+        ])
+
+    _GA_MONOLOGUE = (
+        "AI is advancing fast. Large Language Models process language via Natural "
+        "Language Processing, Explainable AI helps interpret decisions, and Transfer "
+        "Learning lets models reuse knowledge across domains."
+    )
+
+    def test_a_single_followup_is_not_enough_for_any_sibling(self):
+        """The real 2026-07-20 session, reproduced: one broad opener, one specific
+        follow-up about XAI — matches the user's own account exactly ("if I only ask
+        one follow-up on a specific concept introduced is not enough"). Nothing
+        qualifies, not even XAI: it's only named once by the user."""
+        use_case, conversation_repo, memory_repo = _make_consolidation(extraction=self._extraction())
+        conv = Conversation(id=None, started_at=_now(), persona_id=GENERAL_ASSISTANT_ID)
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="Let's discuss a little bit about the advance of AI, it seems to be moving very rapidly.",
+        ))
+        conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.ASSISTANT, content=self._GA_MONOLOGUE))
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="Can you tell me more about XAI? It seems very difficult with billions of parameters." + _FLOOR_PADDING,
+        ))
+        conv.end(ended_at=_now())
+        conv.id = conversation_repo.save_new(conv, session_id=_DUMMY_SESSION)
+
+        use_case.execute()
+
+        assert memory_repo.concepts == []
+
+    def test_two_specific_mentions_survive_while_siblings_still_dont(self):
+        """The user genuinely engages with XAI twice — only XAI survives; NLP/Transfer
+        Learning/AI were never named by the user at all, so they're still dropped."""
+        use_case, conversation_repo, memory_repo = _make_consolidation(extraction=self._extraction())
+        conv = Conversation(id=None, started_at=_now(), persona_id=GENERAL_ASSISTANT_ID)
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="Can you tell me a bit about XAI? I've heard the term but don't really understand it.",
+        ))
+        conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.ASSISTANT, content=self._GA_MONOLOGUE))
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="So XAI is really about making the model explain its own reasoning?" + _FLOOR_PADDING,
+        ))
+        conv.end(ended_at=_now())
+        conv.id = conversation_repo.save_new(conv, session_id=_DUMMY_SESSION)
+
+        use_case.execute()
+
+        names = {c.name for c in memory_repo.concepts}
+        assert names == {"Explainable AI (XAI)"}
 
 
 class TestAuthoredConceptProtection:
@@ -525,15 +654,13 @@ class TestAuthoredConceptProtection:
     def test_distinct_organic_concept_in_tutor_session_is_free_to_insert(self):
         """Spec: FR-407 — the old blanket "no new items for strategy personas" rule is
         gone: a user going off-curriculum mid-lesson to discuss something real and
-        distinct from any curated content is genuine signal, not noise. The default
-        FakeEmbeddingService gives every text the same embedding, so the engagement
-        gate trivially passes (2 user turns "about" the candidate) — what's under test
-        is that the authored-protection check (driven by the canned search similarity,
-        0.1, far below the 0.75 threshold) does NOT redirect this into a touch, and
-        that a registered strategy no longer blocks the insert outright.
+        distinct from any curated content is genuine signal, not noise. What's under
+        test is that the authored-protection check (driven by the canned search
+        similarity, 0.1, far below the 0.75 threshold) does NOT redirect this into a
+        touch, and that a registered strategy no longer blocks the insert outright.
         """
         concept = Concept(
-            id=None, persona_id=GENERAL_ASSISTANT_ID, name="Off-curriculum topic",
+            id=None, persona_id=GENERAL_ASSISTANT_ID, name="cycling",
             description="Something the user brought up, unrelated to any lesson.",
             language=Language("en"), origin="organic",
         )
@@ -549,8 +676,20 @@ class TestAuthoredConceptProtection:
             assessment_strategies={GENERAL_ASSISTANT_ID: FakePersonaAssessmentPort()},
             memory_repo=memory_repo,
         )
-        _seed_ended_conversation(conversation_repo)
+        conv = Conversation(id=None, started_at=_now(), persona_id=GENERAL_ASSISTANT_ID)
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="Actually before we continue the lesson, I went cycling this weekend and it was amazing.",
+        ))
+        conv.add_turn(Turn(timestamp=_now(), speaker=Speaker.ASSISTANT, content="That sounds lovely, tell me more."))
+        conv.add_turn(Turn(
+            timestamp=_now(), speaker=Speaker.USER,
+            content="Yeah, I've really gotten into cycling lately, it's become a big part of my weekends now."
+            + _FLOOR_PADDING,
+        ))
+        conv.end(ended_at=_now())
+        conv.id = conversation_repo.save_new(conv, session_id=_DUMMY_SESSION)
 
         use_case.execute()
 
-        assert any(c.name == "Off-curriculum topic" for c in memory_repo.concepts)
+        assert any(c.name == "cycling" for c in memory_repo.concepts)

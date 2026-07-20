@@ -162,9 +162,10 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   bump only, content immutable) regardless of which persona the conversation belongs
   to; a candidate distinct from all authored content is free to merge into or insert as
   a new *organic* concept using the existing merge/disambiguate thresholds (FR-304) —
-  but a genuinely new organic insert additionally requires real user engagement: at
-  least two of the conversation's own turns actually discussing it, not just an
-  assistant mention.
+  but a genuinely new organic insert additionally requires real user engagement: the
+  user must have literally named it in at least two of their own turns, not merely been
+  present for an assistant mention or a single follow-up question — topical proximity
+  to what the assistant introduced is not engagement.
 - **FR-308** A fresh memory brief must be generated after each offline run that
   consolidated at least one conversation, and be in place for the next session start.
 - **FR-309** Whether a turn triggers a recall search at all is a persona-scoped policy
