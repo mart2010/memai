@@ -244,7 +244,16 @@ design discussion, never a patch.
   on a turn where a directive fired — the user's utterance was a directive, not a
   content question; both resume normally next turn under the new persona. The
   assistant turn is logged under the **new** persona id, same as the retired
-  `[PERSONA:]` scheme (TR-310) guaranteed.
+  `[PERSONA:]` scheme (TR-310) guaranteed. A firing switch also unconditionally forces
+  this turn's `boundary_marker` to `ConversationBoundaryType.BREAK` (step 7),
+  overriding whatever `[TOPIC_CONTINUATION]`/`[TOPIC_BREAK]` tag TR-304 resolved from
+  the LLM's own reply — deterministic, never left to LLM judgment, same as the switch
+  decision itself. Without this, `replay.py`'s `_group_into_conversations` (TR-403)
+  only re-evaluates a conversation group's `persona_id` on a `BREAK`, so a switch
+  mid-session would silently let the new persona's turns be attributed to the old
+  persona's conversation record for consolidation — breaking FR-303's persona-scoping,
+  TR-704's assessment-strategy dispatch (keyed on `conversation.persona_id`), and
+  FR-504's episode exemption for tutor sessions (found live-testing 2026-07-20, FR-310).
 
 ## TR-4xx — Session logs & replay
 
@@ -261,7 +270,11 @@ design discussion, never a patch.
   conversation in the DB (when none exists, it is saved as new); a `break` marker on a
   later assistant turn closes the current group (inclusive) and starts a new one; a
   `break` on the first assistant turn is ignored (a new session is already a boundary).
-  Each group's persona is the persona of its first assistant turn (default GA).
+  Each group's persona is the persona of its first assistant turn, re-evaluated only
+  when a `break` closes a group — a persona switch (TR-315) always emits one for
+  exactly this reason, so a session that changes persona always splits into separate,
+  correctly-persona-scoped conversation records rather than one group frozen on
+  whichever persona was active first.
 - **TR-404** A file without `session_closed` (crash) is still replayed; the group's
   `ended_at` falls back to its last turn timestamp.
 - **TR-405** Replay idempotency: files are scanned newest-first and the scan stops at

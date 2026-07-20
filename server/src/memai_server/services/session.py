@@ -696,7 +696,19 @@ class ProcessTurn:
         assistant_content = "".join(content_parts).strip()
         print(f"[latency] Total turn: {time.monotonic() - t_start:.2f}s")
 
-        # 7. Conversation boundary event — marker embedded in assistant turn below
+        # 7. Conversation boundary event — marker embedded in assistant turn below.
+        # A persona switch (3b) always forces a break, overriding whatever the LLM's
+        # own [TOPIC_CONTINUATION]/[TOPIC_BREAK] tag said: consolidation groups turns
+        # into a single Conversation with one frozen persona_id per group (replay.py's
+        # _group_into_conversations only re-evaluates it on a BREAK), so without this a
+        # switch mid-session let the new persona's turns ride along under the old
+        # persona's scope — silently breaking FR-303 persona-scoped knowledge, TR-704
+        # assessment dispatch (the tutor's own PersonaAssessmentPort never firing for
+        # its own lesson content), and FR-504's episode exemption for tutor sessions.
+        # Deterministic, same as the switch decision itself — never left to LLM
+        # judgment (FR-207).
+        if persona_switched is not None:
+            boundary_marker = ConversationBoundaryType.BREAK
         boundary = ConversationBoundaryDetected(boundary_type=boundary_marker) if boundary_marker else None
 
         # 8. Focus marker → re-fetch the active persona's batch steered by the user's

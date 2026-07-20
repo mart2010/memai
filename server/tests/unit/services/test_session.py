@@ -394,6 +394,57 @@ class TestProcessTurn:
         assert any("hola" in m.content for m in second_messages if m.role == "system")
 
     @pytest.mark.asyncio
+    async def test_persona_switch_forces_conversation_boundary(self):
+        """Spec: FR-207, TR-304 — a persona switch always forces a break. Without it,
+        consolidation's _group_into_conversations only re-evaluates a conversation's
+        persona_id on a BREAK, so a switch mid-session would silently let the new
+        persona's turns be attributed to the old persona's conversation record."""
+        tutor = _tutor_persona()
+        persona_repo = FakePersonaRepository()
+        persona_repo.save(_general_assistant())
+        persona_repo.save(tutor)
+        memory_repo = FakeMemoryRepository()
+        memory_repo.concepts.append(_directive_concept(tutor.id))
+        process_turn, _, wal, _ = _make_process_turn(
+            persona_repo=persona_repo,
+            memory_repo=memory_repo,
+        )
+        use_case, _ = _make_start_session(memory_repo=memory_repo)
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        result = await process_turn.execute(ctx, audio=b"a", now=_now())
+
+        assert result is not None and result.persona_switched is not None
+        assert result.conversation_boundary is not None
+        assert result.conversation_boundary.boundary_type == ConversationBoundaryType.BREAK
+        assert any(m == ConversationBoundaryType.BREAK for _, m in wal.markers)
+
+    @pytest.mark.asyncio
+    async def test_persona_switch_boundary_overrides_topic_continuation_tag(self):
+        """Spec: FR-207, TR-304 — the switch-forced boundary is deterministic and wins
+        over whatever the LLM's own [TOPIC_CONTINUATION] tag said, same as the switch
+        decision itself is never left to LLM judgment."""
+        tutor = _tutor_persona()
+        persona_repo = FakePersonaRepository()
+        persona_repo.save(_general_assistant())
+        persona_repo.save(tutor)
+        memory_repo = FakeMemoryRepository()
+        memory_repo.concepts.append(_directive_concept(tutor.id))
+        process_turn, _, wal, _ = _make_process_turn(
+            llm_response="[TOPIC_CONTINUATION] Ciao! Let's continue where we left off.",
+            persona_repo=persona_repo,
+            memory_repo=memory_repo,
+        )
+        use_case, _ = _make_start_session(memory_repo=memory_repo)
+        ctx = use_case.execute(session_id=uuid4(), started_at=_now())
+
+        result = await process_turn.execute(ctx, audio=b"a", now=_now())
+
+        assert result is not None and result.persona_switched is not None
+        assert result.conversation_boundary is not None
+        assert result.conversation_boundary.boundary_type == ConversationBoundaryType.BREAK
+
+    @pytest.mark.asyncio
     async def test_focus_marker_replaces_batch(self):
         """Spec: FR-502, TR-306"""
         strategy = FakePersonaSelectionPort(

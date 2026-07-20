@@ -123,7 +123,11 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   concepts — both sides of the similarity computation anchor on the same wording, to
   keep match precision high. `PersonaDirectiveSync` keeps directive concepts in sync
   with persona create/remove (FR-204) and bootstraps the fixed "return to the
-  GeneralAssistant" directive idempotently on every server startup.
+  GeneralAssistant" directive idempotently on every server startup. A switch always
+  marks a conversation boundary (TR-315): consolidation attributes a whole
+  unbroken conversation to a single persona (FR-303), so without a forced boundary a
+  mid-session switch would silently let the new persona's turns be extracted and
+  scored under the old persona's identity.
 
 ## FR-3xx — Memory & recall
 

@@ -294,6 +294,34 @@ tracks work still to do.
       the exact sibling-concept scenario, `TestSiblingConceptsFromOneMonologue`).
       **Not yet re-verified live** with this fix in place — same workstation, same kind
       of AI-discussion conversation, next time.
+- [x] **Persona switch now forces a conversation boundary** (2026-07-20, FR-207,
+      TR-315/403) — found from the same live test above: the GA→tutor→GA session
+      collapsed into one `Conversation` row tagged with GA's `persona_id`, because
+      `replay.py`'s `_group_into_conversations` only re-evaluates a group's
+      `persona_id` when a `ConversationBoundaryType.BREAK` marker closes it, and that
+      marker previously came from exactly one source — the LLM's own
+      `[TOPIC_CONTINUATION]`/`[TOPIC_BREAK]` self-tag (TR-304) — entirely disconnected
+      from the deterministic Directive-based persona switch (FR-207, TR-315). Real
+      correctness gap, not cosmetic: silently broke FR-303 (persona-scoped knowledge —
+      extraction/upsert ran entirely under whichever persona was active first),
+      TR-704 assessment dispatch (the tutor's own `PersonaAssessmentPort`/SRS tracking
+      never fires for its own lesson content when it isn't the group's persona), and
+      left FR-504's "no episodes from tutor conversations" unenforced in this case
+      (didn't bite in the live test only because `worthy` happened to come back false).
+      Fix: `session.py`'s `ProcessTurn.execute` (step 7) unconditionally overrides
+      `boundary_marker` to `BREAK` whenever `persona_switched is not None`, regardless
+      of what the LLM's own tag said — deterministic, same posture as the switch
+      decision itself never being left to LLM judgment. One accepted imprecision: the
+      switch-confirmation reply (already generated *as* the new persona, per FR-207)
+      lands as the trailing turn of the *old* group rather than the leading turn of the
+      new one, since `_group_into_conversations`'s BREAK handling is "close inclusive,
+      then reopen" — not worth restructuring boundary semantics for one transitional
+      turn. 295/295 unit tests green (2 new: `test_persona_switch_forces_conversation_boundary`,
+      `test_persona_switch_boundary_overrides_topic_continuation_tag` in
+      `test_session.py`). **Not yet live-verified**: needs a real multi-persona session
+      on the workstation to confirm it now produces separate, correctly-scoped
+      `Conversation` rows — this is also the prerequisite for finally live-testing the
+      FR-310 tutor-side concept relaxation, which couldn't be exercised before this fix.
 - [ ] **Phase 13 live smoke on the workstation**: fresh onboarding shows only installed
       languages; speak a second installed language to the GA (reply mirrors, voice
       switches); speak an uninstalled language (primary-language reminder names
@@ -410,6 +438,24 @@ accumulate:
 - **TPRS cross-session story recap** no longer persists (the consolidation gates for
   strategy personas removed episode extraction); no replacement mechanism —
   deliberate open gap.
+- **WebSocket keepalive timeout too tight for a real turn** (found 2026-07-20 live
+  testing on the workstation): both client (`client.py`) and server (`server.py`)
+  call `websockets.connect`/`websockets.serve` with no `ping_interval`/`ping_timeout`
+  override, so both default to the library's ~20s. Two real turns during today's
+  testing (llama3.1:8b) took 19.28s and 19.54s end-to-end — already within a second of
+  that default — and a longer reply (more TTS segments to synthesize) tipped one turn
+  over the edge, killing the connection with `ConnectionClosedError: 1011 internal
+  error, keepalive ping timeout`. Traced to genuine per-turn latency, not a hang or
+  bug in either the client's receive loop or the server's turn-processing loop (both
+  checked — server's `async for msg in ws` serializes turns correctly, client's
+  audio-playback wait runs off the event loop via `run_in_executor`). This is the
+  same class of issue already known from gemma3:27b ("slow enough to cause
+  keepalive-ping-timeout crashes on long turns," see
+  `project_ga_language_drift_known_limitation` memory) — now recurring even on the
+  supposedly-fast model, since a single voice turn is inherently long-running.
+  User's call: longer responses should be an expected, supported case, not something
+  to route around — needs a real fix (raise `ping_interval`/`ping_timeout` on both
+  ends, e.g. to 60s), deliberately deferred, not done this session.
 - **Replay idempotency race** (Phase 5): `TurnLogReplayer`'s check-then-insert isn't
   atomic across the live + offline DB connections; a reconnect landing in a narrow
   window could duplicate one session's rows. Fix sketch if it ever bites: a
