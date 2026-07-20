@@ -219,6 +219,54 @@ tracks work still to do.
       `docs/INSTALLATION.md` as a third `<details>` block alongside peer and password
       auth. **Not yet live-verified**: no real Windows Postgres instance available this
       session to confirm the SSPI handshake actually completes end-to-end.
+- [x] **Concept/Procedure offline-consolidation redesign** (2026-07-20,
+      FR-307/FR-310/FR-407/FR-504, TR-606/609/703/705-708) — triggered by the
+      2026-07-18 live-testing false-positive review (`project_extraction_false_positives_needs_review`
+      memory): concepts/procedures bypassing worthiness entirely was too permissive,
+      and a debugging session got fabricated into a personal-event episode despite the
+      worthiness LLM correctly judging the conversation substantial. Four changes:
+      1. Procedures are never extracted from live conversation, any persona —
+      authoring-only (bundle install, persona enrichment); `ExtractionResult.procedures`
+      removed, `_extraction_system_prompt` drops the schema section unconditionally.
+      `bundle_install`/`EnrichMemory` procedure upserts now force
+      `update_description=False` — an authored Procedure's content is immutable once
+      installed, only engagement/`persona_state` move (previously only tutor-gated
+      conversation extraction had this protection; bundle reinstall and
+      cluster-proposal merges didn't).
+      2. New `Concept.origin` field (`"authored"` vs `"organic"`, immutable like
+      `language`; new `concepts.origin` DB column, `ALTER TABLE ... ADD COLUMN IF NOT
+      EXISTS` idempotent-reapply pattern matching the existing `directive` column).
+      `MemoryUpserter.upsert_concept` is origin-aware (TR-609): a live-extraction
+      candidate landing within `authored_protection_threshold` (0.75) of an existing
+      authored concept is a touch, never a rewrite, regardless of persona — replaces
+      the old blanket `allow_insert=False` block for strategy personas (removed
+      entirely, along with the now-dead `allow_insert` param on both `upsert_concept`/
+      `upsert_procedure`). A genuinely new organic insert additionally needs
+      `min_concept_engagement_turns` (2) of the conversation's own user turns
+      topically similar (`concept_engagement_similarity`, 0.55, reusing TR-807's
+      `interest_cluster_threshold` calibration) to it — an assistant-only mention no
+      longer creates a permanent concept.
+      3. FR-407/504 relaxed for concepts only: a tutor session can now produce a
+      genuinely new organic concept if distinct from curriculum and
+      engagement-gated (episodes stay fully blocked for strategy personas, as before —
+      lesson drills aren't events).
+      4. Cheap extraction floor ahead of any LLM call (TR-707): `min_user_turns=2`/
+      `min_user_words=40` (user turns only, assistant chatter excluded) — below it,
+      worthiness + extraction are skipped outright. Worthiness/extraction prompts
+      (`WORTHINESS_SYSTEM_PROMPT`, now deduplicated between the Ollama/OpenRouter
+      evaluators, which carried byte-identical strings before) explicitly exclude
+      assistant-operational content and require genuine time/place grounding for an
+      episode; `_parse_extraction` drops an episode with no real `happened_at` instead
+      of silently backdating it to the conversation's own timestamp — was masking
+      exactly the fabricated-episode failure mode above.
+      289/289 server unit tests green, with new coverage for the floor/
+      engagement-gate/authored-protection paths (`test_consolidation.py`,
+      `test_enrichment.py`, `test_extraction_prompt.py`). **Not yet live-verified**:
+      needs a real Postgres + real LLM run on the workstation to confirm the new gates
+      actually suppress the 2026-07-18 noise pattern in practice, not just pass unit
+      tests against fakes; `test_consolidation_pipeline.py`/`test_postgres.py`
+      integration tests were updated for the schema/behavior change but not run here
+      (no local Postgres).
 - [ ] **Phase 13 live smoke on the workstation**: fresh onboarding shows only installed
       languages; speak a second installed language to the GA (reply mirrors, voice
       switches); speak an uninstalled language (primary-language reminder names
@@ -310,6 +358,11 @@ accumulate:
 - [ ] `episode_anchor_threshold` (0.6) and `elicitation_cap` (2).
 - [ ] Threshold promotion to persona-scoped, voice-configurable fields (Phase 9
       candidate) — blocked on the same calibration data.
+- [ ] `authored_protection_threshold` (0.75), `concept_engagement_similarity` (0.55),
+      `min_concept_engagement_turns` (2) — new FR-310 concept-origin gates
+      (2026-07-20), untested against real usage.
+- [ ] `min_user_turns`/`min_user_words` (2/40) — `ConsolidateMemory`'s extraction floor
+      (FR-307/TR-707, 2026-07-20).
 
 ## Deferred by explicit decision — waiting for real tutoring sessions
 

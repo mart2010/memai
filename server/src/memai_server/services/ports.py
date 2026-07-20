@@ -53,7 +53,6 @@ class Message:
 class ExtractionResult:
     episodes: list[Episode]
     concepts: list[Concept]
-    procedures: list[Procedure]
 
 
 @dataclass(frozen=True)
@@ -393,7 +392,11 @@ class ConsolidationExtractor(Protocol):
         PersonaAssessmentPort — today, only the language tutor) skips asking for episodes
         at all: a language lesson's role-play/drills are not real events, and no reliable
         after-the-fact judgment call was found for a small local model to separate a
-        genuine story from a practiced one — so the request is simply never made."""
+        genuine story from a practiced one — so the request is simply never made.
+
+        Procedures are never requested from conversation at all (any persona): how-to
+        knowledge belongs to authoring expertise (bundles), not something a live chat
+        organically produces — FR-307."""
         ...
 
 

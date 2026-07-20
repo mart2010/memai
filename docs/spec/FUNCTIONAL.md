@@ -143,8 +143,28 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
 - **FR-305** Engagement must only ratchet upward on merge (max of existing and new).
 - **FR-306** Episode summaries must always be written in the user's primary language,
   whatever language the conversation happened in (INV-10).
-- **FR-307** Trivial exchanges must not become episodes: episode extraction is gated by
-  a per-conversation worthiness judgment. Concepts/procedures are extracted regardless.
+- **FR-307** Trivial exchanges must not become episodes or concepts: a cheap
+  deterministic floor (minimum user turns and minimum user words, counting only the
+  user's own turns — assistant chatter must never inflate it) gates whether worthiness
+  evaluation and extraction are even attempted at all; below it, both are skipped
+  outright, purely for cost control. Above the floor, episode extraction is separately
+  gated by a per-conversation worthiness judgment (LLM) whose criteria explicitly
+  exclude discussion about the assistant's own operation (bugs, testing, capability
+  questions) and require a genuine, identifiable time or place — a substantial
+  conversation is not automatically an episode-worthy one. Procedures are never
+  extracted from conversation, for any persona: how-to knowledge belongs to authoring
+  expertise (bundles) or persona enrichment, never live discussion.
+- **FR-310** Concept creation from live conversation is gated independently of episode
+  worthiness, by origin and engagement, not by a whole-conversation verdict. Every
+  Concept carries an immutable `origin` ("authored" — bundle install, persona
+  enrichment — vs "organic" — live extraction). A live-extraction candidate close
+  enough to an existing *authored* concept is recognised as a touch on it (engagement
+  bump only, content immutable) regardless of which persona the conversation belongs
+  to; a candidate distinct from all authored content is free to merge into or insert as
+  a new *organic* concept using the existing merge/disambiguate thresholds (FR-304) —
+  but a genuinely new organic insert additionally requires real user engagement: at
+  least two of the conversation's own turns actually discussing it, not just an
+  assistant mention.
 - **FR-308** A fresh memory brief must be generated after each offline run that
   consolidated at least one conversation, and be in place for the next session start.
 - **FR-309** Whether a turn triggers a recall search at all is a persona-scoped policy
@@ -175,9 +195,14 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
   reprocessed next run.
 - **FR-406** Session logs are permanent (INV-5): no rotation, no cleanup.
 - **FR-407** For personas with a registered assessment strategy, consolidation must
-  only *recognise* practice against existing content (consolidation gates): no episodes
-  extracted, no new items inserted, no curated wording rewritten — engagement bumps and
-  category gap-fills only.
+  never extract episodes or author new procedures from conversation — their lessons are
+  practice, not autobiography or authored how-to knowledge — and must never rewrite
+  curated (authored) wording: engagement bumps and category gap-fills against existing
+  content only. Concept creation is not persona-gated the same way: it follows the same
+  origin/engagement rules as any other persona (FR-310), so a user going genuinely
+  off-curriculum mid-lesson can still produce a new organic concept — curated content
+  stays immutable either way, via FR-310's authored-origin protection, not via a
+  blanket ban on strategy personas ever authoring anything new.
 
 ## FR-5xx — Language tutor (first strategy persona)
 
@@ -192,9 +217,12 @@ formats, algorithms) live in [TECHNICAL.md](TECHNICAL.md).
 - **FR-503** Where a due item relates to a stored episode (similarity above the anchor
   threshold), the injection must carry that personal anchor; otherwise at most 2 items
   per batch may carry an elicitation hint inviting a short personal story.
-- **FR-504** Nothing said during a lesson may enter long-term memory as new content
-  (ephemeral generation): no new episodes, concepts, or procedures from tutor
-  conversations (FR-407); elicited stories live only in that turn's context.
+- **FR-504** Nothing said during a lesson may enter long-term memory as new curated
+  content: no new episodes or procedures from tutor conversations (FR-407); elicited
+  stories live only in that turn's context. A concept distinct from curriculum content
+  and clearing the engagement gate (FR-310) is the one exception — genuine
+  off-curriculum discussion, not lesson drills, which never carry that kind of
+  real-world content to begin with.
 - **FR-505** After each lesson is consolidated, the tutor must update per-item SRS
   state from evidence: successful retrievals (not exposures) grow the half-life, errors
   shrink it, practice is day-granular, user-initiated items are flagged sticky and get

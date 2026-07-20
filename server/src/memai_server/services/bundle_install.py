@@ -163,6 +163,7 @@ class InstallPersonaBundle:
                 language=item.language,
                 category=item.category,
                 engagement_level=EngagementLevel.UNSEEN,
+                origin="authored",
             )
             merged = self._upserter.upsert_concept(concept, persona_id, exclude_ids=frozenset(new_concept_ids))
             if not merged:
@@ -179,7 +180,11 @@ class InstallPersonaBundle:
             category=item.category,
             engagement_level=EngagementLevel.UNSEEN,
         )
-        merged = self._upserter.upsert_procedure(procedure, persona_id, exclude_ids=frozenset(new_procedure_ids))
+        # Procedures are always authored (FR-307) — a reinstall recognizes an existing
+        # one as a touch, never rewrites its content (update_description=False).
+        merged = self._upserter.upsert_procedure(
+            procedure, persona_id, exclude_ids=frozenset(new_procedure_ids), update_description=False,
+        )
         if not merged:
             new_procedure_ids.add(procedure.id)
         return merged

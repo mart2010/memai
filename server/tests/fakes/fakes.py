@@ -68,13 +68,18 @@ class FakeTTSService:
 
 
 class FakeEmbeddingService:
-    def __init__(self, vector: list[float] | None = None) -> None:
+    """Returns a fixed vector for any text by default, so unrelated calls always
+    "match." `vectors` (text -> vector) lets a test give specific texts distinct
+    embeddings — e.g. to exercise a similarity threshold that must NOT match."""
+
+    def __init__(self, vector: list[float] | None = None, vectors: dict[str, list[float]] | None = None) -> None:
         self.vector = vector or [0.1] * 8
+        self._vectors = vectors or {}
         self.calls: list[str] = []
 
     def embed(self, text: str) -> list[float]:
         self.calls.append(text)
-        return self.vector
+        return self._vectors.get(text, self.vector)
 
 
 class FakeLanguageDetector:
@@ -406,14 +411,16 @@ class FakeRecallGate:
 class FakeWorthinessEvaluator:
     def __init__(self, worthy: bool = True) -> None:
         self.worthy = worthy
+        self.calls: list[Conversation] = []
 
     def evaluate(self, conversation: Conversation) -> bool:
+        self.calls.append(conversation)
         return self.worthy
 
 
 class FakeConsolidationExtractor:
     def __init__(self, result: ExtractionResult | None = None) -> None:
-        self.result = result or ExtractionResult(episodes=[], concepts=[], procedures=[])
+        self.result = result or ExtractionResult(episodes=[], concepts=[])
         self.primary_languages: list[Language | None] = []
         self.extract_episodes_calls: list[bool] = []
 

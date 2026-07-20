@@ -86,3 +86,64 @@ class TestEnrichMemory:
 
         assert enrich.execute() == 0
         assert unit_of_work.enter_count == 0
+
+    def test_concept_draft_is_marked_authored(self):
+        """Spec: FR-407 — curriculum drafts are curated content, protected from later
+        live-extraction rewrites via Concept.origin, not via which persona proposed them."""
+        strategy = FakePersonaEnrichmentPort(drafts=[_draft_concept("el mercado")])
+        enrich, memory_repo, _ = _make_enrich({PERSONA_ID: strategy})
+
+        enrich.execute()
+
+        assert memory_repo.concepts[0].origin == "authored"
+
+    def test_matching_existing_authored_concept_is_touched_not_rewritten(self):
+        """Spec: FR-407 — a proposal landing on existing curated content is a touch, never a rewrite."""
+        existing = Concept(
+            id=1, persona_id=PERSONA_ID, name="el mercado", description="Curated definition.",
+            language=Language("es"), origin="authored", engagement_level=EngagementLevel.MENTIONED,
+        )
+        memory_repo = FakeMemoryRepository()
+        memory_repo.search_results = [(0.95, existing)]  # authored-protection band
+        draft = _draft_concept("el mercado")
+        draft.description = "A differently-worded proposal."
+        strategy = FakePersonaEnrichmentPort(drafts=[draft])
+        enrich = EnrichMemory(
+            memory_repo=memory_repo,
+            embedding_service=FakeEmbeddingService(),
+            disambiguator=FakeDisambiguationEvaluator(),
+            synthesizer=FakeMemorySynthesizer(),
+            unit_of_work=FakeUnitOfWork(),
+            enrichment_strategies={PERSONA_ID: strategy},
+        )
+
+        enrich.execute()
+
+        assert memory_repo.concepts[0].description == "Curated definition."
+
+    def test_matching_existing_procedure_keeps_curated_content(self):
+        """Spec: FR-407"""
+        existing = Procedure(
+            id=1, persona_id=PERSONA_ID, name="pedir la cuenta",
+            description="Curated steps.", language=Language("es"),
+        )
+        memory_repo = FakeMemoryRepository()
+        memory_repo.search_results = [(0.95, existing)]
+        draft = Procedure(
+            id=None, persona_id=PERSONA_ID, name="pedir la cuenta",
+            description="A rewritten version.", language=Language("es"),
+            engagement_level=EngagementLevel.UNSEEN,
+        )
+        strategy = FakePersonaEnrichmentPort(drafts=[draft])
+        enrich = EnrichMemory(
+            memory_repo=memory_repo,
+            embedding_service=FakeEmbeddingService(),
+            disambiguator=FakeDisambiguationEvaluator(),
+            synthesizer=FakeMemorySynthesizer(),
+            unit_of_work=FakeUnitOfWork(),
+            enrichment_strategies={PERSONA_ID: strategy},
+        )
+
+        enrich.execute()
+
+        assert memory_repo.procedures[0].description == "Curated steps."

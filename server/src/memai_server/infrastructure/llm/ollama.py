@@ -5,7 +5,13 @@ import ollama
 
 from ...domain.model import Concept, Conversation, Episode, Language, Procedure
 from ...services.ports import ExtractionResult, MemoryItem, Message
-from ._common import _conversation_language, _extraction_system_prompt, _format_conversation, _parse_extraction
+from ._common import (
+    WORTHINESS_SYSTEM_PROMPT,
+    _conversation_language,
+    _extraction_system_prompt,
+    _format_conversation,
+    _parse_extraction,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -45,15 +51,7 @@ class OllamaWorthinessEvaluator:
         response = self._client.chat(
             model=self._model,
             messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "Decide whether a conversation is worth storing as a long-term memory. "
-                        "Worth storing: personal facts about the user, knowledge learned, tasks worked on, meaningful events. "
-                        "Not worth storing: small talk, greetings, trivial exchanges. "
-                        "Reply with exactly one word: YES or NO."
-                    ),
-                },
+                {"role": "system", "content": WORTHINESS_SYSTEM_PROMPT},
                 {"role": "user", "content": transcript},
             ],
         )
@@ -203,6 +201,6 @@ class OllamaConsolidationExtractor:
         try:
             data = json.loads(response.message.content)
         except (json.JSONDecodeError, AttributeError):
-            return ExtractionResult(episodes=[], concepts=[], procedures=[])
+            return ExtractionResult(episodes=[], concepts=[])
 
         return _parse_extraction(data, conversation, persona_id, lang)

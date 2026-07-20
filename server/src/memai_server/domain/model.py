@@ -263,6 +263,11 @@ class Concept:
     description: str
     language: Language  # first introduced; stays fixed on upsert
     category: str | None = None  # free text, interpreted in the owning persona's own vocabulary
+    # "authored" (bundle install, persona enrichment drafts) vs "organic" (live-conversation
+    # extraction). Set once at creation, fixed forever — same contract as `language`. Governs
+    # MemoryUpserter.upsert_concept's protection of curated content: a live-extraction candidate
+    # that lands close enough to an authored concept is treated as a touch on it, never a rewrite.
+    origin: str = "organic"
     # Opaque, unkeyed slot (persona_id already scopes ownership). Single-writer contract:
     # written only by the owning persona's assessment strategy, read only by that persona's
     # selection strategy — generic code never branches on its contents.

@@ -94,7 +94,7 @@ def _row_to_persona(row: tuple) -> AssistantPersona:
 
 _CONCEPT_COLUMNS = (
     "id, persona_id, name, description, language, category, persona_state, directive, "
-    "engagement_level, created_at, updated_at, embedding"
+    "engagement_level, origin, created_at, updated_at, embedding"
 )
 
 _PROCEDURE_COLUMNS = (
@@ -105,7 +105,7 @@ _PROCEDURE_COLUMNS = (
 
 def _row_to_concept(row: tuple) -> Concept:
     (id_, persona_id, name, description, language, category, persona_state, directive,
-     engagement_level, created_at, updated_at, emb) = row
+     engagement_level, origin, created_at, updated_at, emb) = row
     return Concept(
         id=id_,
         persona_id=persona_id,
@@ -116,6 +116,7 @@ def _row_to_concept(row: tuple) -> Concept:
         persona_state=persona_state,
         directive=directive,
         engagement_level=EngagementLevel[engagement_level.upper()],
+        origin=origin,
         created_at=created_at,
         updated_at=updated_at,
         embedding=_list(emb),
@@ -436,8 +437,8 @@ class PSMemoryRepository:
                     """
                     INSERT INTO concepts
                         (persona_id, name, description, language, category, persona_state, directive,
-                         engagement_level, created_at, updated_at, embedding)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         engagement_level, origin, created_at, updated_at, embedding)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING id
                     """,
                     (
@@ -449,6 +450,7 @@ class PSMemoryRepository:
                         Jsonb(concept.persona_state) if concept.persona_state is not None else None,
                         Jsonb(concept.directive) if concept.directive is not None else None,
                         concept.engagement_level.name.lower(),
+                        concept.origin,
                         now,
                         now,
                         _vec(concept.embedding),
@@ -609,7 +611,7 @@ class PSMemoryRepository:
                     cur.execute(
                         """
                         SELECT id, persona_id, name, description, language, category, persona_state, directive,
-                               engagement_level, created_at, updated_at, embedding,
+                               engagement_level, origin, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM concepts
                         WHERE persona_id = %s AND directive IS NULL
@@ -622,7 +624,7 @@ class PSMemoryRepository:
                     cur.execute(
                         """
                         SELECT id, persona_id, name, description, language, category, persona_state, directive,
-                               engagement_level, created_at, updated_at, embedding,
+                               engagement_level, origin, created_at, updated_at, embedding,
                                embedding <=> %s AS distance
                         FROM concepts
                         WHERE directive IS NULL
@@ -632,7 +634,7 @@ class PSMemoryRepository:
                         (vec, top_n),
                     )
                 for (id_, p_id, name, description, language, category, persona_state, directive,
-                     engagement_level, created_at, updated_at, emb, distance) in cur.fetchall():
+                     engagement_level, origin, created_at, updated_at, emb, distance) in cur.fetchall():
                     results.append((distance, Concept(
                         id=id_,
                         persona_id=p_id,
@@ -643,6 +645,7 @@ class PSMemoryRepository:
                         persona_state=persona_state,
                         directive=directive,
                         engagement_level=EngagementLevel[engagement_level.upper()],
+                        origin=origin,
                         created_at=created_at,
                         updated_at=updated_at,
                         embedding=_list(emb),

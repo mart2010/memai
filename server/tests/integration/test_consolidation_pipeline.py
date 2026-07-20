@@ -51,22 +51,54 @@ def _seed_general_assistant(pg_conn: psycopg.Connection) -> AssistantPersona:
 
 
 def _write_session(log_dir, session_id, persona_id) -> None:
+    """Two user turns totalling well over 40 words — clears ConsolidateMemory's cheap
+    extraction floor (min_user_turns=2, min_user_words=40, FR-307) so worthiness
+    evaluation and extraction actually run, rather than being skipped outright."""
     logger = JSONLTurnLogger(log_dir)
     logger.append(
         session_id,
-        Turn(timestamp=_NOW, speaker=Speaker.USER, content="I love hiking in the Alps.", language=Language("en")),
+        Turn(
+            timestamp=_NOW, speaker=Speaker.USER,
+            content=(
+                "I love hiking in the Alps, especially during the summer when the "
+                "trails are clear of snow and the views are absolutely breathtaking."
+            ),
+            language=Language("en"),
+        ),
     )
     logger.append(
         session_id,
         Turn(
             timestamp=_NOW + timedelta(seconds=1),
             speaker=Speaker.ASSISTANT,
-            content="That sounds wonderful!",
+            content="That sounds wonderful! Hiking in the Alps must be an incredible experience.",
             language=Language("en"),
         ),
         persona_id=persona_id,
     )
-    logger.close(session_id, ended_at=_NOW + timedelta(seconds=2), clean_exit=True)
+    logger.append(
+        session_id,
+        Turn(
+            timestamp=_NOW + timedelta(seconds=2),
+            speaker=Speaker.USER,
+            content=(
+                "Yes, last summer I hiked for two weeks near Chamonix with a small "
+                "group of friends and it was one of the best experiences of my life."
+            ),
+            language=Language("en"),
+        ),
+    )
+    logger.append(
+        session_id,
+        Turn(
+            timestamp=_NOW + timedelta(seconds=3),
+            speaker=Speaker.ASSISTANT,
+            content="What an adventure — thanks for sharing that.",
+            language=Language("en"),
+        ),
+        persona_id=persona_id,
+    )
+    logger.close(session_id, ended_at=_NOW + timedelta(seconds=4), clean_exit=True)
 
 
 def test_disconnect_replay_consolidate_updates_db_state(pg_conn: psycopg.Connection, tmp_path) -> None:
@@ -87,7 +119,7 @@ def test_disconnect_replay_consolidate_updates_db_state(pg_conn: psycopg.Connect
 
     [conversation] = conv_repo.get_unconsolidated()
     assert conversation.persona_id == GENERAL_ASSISTANT_ID
-    assert len(conversation.turns) == 2
+    assert len(conversation.turns) == 4
 
     # --- Consolidate: real DB, real transaction, Fake LLM-dependent ports ---
     extraction = ExtractionResult(
@@ -106,9 +138,9 @@ def test_disconnect_replay_consolidate_updates_db_state(pg_conn: psycopg.Connect
                 name="hiking",
                 description="The user enjoys hiking in the Alps.",
                 language=Language("en"),
+                origin="organic",
             )
         ],
-        procedures=[],
     )
     consolidate = ConsolidateMemory(
         conversation_repo=conv_repo,
@@ -150,9 +182,11 @@ def test_disconnect_replay_consolidate_updates_db_state(pg_conn: psycopg.Connect
 def test_unworthy_conversation_still_extracts_concepts_but_no_episodes(
     pg_conn: psycopg.Connection, tmp_path
 ) -> None:
-    """Spec: FR-307, TR-703 — CLAUDE.md/PLAN.md: Concepts/Procedures are extracted unconditionally; Episodes
-    require a worthy conversation. Real regression coverage for that split, against a
-    real DB — the unit-tested version of this used Fakes throughout."""
+    """Spec: FR-307, TR-703 — Concept extraction is gated independently of episode
+    worthiness (origin/engagement, not the whole-conversation worthy verdict): a
+    conversation clearing the cheap extraction floor but judged not episode-worthy
+    still yields concepts, never episodes. Real regression coverage for that split,
+    against a real DB — the unit-tested version of this used Fakes throughout."""
     persona = _seed_general_assistant(pg_conn)
     conv_repo = PSConversationRepository(pg_conn)
     persona_repo = PSPersonaRepository(pg_conn)
@@ -169,9 +203,11 @@ def test_unworthy_conversation_still_extracts_concepts_but_no_episodes(
     extraction = ExtractionResult(
         episodes=[Episode(id=None, summary="Trivial exchange.", happened_at=_NOW, origin_conversation_id=conversation.id)],
         concepts=[
-            Concept(id=None, persona_id=GENERAL_ASSISTANT_ID, name="hiking", description="d", language=Language("en"))
+            Concept(
+                id=None, persona_id=GENERAL_ASSISTANT_ID, name="hiking", description="d",
+                language=Language("en"), origin="organic",
+            )
         ],
-        procedures=[],
     )
     consolidate = ConsolidateMemory(
         conversation_repo=conv_repo,

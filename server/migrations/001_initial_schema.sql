@@ -85,13 +85,15 @@ CREATE TABLE IF NOT EXISTS concepts (
     persona_state    JSONB,                 -- opaque; written only by the owning persona's assessment strategy
     directive        JSONB,                 -- Directive (FR-207): NULL = ordinary concept; populated = GA-owned, generic-code-actionable
     engagement_level TEXT        NOT NULL DEFAULT 'mentioned',
+    origin           TEXT        NOT NULL DEFAULT 'organic',  -- "authored" (bundle/enrichment) vs "organic" (live extraction); fixed on upsert — FR-307
     created_at       TIMESTAMPTZ NOT NULL,
     updated_at       TIMESTAMPTZ NOT NULL,
     embedding        vector(1024)
 );
--- Already-provisioned databases predate the `directive` column above (this file is
--- re-applied idempotently, not chained migrations — see PsycopgSchemaRunner).
+-- Already-provisioned databases predate the `directive`/`origin` columns above (this
+-- file is re-applied idempotently, not chained migrations — see PsycopgSchemaRunner).
 ALTER TABLE concepts ADD COLUMN IF NOT EXISTS directive JSONB;
+ALTER TABLE concepts ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'organic';
 
 CREATE TABLE IF NOT EXISTS procedures (
     id               SERIAL      PRIMARY KEY,

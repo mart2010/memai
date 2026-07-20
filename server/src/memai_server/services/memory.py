@@ -2,7 +2,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from ..domain.model import Concept, EngagementLevel, MemoryBrief, MemoryType
+from ..domain.model import Concept, Conversation, EngagementLevel, MemoryBrief, MemoryType, Speaker
 from ..domain.protocols import WorthinessEvaluator
 from .ports import (
     ConsolidationExtractor,
@@ -21,6 +21,15 @@ from .ports import (
     UserRepository,
 )
 from .upsert import DEFAULT_DISAMBIGUATE_THRESHOLD, DEFAULT_MERGE_THRESHOLD, MemoryUpserter
+
+# Calibration placeholders (FR-307) — below this floor, a conversation is too thin to
+# be worth even asking the LLM about: skips worthiness evaluation AND extraction
+# entirely (concepts included, not just episodes), purely for cost control. Counts only
+# the USER's own turns/words — assistant chatter (GA's own boilerplate, stock
+# capability descriptions) must never inflate this past the floor, since that's exactly
+# what the 2026-07-18 review found padding the DB with noise.
+DEFAULT_MIN_USER_TURNS = 2
+DEFAULT_MIN_USER_WORDS = 40
 
 
 class TriggerRecall:
@@ -48,6 +57,8 @@ class ConsolidateMemory:
         assessment_strategies: dict[UUID, PersonaAssessmentPort] | None = None,
         merge_threshold: float = DEFAULT_MERGE_THRESHOLD,
         disambiguate_threshold: float = DEFAULT_DISAMBIGUATE_THRESHOLD,
+        min_user_turns: int = DEFAULT_MIN_USER_TURNS,
+        min_user_words: int = DEFAULT_MIN_USER_WORDS,
     ) -> None:
         self._conversation_repo = conversation_repo
         self._memory_repo = memory_repo
@@ -55,6 +66,8 @@ class ConsolidateMemory:
         self._worthiness_evaluator = worthiness_evaluator
         self._unit_of_work = unit_of_work
         self._user_repo = user_repo
+        self._min_user_turns = min_user_turns
+        self._min_user_words = min_user_words
         # persona_id -> assessment strategy; personas without one (e.g. GA) are skipped.
         self._assessment_strategies = assessment_strategies or {}
         # Shared merge-or-insert pipeline, also used by InstallPersonaBundle — bundle
@@ -63,6 +76,12 @@ class ConsolidateMemory:
             memory_repo, embedding_service, disambiguator, synthesizer,
             merge_threshold, disambiguate_threshold,
         )
+
+    def _meets_extraction_floor(self, conversation: Conversation) -> bool:
+        user_turns = [t for t in conversation.turns if t.speaker is Speaker.USER]
+        if len(user_turns) < self._min_user_turns:
+            return False
+        return sum(len(t.content.split()) for t in user_turns) >= self._min_user_words
 
     def execute(self) -> int:
         """Synchronous by design: every step here (LLM extraction/evaluation/synthesis,
@@ -75,44 +94,49 @@ class ConsolidateMemory:
         processed = 0
         for conversation in conversations:
             # One transaction per conversation: if anything below raises, none of this
-            # conversation's episodes/concepts/procedures/consolidated-flag are committed,
-            # so it's safely reprocessed in full on the next run.
+            # conversation's episodes/concepts/consolidated-flag are committed, so it's
+            # safely reprocessed in full on the next run.
             with self._unit_of_work:
+                if not self._meets_extraction_floor(conversation):
+                    # Too thin to be worth even asking the LLM — skip worthiness AND
+                    # extraction entirely (cost control, FR-307).
+                    conversation.mark_consolidated(worthiness=False, summary=None)
+                    self._conversation_repo.save_consolidation(conversation)
+                    processed += 1
+                    continue
+
                 worthy = self._worthiness_evaluator.evaluate(conversation)
                 # A persona with its own registered assessment strategy (today, only the
-                # language tutor) owns its content's engagement tracking end to end: new
-                # items only come from bundles/propose_items, and its conversations are
-                # lesson practice, not genuine autobiography — so this pass must only
-                # recognize touches against existing content, never author anything new.
+                # language tutor) owns lesson practice end to end — a lesson's
+                # role-play/drills are not real events, so episodes are never even
+                # requested for it (FR-407/504). Concepts are a different matter: see
+                # below, they're gated by origin/engagement, not by persona.
                 strategy = self._assessment_strategies.get(conversation.persona_id)
-                allow_insert = strategy is None
                 extraction = self._extractor.extract(
-                    conversation, primary_language, extract_episodes=allow_insert,
+                    conversation, primary_language, extract_episodes=strategy is None,
                 )
 
                 # Episodes require a worthy conversation — trivial exchanges shouldn't
-                # generate episodic memories. Concepts and procedures are extracted
-                # unconditionally: knowledge is worth keeping regardless of conversation quality.
+                # generate episodic memories.
                 if worthy:
                     for episode in extraction.episodes:
                         self._upserter.upsert_episode(episode)
 
+                # Concepts are gated independently of `worthy`: origin-awareness inside
+                # upsert_concept protects curated (authored) content from being rewritten,
+                # and a brand-new organic concept additionally needs real user engagement
+                # (user_turns) — see MemoryUpserter's docstring. This applies uniformly to
+                # every persona, including strategy-owning ones: a user going off-curriculum
+                # mid-lesson to discuss something real is genuine signal (FR-407), unlike a
+                # lesson drill itself, which never contains any 2nd-person-real content to
+                # begin with.
+                user_turns = [t.content for t in conversation.turns if t.speaker is Speaker.USER]
                 touched: list[MemoryItem] = []
                 for concept in extraction.concepts:
-                    self._upserter.upsert_concept(
-                        concept, conversation.persona_id,
-                        allow_insert=allow_insert, update_description=allow_insert,
-                    )
-                    if concept.id is not None:  # None means discarded (allow_insert=False, no match)
+                    concept.origin = "organic"
+                    self._upserter.upsert_concept(concept, conversation.persona_id, user_turns=user_turns)
+                    if concept.id is not None:  # None means discarded (insufficient engagement, no match)
                         touched.append(concept)
-
-                for procedure in extraction.procedures:
-                    self._upserter.upsert_procedure(
-                        procedure, conversation.persona_id,
-                        allow_insert=allow_insert, update_description=allow_insert,
-                    )
-                    if procedure.id is not None:
-                        touched.append(procedure)
 
                 # Persona assessment hook — runs AFTER upsert so newly inserted items have
                 # ids and their first exposure is assessable. The returned persona_state
@@ -173,9 +197,15 @@ class EnrichMemory:
                     # higher level already earned.
                     draft.engagement_level = EngagementLevel.UNSEEN
                     if isinstance(draft, Concept):
+                        # Curated/curriculum content: origin="authored" is what protects
+                        # it from being rewritten by a later live-conversation extraction
+                        # (MemoryUpserter.upsert_concept's authored-protection check).
+                        draft.origin = "authored"
                         self._upserter.upsert_concept(draft, persona_id)
                     else:
-                        self._upserter.upsert_procedure(draft, persona_id)
+                        # Procedures are always authored (FR-307) — a match here is
+                        # curated content, never edited by a later proposal batch.
+                        self._upserter.upsert_procedure(draft, persona_id, update_description=False)
                     processed += 1
         return processed
 

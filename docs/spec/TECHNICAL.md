@@ -334,15 +334,31 @@ consolidation, enrichment, and bundle install.
   same-run insertions (sibling exclusion, FR-604). Top-5 candidate fetch exists so an
   excluded sibling cannot hide a real pre-existing match. Default empty; live
   consolidation never passes it.
-- **TR-606** Consolidation gates: `allow_insert=False` → a miss returns without
-  writing, `item.id` stays `None` as the *discarded sentinel* (callers must check
-  before further use); `update_description=False` → a match keeps description, steps,
-  and embedding verbatim (only engagement/category move). `ConsolidateMemory` sets
-  both to `strategy is None` per conversation.
+- **TR-606** Curated-content protection: `update_description=False` → a match keeps
+  description, steps, and embedding verbatim (only engagement/category move) —
+  `bundle_install` and `EnrichMemory` pass this for procedure upserts (FR-407); a
+  discarded candidate (see TR-609) leaves `item.id` as `None`, the *discarded
+  sentinel* callers must check before further use.
 - **TR-607** Each `upsert_*` mutates the passed item in place and returns `True` on
   merge, `False` on insert-or-discard (disambiguated by the id sentinel).
 - **TR-608** Episode merge synthesises the two summaries and re-embeds;
   `origin_conversation_id` is never reassigned (INV-15).
+- **TR-609** `upsert_concept` is origin-aware (FR-310): candidates are searched as
+  usual (TR-601/602), then split by `Concept.origin`. If the best *authored* candidate's
+  similarity ≥ `authored_protection_threshold` (default 0.75, its own constant — not
+  `disambiguate_threshold`, since it answers "protect curated content" rather than "same
+  entity") the candidate is written as a touch on that authored item — verbatim
+  description/embedding, engagement bumped, `update_description` ignored. Otherwise the
+  normal two-tier merge/insert (TR-602) runs scoped to *organic* candidates only. A
+  brand-new organic insert (`existing is None`) additionally requires
+  `_has_engagement`: at least `min_concept_engagement_turns` (default 2) of the
+  caller-supplied `user_turns` (raw text) whose embedding's cosine similarity to the
+  candidate ≥ `concept_engagement_similarity` (default 0.55, reusing TR-807's
+  `interest_cluster_threshold` calibration for topical-relatedness). `user_turns=None`
+  (the default; `bundle_install`/`EnrichMemory` never pass it) skips this check
+  entirely — only live-conversation extraction has turns to evaluate. `upsert_procedure`
+  has no origin-awareness: procedures are always authored (FR-307), so
+  `update_description=False` from the caller is their only protection.
 
 ## TR-7xx — Offline pipeline
 
@@ -354,20 +370,40 @@ consolidation, enrichment, and bundle install.
 - **TR-702** Order: replay (TR-406) → `ConsolidateMemory` → `EnrichMemory` →
   `GenerateMemoryBrief` (only when ≥ 1 conversation was consolidated). All against the
   offline connection (TR-006).
-- **TR-703** Per conversation, one transaction wraps: worthiness evaluation →
-  extraction (`extract_episodes = allow_insert`, INV-10) → episode upserts (worthy
-  only, FR-307) → concept/procedure upserts (gated, TR-606) → assessment dispatch →
-  `mark_consolidated`. Any raise rolls the whole conversation back for full
+- **TR-703** Per conversation, one transaction wraps: extraction-floor check (FR-307;
+  below floor, `mark_consolidated(worthiness=False)` and nothing else runs) → worthiness
+  evaluation → extraction (`extract_episodes = strategy is None`, INV-10; never
+  requests procedures) → episode upserts (worthy only, FR-307) → concept upserts
+  (origin/engagement-gated, TR-609, FR-310 — independent of `worthy`) → assessment
+  dispatch → `mark_consolidated`. Any raise rolls the whole conversation back for full
   reprocessing (FR-405).
 - **TR-704** Assessment dispatch: after upserts, `assess_items(persona_id,
   conversation, touched)` where `touched` = items that hold an id (discarded misses
   excluded); returned `ItemAssessment.persona_state` dicts are persisted byte-for-byte
   via `update_persona_state` (INV-6).
 - **TR-705** Enrichment: per persona with a strategy, `propose_items` drafts are forced
-  to `UNSEEN` (INV-12) and upserted (ungated) in one transaction per persona batch.
+  to `UNSEEN` (INV-12); concept drafts get `origin="authored"` (FR-310); procedure
+  drafts are upserted with `update_description=False` (FR-407) — both in one
+  transaction per persona batch.
 - **TR-706** Extraction language rule: the extractor receives
   `User.primary_language` and must write episode summaries in it (INV-10);
-  `extract_episodes=False` omits the episode request from the prompt entirely.
+  `extract_episodes=False` omits the episode request from the prompt entirely. The
+  `"procedures"` schema key is never requested, for any persona (FR-307) —
+  `ExtractionResult` has no `procedures` field.
+- **TR-707** Extraction floor (FR-307): `ConsolidateMemory` counts only
+  `Speaker.USER` turns. Below `min_user_turns` (default 2) or below `min_user_words`
+  (default 40, summed across those turns' `str.split()` word counts) the conversation
+  skips worthiness evaluation and extraction entirely — `mark_consolidated(worthiness=False)`
+  and no LLM call is made. Both are plain constructor defaults on `ConsolidateMemory`
+  (calibration placeholders, like `merge_threshold`), not `[memory]`-configured.
+- **TR-708** Worthiness/extraction content-quality rules (FR-307): the shared
+  `WORTHINESS_SYSTEM_PROMPT` (`infrastructure/llm/_common.py`, used verbatim by both the
+  Ollama and OpenRouter evaluators) explicitly excludes discussion about the assistant's
+  own operation (bugs, testing, debugging, capability/configuration questions) from
+  "worth storing." The episode section of `_extraction_system_prompt` requires a
+  genuine, identifiable time or place, distinct from "during this chat"; `_parse_extraction`
+  backs this with a hard rule — an episode with a missing or unparseable `happened_at`
+  is dropped, never backdated to the conversation's own timestamp.
 
 ## TR-8xx — Language-tutor strategies
 

@@ -2,7 +2,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from ...domain.model import Concept, Conversation, Episode, Language, Procedure, Speaker
+from ...domain.model import Concept, Conversation, Episode, Language, Speaker
 from ...services.ports import ExtractionResult
 
 
@@ -21,6 +21,25 @@ def _conversation_language(conversation: Conversation) -> Language:
     return Language("en")
 
 
+# Shared by the Ollama and OpenRouter worthiness evaluators so the criteria cannot
+# drift between the two. The 2026-07-18 live-testing review found the LLM correctly
+# judging a substantial-but-meta conversation (debugging a TTS voice-download bug) as
+# "worth storing," then extraction turned that debugging session into a fabricated
+# personal-event episode — a content-category failure, not a threshold one, so this
+# prompt explicitly excludes conversation-about-itself/the-assistant's-own-operation
+# from what counts as worth storing, rather than just raising a bar.
+WORTHINESS_SYSTEM_PROMPT = (
+    "Decide whether this conversation contains real content worth extracting into "
+    "long-term memory: personal facts about the user, knowledge they engaged with, "
+    "real tasks, or genuine events with a specific time or place. Not worth storing: "
+    "small talk, greetings, trivial exchanges — and, importantly, discussion about the "
+    "assistant itself or this session: bug reports, error messages, testing, debugging, "
+    "questions about the assistant's own capabilities/configuration/model, or anything "
+    "that only happened because this is a chat with an AI rather than something in the "
+    "user's own life. Reply with exactly one word: YES or NO."
+)
+
+
 def _extraction_system_prompt(
     conversation: Conversation, primary_language: Language | None, extract_episodes: bool = True,
 ) -> str:
@@ -34,6 +53,10 @@ def _extraction_system_prompt(
     judge genuine-story-vs-practiced-drill after the fact was tried and is not reliable —
     better not to ask at all. This function stays persona-agnostic either way: it only
     ever sees a plain bool, never anything tutor-specific.
+
+    Procedures are never requested here, for any persona: how-to knowledge belongs to
+    authoring expertise (bundles), not something live conversation organically produces
+    (FR-307) — simplifies the LLM's job to episodes (when asked) and concepts only.
     """
     # Episodes are persona-independent and carry no language field — summaries are always
     # written in the user's primary language regardless of conversation language, so months
@@ -45,8 +68,14 @@ def _extraction_system_prompt(
         else ""
     )
     episodes_section = (
-        '- "episodes": personal events or experiences the user mentioned '
-        '(each: {"summary": str, "happened_at": ISO8601 datetime or null}).'
+        '- "episodes": real personal events from the user\'s own life — NOT this '
+        "conversation itself, and NOT anything about the assistant's own operation "
+        "(bugs, errors, testing, debugging, capability or configuration questions). "
+        "Only include an episode if it has a genuine, identifiable time or place "
+        '(e.g. "yesterday", "last weekend", "at work", "in Paris") distinct from '
+        "\"during this chat\" — if you can't name when or where it happened, don't "
+        'extract it (each: {"summary": str, "happened_at": ISO8601 datetime of when it '
+        'happened, or null only if genuinely unknown}).'
         f"{episode_language_rule}\n"
         if extract_episodes
         else ""
@@ -59,9 +88,6 @@ def _extraction_system_prompt(
         '- "concepts": facts or knowledge the user learned or discussed '
         '(each: {"name": str, "description": str, "language": IETF code, '
         '"category": short lowercase classification label or null})\n'
-        '- "procedures": how-to knowledge '
-        '(each: {"name": str, "description": str, "steps": [str], "language": IETF code, '
-        '"category": short lowercase classification label or null})\n'
         "Be selective — only include what is genuinely informative. "
         "Leave arrays empty when nothing qualifies."
     )
@@ -72,14 +98,17 @@ def _parse_extraction(data: dict, conversation: Conversation, persona_id: UUID, 
 
     episodes = []
     for e in data.get("episodes", []):
+        # No genuine time grounding (missing/unparseable happened_at) means the model
+        # couldn't name a real when/where — treat as not a real episode rather than
+        # silently backdating it to the conversation's own timestamp, which previously
+        # let conversation-about-itself content masquerade as a dated personal event.
+        happened_at_raw = e.get("happened_at")
+        if not happened_at_raw:
+            continue
         try:
-            happened_at = (
-                datetime.fromisoformat(e["happened_at"])
-                if e.get("happened_at")
-                else conversation.started_at
-            )
+            happened_at = datetime.fromisoformat(happened_at_raw)
         except ValueError:
-            happened_at = conversation.started_at
+            continue
         episodes.append(Episode(
             id=None,
             summary=e["summary"],
@@ -100,22 +129,7 @@ def _parse_extraction(data: dict, conversation: Conversation, persona_id: UUID, 
             description=c["description"],
             language=entry_lang,
             category=c.get("category") or None,
+            origin="organic",
         ))
 
-    procedures = []
-    for p in data.get("procedures", []):
-        try:
-            entry_lang = Language(p.get("language", lang.code))
-        except ValueError:
-            entry_lang = lang
-        procedures.append(Procedure(
-            id=None,
-            persona_id=persona_id,
-            name=p["name"],
-            description=p["description"],
-            steps=p.get("steps", []),
-            language=entry_lang,
-            category=p.get("category") or None,
-        ))
-
-    return ExtractionResult(episodes=episodes, concepts=concepts, procedures=procedures)
+    return ExtractionResult(episodes=episodes, concepts=concepts)
